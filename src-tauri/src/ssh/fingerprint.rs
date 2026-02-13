@@ -325,21 +325,23 @@ pub fn extract_fingerprint_from_key(key: &russh_keys::key::PublicKey) -> (String
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
+    use tempfile::{tempdir, TempDir};
 
-    fn test_store() -> FingerprintStore {
+    // Returns (TempDir, FingerprintStore) — TempDir must be kept alive for the test duration
+    fn test_store() -> (TempDir, FingerprintStore) {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test_fingerprints.json");
 
-        FingerprintStore {
+        let store = FingerprintStore {
             fingerprints: Mutex::new(HashMap::new()),
             file_path: path,
-        }
+        };
+        (dir, store)
     }
 
     #[test]
     fn test_save_and_get() {
-        let store = test_store();
+        let (_dir, store) = test_store();
 
         store.save(
             "example.com",
@@ -359,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_verify_trusted() {
-        let store = test_store();
+        let (_dir, store) = test_store();
 
         store.save("example.com", 22, "SHA256:abc", "ssh-ed25519", None).unwrap();
 
@@ -369,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_verify_unknown() {
-        let store = test_store();
+        let (_dir, store) = test_store();
 
         let result = store.verify("unknown.com", 22, "SHA256:xyz", "ssh-rsa");
         assert!(matches!(result, FingerprintVerificationResult::Unknown { .. }));
@@ -377,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_verify_changed() {
-        let store = test_store();
+        let (_dir, store) = test_store();
 
         store.save("example.com", 22, "SHA256:old", "ssh-ed25519", None).unwrap();
 
@@ -387,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let store = test_store();
+        let (_dir, store) = test_store();
 
         store.save("example.com", 22, "SHA256:abc", "ssh-ed25519", None).unwrap();
         assert!(store.get("example.com", 22).is_some());
@@ -398,7 +400,7 @@ mod tests {
 
     #[test]
     fn test_list() {
-        let store = test_store();
+        let (_dir, store) = test_store();
 
         store.save("server1.com", 22, "SHA256:aaa", "ssh-ed25519", None).unwrap();
         store.save("server2.com", 2222, "SHA256:bbb", "ssh-rsa", None).unwrap();
@@ -409,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_case_insensitive_host() {
-        let store = test_store();
+        let (_dir, store) = test_store();
 
         store.save("Example.COM", 22, "SHA256:abc", "ssh-ed25519", None).unwrap();
 
