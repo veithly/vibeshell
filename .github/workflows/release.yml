@@ -95,8 +95,8 @@ jobs:
             # Update package.json
             jq --arg v "$NEW_VERSION" '.version = $v' package.json > tmp.json && mv tmp.json package.json
 
-            # Update Cargo.toml version
-            sed -i "0,/^version = \".*\"/s//version = \"$NEW_VERSION\"/" src-tauri/Cargo.toml
+            # Update workspace Cargo.toml version
+            sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
 
             echo "Updated version files to $NEW_VERSION"
           fi
@@ -111,7 +111,7 @@ jobs:
           if git diff --quiet; then
             echo "No version changes to commit"
           else
-            git add src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml
+            git add src-tauri/tauri.conf.json package.json Cargo.toml
             git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
             git push origin HEAD:${{ github.ref_name }}
           fi
