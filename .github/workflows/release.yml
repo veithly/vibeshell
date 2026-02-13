@@ -2,6 +2,9 @@ name: Release
 
 on:
   push:
+    branches:
+      - master
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -14,42 +17,81 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate: only run if the version tag doesn't already exist
+  check-version:
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      version: ${{ steps.check.outputs.version }}
+      tag_name: ${{ steps.check.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version and check tag
+        id: check
+        run: |
+          VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          TAG_NAME="v${VERSION}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+          # If triggered by a tag push, always release
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "Tag push detected: $GITHUB_REF → releasing"
+            exit 0
+          fi
+
+          # If triggered by workflow_dispatch, always release
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "Manual dispatch → releasing"
+            exit 0
+          fi
+
+          # For branch pushes, check if tag already exists
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "Tag $TAG_NAME already exists — skipping release"
+          else
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG_NAME does not exist — will create release"
+          fi
+
   create-release:
     name: Create Release
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create_release.outputs.id }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
-      version: ${{ steps.get_version.outputs.version }}
+      version: ${{ needs.check-version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Get version
-        id: get_version
-        run: |
-          VERSION=$(jq -r .version src-tauri/tauri.conf.json)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "App version: $VERSION"
 
       - name: Create release
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.get_version.outputs.version }}
-          name: VibeShell v${{ steps.get_version.outputs.version }}
+          tag_name: ${{ needs.check-version.outputs.tag_name }}
+          name: VibeShell ${{ needs.check-version.outputs.tag_name }}
           body: |
-            ## VibeShell v${{ steps.get_version.outputs.version }}
+            ## VibeShell ${{ needs.check-version.outputs.tag_name }}
 
             ### Downloads
             | Platform | File |
             |----------|------|
-            | Windows x64 | `VibeShell_${{ steps.get_version.outputs.version }}_x64-setup.exe` / `.msi` |
-            | macOS (Apple Silicon) | `VibeShell_${{ steps.get_version.outputs.version }}_aarch64.dmg` |
-            | macOS (Intel) | `VibeShell_${{ steps.get_version.outputs.version }}_x64.dmg` |
+            | Windows x64 | `VibeShell_${{ needs.check-version.outputs.version }}_x64-setup.exe` / `.msi` |
+            | macOS (Apple Silicon) | `VibeShell_${{ needs.check-version.outputs.version }}_aarch64.dmg` |
+            | macOS (Intel) | `VibeShell_${{ needs.check-version.outputs.version }}_x64.dmg` |
             | Linux x64 | `.deb` / `.AppImage` |
 
             ### What's Changed
-            See [commit history](https://github.com/${{ github.repository }}/commits/v${{ steps.get_version.outputs.version }}) for full changes.
+            See [commit history](https://github.com/${{ github.repository }}/commits/${{ needs.check-version.outputs.tag_name }}) for full changes.
           draft: false
           prerelease: false
           generate_release_notes: true
