@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Tokyo Night Color Palette */
+    --tokyo-bg: #1a1b26;
+    --tokyo-bg-dark: #16161e;
+    --tokyo-bg-hl: #292e42;
+    --tokyo-fg: #a9b1d6;
+    --tokyo-fg-dark: #565f89;
+    --tokyo-selection: #33467c;
+    --tokyo-comment: #565f89;
+    --tokyo-red: #f7768e;
+    --tokyo-green: #9ece6a;
+    --tokyo-yellow: #e0af68;
+    --tokyo-blue: #7aa2f7;
+    --tokyo-magenta: #bb9af7;
+    --tokyo-cyan: #7dcfff;
+    --tokyo-orange: #ff9e64;
+
+    /* Font settings */
+    font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    background-color: var(--tokyo-bg);
+    color: var(--tokyo-fg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* Custom scrollbar for Tokyo Night theme */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: var(--tokyo-bg-dark);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--tokyo-bg-hl);
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--tokyo-comment);
+  }
+
+  /* Selection color */
+  ::selection {
+    background-color: var(--tokyo-selection);
+    color: var(--tokyo-fg);
+  }
+}
+
+@layer components {
+  /* Sidebar action button styles */
+  .sidebar-action-btn {
+    @apply flex items-center gap-2 w-full px-3 py-2 rounded-md text-sm text-tokyo-fg transition-colors duration-150;
+    @apply hover:bg-tokyo-bg-hl hover:text-white;
+  }
+
+  /* Tab styles */
+  .session-tab {
+    @apply flex items-center gap-2 px-3 py-1.5 rounded-t-md text-sm transition-colors duration-150;
+    @apply text-tokyo-fg-dark hover:text-tokyo-fg;
+  }
+
+  .session-tab.active {
+    @apply bg-tokyo-bg text-tokyo-blue border-b-2 border-tokyo-blue;
+  }
+}
+
+@layer utilities {
+  /* Toast slide-in animation */
+  @keyframes slide-in-right {
+    from {
+      transform: translateX(100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+
+  .animate-slide-in-right {
+    animation: slide-in-right 0.3s ease-out;
+  }
+}
+
+/* xterm.js scrolling fixes */
+.xterm {
+  height: 100%;
+  width: 100%;
+}
+
+.xterm-viewport {
+  /* Ensure vertical scrolling is enabled */
+  overflow-y: scroll !important;
+  /* Use auto for horizontal to avoid unnecessary scrollbar */
+  overflow-x: hidden !important;
+}
+
+.xterm-screen {
+  /* Ensure screen content can grow beyond viewport */
+  height: 100%;
+}
+
+/* Ensure xterm viewport scrollbar styling */
+.xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+  background: var(--tokyo-bg-dark);
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--tokyo-bg-hl);
+  border-radius: 5px;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--tokyo-comment);
+}

@@ -1,0 +1,14 @@
+[package]
+name = "vshell"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "vshell"
+path = "src/main.rs"
+
+[dependencies]
+vibeshell-core = { path = "../src-tauri", package = "vibeshell" }
+clap = { version = "4", features = ["derive"] }
+tokio.workspace = true
+anyhow.workspace = true

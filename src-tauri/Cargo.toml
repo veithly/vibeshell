@@ -1,0 +1,55 @@
+[package]
+name = "vibeshell"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+description = "High-performance SSH/SFTP terminal with AI integration"
+rust-version = "1.70"
+
+[lib]
+name = "vibeshell_core"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[[bin]]
+name = "vibeshell"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+directories = "5"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+ring = "0.17"
+argon2 = "0.5"
+rand = "0.8"
+base64 = "0.21"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+russh = "0.44"
+russh-keys = "0.44"
+russh-sftp = "2"
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync"] }
+interprocess = "2"
+axum = "0.7"
+tower = "0.4"
+portable-pty = "0.8"
+which = "7"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tempfile = "3.24.0"

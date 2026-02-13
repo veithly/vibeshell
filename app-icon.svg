@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <!-- Vibrant teal-cyan gradient -->
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2dd4bf"/>
+      <stop offset="100%" style="stop-color:#0891b2"/>
+    </linearGradient>
+
+    <!-- Secondary accent for depth -->
+    <linearGradient id="accent2" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#06b6d4"/>
+      <stop offset="100%" style="stop-color:#34d399"/>
+    </linearGradient>
+
+    <!-- Premium glow effect -->
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Subtle outer glow for icons -->
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3"/>
+    </filter>
+  </defs>
+
+  <!-- Deep dark background with subtle gradient -->
+  <rect width="512" height="512" rx="108" fill="#0c0c10"/>
+
+  <!-- Subtle corner highlight for depth -->
+  <ellipse cx="140" cy="140" rx="200" ry="200" fill="#14141a" opacity="0.6"/>
+
+  <!-- Main terminal prompt ">" -->
+  <g filter="url(#glow)">
+    <path
+      d="M 110 175 L 250 270 L 110 365"
+      fill="none"
+      stroke="url(#accent)"
+      stroke-width="38"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </g>
+
+  <!-- Cursor block with glow -->
+  <rect
+    x="290"
+    y="235"
+    width="70"
+    height="70"
+    rx="10"
+    fill="url(#accent)"
+    filter="url(#glow)"
+  />
+
+  <!-- Connection indicator: small secure dot representing SSH -->
+  <circle
+    cx="400"
+    cy="150"
+    r="24"
+    fill="none"
+    stroke="url(#accent2)"
+    stroke-width="6"
+    filter="url(#glow)"
+    opacity="0.7"
+  />
+  <circle
+    cx="400"
+    cy="150"
+    r="10"
+    fill="url(#accent2)"
+    opacity="0.8"
+  />
+</svg>

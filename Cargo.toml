@@ -1,0 +1,22 @@
+[workspace]
+members = ["src-tauri", "cli"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["veithly"]
+edition = "2021"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
