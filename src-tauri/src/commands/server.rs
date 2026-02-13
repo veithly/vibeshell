@@ -6,8 +6,8 @@ use crate::storage::{Database, Server, AuthType};
 use crate::storage::database::Group;
 
 /// Server input from frontend (without auto-generated fields)
+/// Frontend sends snake_case field names (auth_type, credential_id, etc.)
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ServerInput {
     pub name: String,
     pub host: String,
@@ -16,6 +16,7 @@ pub struct ServerInput {
     pub auth_type: String,
     pub credential_id: Option<String>,
     pub group_id: Option<String>,
+    #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub jump_host_id: Option<String>,
@@ -75,12 +76,28 @@ pub fn add_server(db: State<'_, Arc<Database>>, server: ServerInput) -> Result<S
     Ok(new_server)
 }
 
-/// Update an existing server
+/// Partial server update input — all fields optional except name/host/port/username
+#[derive(Debug, Deserialize)]
+pub struct ServerUpdateInput {
+    pub name: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub auth_type: Option<String>,
+    pub credential_id: Option<String>,
+    pub group_id: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub jump_host_id: Option<String>,
+    pub post_login_command: Option<String>,
+    pub agent_forwarding: Option<bool>,
+}
+
+/// Update an existing server (partial update — only sent fields are changed)
 #[tauri::command]
 pub fn update_server(
     db: State<'_, Arc<Database>>,
     id: String,
-    updates: ServerInput,
+    updates: ServerUpdateInput,
 ) -> Result<(), String> {
     let existing = db.server_get(&id)
         .map_err(|e| format!("Failed to get server: {}", e))?
@@ -88,19 +105,19 @@ pub fn update_server(
 
     let updated_server = Server {
         id: existing.id,
-        name: updates.name,
-        host: updates.host,
-        port: updates.port,
-        username: updates.username,
-        auth_type: string_to_auth_type(&updates.auth_type),
-        credential_id: updates.credential_id,
-        group_id: updates.group_id,
-        tags: updates.tags,
+        name: updates.name.unwrap_or(existing.name),
+        host: updates.host.unwrap_or(existing.host),
+        port: updates.port.unwrap_or(existing.port),
+        username: updates.username.unwrap_or(existing.username),
+        auth_type: updates.auth_type.map(|a| string_to_auth_type(&a)).unwrap_or(existing.auth_type),
+        credential_id: if updates.credential_id.is_some() { updates.credential_id } else { existing.credential_id },
+        group_id: if updates.group_id.is_some() { updates.group_id } else { existing.group_id },
+        tags: updates.tags.unwrap_or(existing.tags),
         created_at: existing.created_at,
         updated_at: 0,
-        jump_host_id: updates.jump_host_id,
-        post_login_command: updates.post_login_command,
-        agent_forwarding: updates.agent_forwarding,
+        jump_host_id: if updates.jump_host_id.is_some() { updates.jump_host_id } else { existing.jump_host_id },
+        post_login_command: if updates.post_login_command.is_some() { updates.post_login_command } else { existing.post_login_command },
+        agent_forwarding: updates.agent_forwarding.unwrap_or(existing.agent_forwarding),
     };
 
     db.server_update(&updated_server)
