@@ -15,6 +15,7 @@ const TEST_KEY_PATH: &str = "";
 const TEST_KEY_PASSPHRASE: &str = "";
 
 #[tokio::test]
+#[ignore = "requires a real SSH server and key file — run with `cargo test -- --ignored`"]
 async fn test_ssh_connection_with_key() -> Result<()> {
     use async_trait::async_trait;
     use russh::*;
@@ -145,6 +146,7 @@ async fn test_ssh_connection_with_key() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires a real SSH key file — run with `cargo test -- --ignored`"]
 async fn test_ssh_key_file_validation() -> Result<()> {
     let key_path = Path::new(TEST_KEY_PATH);
 
@@ -167,6 +169,7 @@ async fn test_ssh_key_file_validation() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "requires a real SSH key file — run with `cargo test -- --ignored`"]
 async fn test_key_decoding() -> Result<()> {
     use russh_keys::*;
 
