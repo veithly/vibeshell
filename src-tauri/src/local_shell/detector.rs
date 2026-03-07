@@ -176,45 +176,65 @@ fn detect_windows_shells() -> Vec<ShellInfo> {
 fn detect_unix_shells() -> Vec<ShellInfo> {
     let mut shells = Vec::new();
 
-    // Bash
-    if let Ok(path) = which::which("bash") {
-        shells.push(ShellInfo {
-            id: "bash".to_string(),
-            name: "Bash".to_string(),
-            path: path.to_string_lossy().to_string(),
-            shell_type: ShellType::Bash,
-            is_default: false,
-        });
+    // Helper to find shell by checking standard paths first, then PATH
+    fn find_shell(name: &str) -> Option<String> {
+        // Check standard Unix shell locations first (GUI apps may not have full PATH)
+        let standard_paths = [
+            format!("/bin/{}", name),
+            format!("/usr/bin/{}", name),
+            format!("/usr/local/bin/{}", name),
+            format!("/opt/homebrew/bin/{}", name),
+        ];
+        
+        for path in &standard_paths {
+            if std::path::Path::new(path).exists() {
+                return Some(path.clone());
+            }
+        }
+        
+        // Fall back to PATH lookup
+        which::which(name).ok().map(|p| p.to_string_lossy().to_string())
     }
 
-    // Zsh
-    if let Ok(path) = which::which("zsh") {
+    // Zsh (default on macOS, check first)
+    if let Some(path) = find_shell("zsh") {
         shells.push(ShellInfo {
             id: "zsh".to_string(),
             name: "Zsh".to_string(),
-            path: path.to_string_lossy().to_string(),
+            path,
             shell_type: ShellType::Zsh,
             is_default: false,
         });
     }
 
+    // Bash
+    if let Some(path) = find_shell("bash") {
+        shells.push(ShellInfo {
+            id: "bash".to_string(),
+            name: "Bash".to_string(),
+            path,
+            shell_type: ShellType::Bash,
+            is_default: false,
+        });
+    }
+
     // Fish
-    if let Ok(path) = which::which("fish") {
+    if let Some(path) = find_shell("fish") {
         shells.push(ShellInfo {
             id: "fish".to_string(),
             name: "Fish".to_string(),
-            path: path.to_string_lossy().to_string(),
+            path,
             shell_type: ShellType::Fish,
             is_default: false,
         });
     }
 
     // Sh (POSIX shell)
-    if let Ok(path) = which::which("sh") {
+    if let Some(path) = find_shell("sh") {
         shells.push(ShellInfo {
             id: "sh".to_string(),
             name: "POSIX Shell".to_string(),
-            path: path.to_string_lossy().to_string(),
+            path,
             shell_type: ShellType::Sh,
             is_default: false,
         });
