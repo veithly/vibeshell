@@ -1,17 +1,25 @@
 //! Session management commands for the CLI.
 //!
-//! These commands allow listing, attaching to, and killing sessions
-//! by communicating with the VibeShell GUI via IPC.
+//! These commands allow listing, attaching to, executing commands on, and
+//! killing sessions by communicating with the VibeShell background service
+//! via IPC. Sessions can be referenced by their full UUID or by a short
+//! 3-digit alias assigned during `vshell ssh`.
 
-use anyhow::{bail, Context, Result};
-use vibeshell_core::ipc::{IpcClient, IpcMessage};
+use anyhow::{bail, Result};
+use vibeshell_core::ipc::IpcMessage;
 
-/// List all active sessions.
-///
-/// Sends a ListSessions request to the GUI and displays the results.
+use crate::ipc_support;
+use crate::session_alias;
+use crate::terminal::{self, CommandHandoff};
+
+/// Send an IPC message with a human-friendly error wrapper.
+fn ipc_send(message: &IpcMessage) -> Result<IpcMessage> {
+    ipc_support::send(message)
+}
+
+/// List all active sessions, annotated with their short aliases.
 pub fn list() -> Result<()> {
-    let response = IpcClient::send(&IpcMessage::ListSessions)
-        .context("Failed to communicate with VibeShell GUI")?;
+    let response = ipc_send(&IpcMessage::ListSessions)?;
 
     match response {
         IpcMessage::SessionList { sessions } => {
@@ -19,8 +27,14 @@ pub fn list() -> Result<()> {
                 println!("No active sessions.");
             } else {
                 println!("Active sessions:");
-                for session_id in sessions {
-                    println!("  {}", session_id);
+                for info in &sessions {
+                    let alias_tag = session_alias::find_by_session_id(&info.id)
+                        .map(|a| format!("[{}] ", a))
+                        .unwrap_or_else(|| "      ".to_string());
+                    println!(
+                        "  {}{}  {}  [{}]",
+                        alias_tag, info.id, info.server_name, info.state
+                    );
                 }
             }
             Ok(())
@@ -29,45 +43,31 @@ pub fn list() -> Result<()> {
             bail!("Error listing sessions: {}", message);
         }
         _ => {
-            bail!("Unexpected response from GUI");
+            bail!("Unexpected response from background service");
         }
     }
 }
 
-/// Attach to an existing session.
+/// Attach to an existing session and enter interactive terminal mode.
 ///
-/// Sends an AttachSession request to the GUI.
+/// Streams session output to stdout and forwards stdin to the remote session.
+/// Press Ctrl+] to detach.
 pub fn attach(session_id: &str) -> Result<()> {
-    let response = IpcClient::send(&IpcMessage::AttachSession {
-        session_id: session_id.to_string(),
-    })
-    .context("Failed to communicate with VibeShell GUI")?;
+    eprintln!("Attaching to session {}...", session_id);
+    eprintln!("Press Ctrl+] to detach.\r");
 
-    match response {
-        IpcMessage::Ok => {
-            println!("Attached to session: {}", session_id);
-            Ok(())
-        }
-        IpcMessage::Error { message } => {
-            bail!("Error attaching to session: {}", message);
-        }
-        _ => {
-            bail!("Unexpected response from GUI");
-        }
-    }
+    terminal::run_interactive(session_id)
 }
 
-/// Kill a specific session.
-///
-/// Sends a KillSession request to the GUI.
+/// Kill a specific session and clean up its alias.
 pub fn kill(session_id: &str) -> Result<()> {
-    let response = IpcClient::send(&IpcMessage::KillSession {
+    let response = ipc_send(&IpcMessage::KillSession {
         session_id: session_id.to_string(),
-    })
-    .context("Failed to communicate with VibeShell GUI")?;
+    })?;
 
     match response {
         IpcMessage::Ok => {
+            let _ = session_alias::remove_by_session_id(session_id);
             println!("Session killed: {}", session_id);
             Ok(())
         }
@@ -75,7 +75,7 @@ pub fn kill(session_id: &str) -> Result<()> {
             bail!("Error killing session: {}", message);
         }
         _ => {
-            bail!("Unexpected response from GUI");
+            bail!("Unexpected response from background service");
         }
     }
 }
@@ -85,8 +85,7 @@ pub fn kill(session_id: &str) -> Result<()> {
 /// Lists all sessions and kills each one.
 pub fn kill_all() -> Result<()> {
     // First, get the list of sessions
-    let response = IpcClient::send(&IpcMessage::ListSessions)
-        .context("Failed to communicate with VibeShell GUI")?;
+    let response = ipc_send(&IpcMessage::ListSessions)?;
 
     let sessions = match response {
         IpcMessage::SessionList { sessions } => sessions,
@@ -106,9 +105,9 @@ pub fn kill_all() -> Result<()> {
     let mut errors = Vec::new();
     let mut killed = 0;
 
-    for session_id in &sessions {
-        let kill_response = IpcClient::send(&IpcMessage::KillSession {
-            session_id: session_id.clone(),
+    for info in &sessions {
+        let kill_response = ipc_support::send(&IpcMessage::KillSession {
+            session_id: info.id.clone(),
         });
 
         match kill_response {
@@ -116,13 +115,13 @@ pub fn kill_all() -> Result<()> {
                 killed += 1;
             }
             Ok(IpcMessage::Error { message }) => {
-                errors.push(format!("{}: {}", session_id, message));
+                errors.push(format!("{}: {}", info.id, message));
             }
             Ok(_) => {
-                errors.push(format!("{}: unexpected response", session_id));
+                errors.push(format!("{}: unexpected response", info.id));
             }
             Err(e) => {
-                errors.push(format!("{}: {}", session_id, e));
+                errors.push(format!("{}: {}", info.id, e));
             }
         }
     }
@@ -137,4 +136,63 @@ pub fn kill_all() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Execute a command on an existing session.
+pub fn exec(session_id: &str, command: &[String]) -> Result<()> {
+    let joined = command.join(" ");
+    match terminal::run_command_with_handoff(session_id, &joined)? {
+        CommandHandoff::Completed | CommandHandoff::SessionEnded => Ok(()),
+        CommandHandoff::AwaitingInput => {
+            eprintln!();
+            eprintln!("Next use: vshell exec {} -- <command>", session_id);
+            eprintln!(
+                "Session '{}' is waiting for more input. Reattach with 'vshell attach {}'.",
+                session_id, session_id
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Interact with a session via its short alias ID.
+///
+/// If no command is provided, attaches interactively (like `vshell attach`).
+/// If a command is provided, executes it and prints the output (like `vshell exec`).
+pub fn ssh_session(alias: &str, command: &[String]) -> Result<()> {
+    let session_id = session_alias::resolve(alias).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Unknown session alias '{}'. Run 'vshell sessions' to see active sessions.",
+            alias
+        )
+    })?;
+
+    let entry = session_alias::get_entry(alias);
+    let display_name = entry
+        .as_ref()
+        .map(|e| e.server_name.as_str())
+        .unwrap_or("unknown");
+
+    if command.is_empty() {
+        eprintln!(
+            "Reattaching to session {} ({}, alias: {})...",
+            session_id, display_name, alias
+        );
+        eprintln!("Press Ctrl+] to detach.\r");
+        terminal::run_interactive(&session_id)
+    } else {
+        let joined = command.join(" ");
+        match terminal::run_command_with_handoff(&session_id, &joined)? {
+            CommandHandoff::Completed | CommandHandoff::SessionEnded => Ok(()),
+            CommandHandoff::AwaitingInput => {
+                eprintln!();
+                eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
+                eprintln!(
+                    "Session '{}' (alias {}) is waiting for more input. Reattach with 'vshell ssh-session {}'.",
+                    display_name, alias, alias
+                );
+                Ok(())
+            }
+        }
+    }
 }

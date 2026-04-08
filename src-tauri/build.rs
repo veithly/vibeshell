@@ -1,15 +1,18 @@
-use std::{
-    env,
-    fs,
-    path::PathBuf,
-    process::Command,
-};
+use std::{env, fs, path::PathBuf, process::Command};
 
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("Missing CARGO_MANIFEST_DIR"));
-    let project_root = manifest_dir
-        .parent()
-        .expect("Missing workspace root");
+    println!("cargo:rerun-if-env-changed=STATIC_VCRUNTIME");
+
+    if env::var("STATIC_VCRUNTIME").is_ok_and(|value| value.eq_ignore_ascii_case("true")) {
+        println!(
+            "cargo:warning=Ignoring STATIC_VCRUNTIME=true for VibeShell because tauri-build's static CRT override breaks the shared vibeshell_core -> vshell CLI link on MSVC."
+        );
+        env::remove_var("STATIC_VCRUNTIME");
+    }
+
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("Missing CARGO_MANIFEST_DIR"));
+    let project_root = manifest_dir.parent().expect("Missing workspace root");
     let dist_index = project_root.join("dist").join("index.html");
 
     if !dist_index.exists() {
@@ -47,7 +50,11 @@ fn main() {
     // Create a placeholder so tauri_build doesn't fail.
     // The real binary is placed here by CI before `tauri build`.
     let target = env::var("TARGET").unwrap_or_default();
-    let ext = if target.contains("windows") { ".exe" } else { "" };
+    let ext = if target.contains("windows") {
+        ".exe"
+    } else {
+        ""
+    };
     let binaries_dir = manifest_dir.join("binaries");
     let sidecar_path = binaries_dir.join(format!("vshell-{}{}", target, ext));
 

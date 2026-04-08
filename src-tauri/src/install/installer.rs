@@ -8,11 +8,14 @@
 //! Integration is purely through SKILL.md — the AI reads the skill
 //! and learns to call `vshell` via its shell/exec tool.
 
+use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{anyhow, Context, Result};
 
 use super::detector::{find_tool, AiTool};
+
+const SKILL_DIR_NAME: &str = "vshell";
+const LEGACY_SKILL_DIR_NAME: &str = "vibeshell";
 
 /// Resolve the absolute path to the vshell binary.
 ///
@@ -22,7 +25,11 @@ use super::detector::{find_tool, AiTool};
 /// 3. PATH lookup via `which`/`where`
 /// 4. Fall back to bare "vshell" command name
 pub fn resolve_vshell_binary() -> String {
-    let vshell_name = if cfg!(windows) { "vshell.exe" } else { "vshell" };
+    let vshell_name = if cfg!(windows) {
+        "vshell.exe"
+    } else {
+        "vshell"
+    };
 
     // 1. Next to the current executable
     if let Ok(current_exe) = std::env::current_exe() {
@@ -71,7 +78,13 @@ pub fn resolve_vshell_binary() -> String {
     // 3. Try to find via PATH (which/where)
     #[cfg(windows)]
     {
-        if let Ok(output) = std::process::Command::new("where").arg("vshell").output() {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        if let Ok(output) = std::process::Command::new("where")
+            .arg("vshell")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if let Some(first_line) = path.lines().next() {
@@ -104,82 +117,182 @@ pub fn resolve_vshell_binary() -> String {
 /// This is the sole integration mechanism — AI agents read this skill file
 /// and learn to run `vshell` commands via their shell/exec capabilities.
 const SKILL_MD_CONTENT: &str = r#"---
-name: vibeshell
-description: Connect to remote SSH servers, execute commands, and transfer files via SFTP using VibeShell. Use this when the user needs to manage remote servers, deploy code, run remote commands, or transfer files over SSH.
+name: vshell
+description: Use when the user needs SSH access to a configured server, wants to run remote commands, inspect logs, deploy files, or manage remote files over SFTP through VibeShell.
 ---
 
-You have access to **VibeShell**, a high-performance SSH/SFTP terminal client.
-Use the `vshell` CLI to manage SSH servers and sessions from the command line.
+You have access to **VibeShell**, an SSH/SFTP client with persistent reusable sessions.
 
-> **Prerequisite**: The VibeShell GUI must be running for session commands to work.
-> The CLI communicates with the GUI via IPC.
+## Access Flow
 
-## When to Use This Skill
-
-- User asks to "SSH into", "connect to", or "log into" a remote server
-- User wants to run commands on a remote machine
-- User needs to deploy files or code to a server
-- User wants to check server status, logs, or resource usage
-- User needs to manage SSH connections or sessions
-
-## CLI Commands
-
-### Check version
-```bash
-vshell version
+```text
+IF MCP tools are available
+THEN prefer MCP
+ELSE use `vshell` CLI
 ```
 
-### Connect to a server
-```bash
-vshell ssh <server-name>
-# alias: vshell connect <server-name>
-```
-Connects to a server that was previously configured in the VibeShell GUI.
-
-### List active sessions
-```bash
-vshell sessions
-# alias: vshell ls
+```text
+IF a reusable session already exists
+THEN reuse it
+ELSE create a new session
 ```
 
-### Attach to an existing session
+```text
+IF the user explicitly asks for a fresh SSH login
+THEN use `vshell ssh <server> --new`
+ELSE prefer the default reusable session path
+```
+
+```text
+IF the task is non-interactive automation
+THEN prefer `exec`
+ELSE attach to the shell
+```
+
+## Session Flow
+
+```text
+Need server name?
+-> use `server_list` or `vshell servers`
+
+Need a reusable connection?
+-> use `vshell ssh <server>`
+
+Need a fresh connection anyway?
+-> use `session_create`
+-> or `vshell ssh <server> --new`
+
+Need another command on the same machine?
+-> reuse the existing session
+
+Done for now?
+-> leave session alive for reuse, or kill it explicitly
+```
+
+Sessions persist across commands and can be reused for SSH, SFTP, and follow-up input. Idle sessions are reaped only after about 30 minutes with no clients and no activity.
+
+## SSH Flow
+
+### MCP
+
+```text
+Create session
+-> `session_create`
+
+Run command
+-> `exec`
+
+Need more commands?
+-> keep the same `session_id`
+
+Done?
+-> `session_kill`
+```
+
+Example:
+
+```json
+session_create({ "server_name": "my-server" })
+exec({ "session_id": "abc-123", "command": "hostname" })
+exec({ "session_id": "abc-123", "command": "ls -la /var/log", "timeout_ms": 60000 })
+session_kill({ "session_id": "abc-123" })
+```
+
+### CLI
+
+```text
+Open shell
+-> `vshell ssh my-server`
+-> by default, reuse the earliest active session for that server
+
+Need a new parallel shell?
+-> `vshell ssh my-server --new`
+
+Run another command on the same session
+-> `vshell ssh-session 001 -- <command>`
+
+Reattach interactively
+-> `vshell ssh-session 001`
+
+List or kill sessions
+-> `vshell sessions`
+-> `vshell kill 001`
+```
+
+Examples:
+
 ```bash
+vshell servers
+vshell ssh my-server
+vshell ssh my-server --new
+vshell ssh --wait my-server
+vshell ssh-session 001 -- hostname
+vshell ssh-session 001 -- ls -la /var/log
+vshell exec <session-id> -- hostname
+vshell attach 001
+vshell kill 001
+```
+
+## Interactive Command Flow
+
+```text
+IF a command may ask for Enter / y / password / confirmation
+THEN run it inside the persistent shell session
+AND reuse that same session for follow-up input
+```
+
+CLI will print a `Next use:` hint after `vshell ssh` or when a command is waiting for more input. Follow that hint to continue on the same session instead of starting a new connection.
+
+Recommended follow-up commands:
+
+```bash
+vshell ssh-session 001 -- <command>
+vshell ssh-session 001
+vshell exec <session-id> -- <command>
 vshell attach <session-id>
 ```
 
-### Kill a session
-```bash
-vshell kill <session-id>
-vshell kill --all
+## SFTP Flow
+
+```text
+Need file operations?
+-> reuse an existing session if possible
+-> otherwise create one first
+-> perform SFTP operations on that session
 ```
 
-### List detected AI tools
-```bash
-vshell tools
+### MCP
+
+```json
+session_create({ "server_name": "my-server" })
+sftp_ls({ "session_id": "abc-123", "path": "/var/www", "show_hidden": true })
+sftp_read({ "session_id": "abc-123", "path": "/etc/nginx/nginx.conf" })
+sftp_write({ "session_id": "abc-123", "path": "/tmp/config.yml", "content": "key: value\n" })
+sftp_upload({ "session_id": "abc-123", "local_path": "C:/project/dist/app.js", "remote_path": "/var/www/app.js" })
+sftp_download({ "session_id": "abc-123", "remote_path": "/var/log/app.log", "local_path": "C:/tmp/app.log" })
+sftp_mkdir({ "session_id": "abc-123", "path": "/var/www/uploads/2024", "recursive": true })
+sftp_rm({ "session_id": "abc-123", "path": "/tmp/old-backup", "recursive": true })
+sftp_mv({ "session_id": "abc-123", "source": "/var/www/app.js", "destination": "/var/www/app.js.bak" })
 ```
-Shows which AI coding tools are detected and whether VibeShell skill is installed.
 
-### Install/uninstall skill to AI tools
+### CLI
+
 ```bash
-vshell install <tool-id>    # e.g. claude-code, cursor, codex
-vshell install all
-vshell uninstall <tool-id>
-vshell uninstall all
+vshell sftp --session <session-id>
+vshell sftp my-server
 ```
 
-## Typical Workflow
+## Rules
 
-1. **Check if server is configured**: Ask the user which server to connect to, or suggest they configure one in the VibeShell GUI.
-2. **Connect**: `vshell ssh my-server`
-3. **List sessions**: `vshell sessions` to see active connections
-4. **Clean up**: `vshell kill <session-id>` when done
-
-## Notes
-
-- Servers must be configured in the VibeShell GUI first (name, host, port, username, auth type).
-- The GUI application must be running for CLI commands to work (IPC communication).
-- For file transfers, use the VibeShell GUI's built-in SFTP panel.
-- For direct remote command execution, connect via `vshell ssh` then use the terminal.
+- Prefer MCP when available.
+- Prefer reusing an existing session over creating a new one.
+- Treat `vshell ssh <server>` as a reusable-session command; only add `--new` when the user explicitly wants another parallel session.
+- Prefer `exec` for non-interactive automation.
+- Prefer shell session reuse for interactive prompts or multi-step command flows.
+- Use `sftp_download` for binary files and `sftp_read` for text inspection.
+- Use `sftp_upload` for binary/local file transfer and `sftp_write` for direct text writes.
+- If the user provides only a host or IP, map it to a configured server first with `server_list` or `vshell servers`.
+- Credentials come from saved VibeShell configuration; do not invent ad-hoc SSH passwords or keys on the command line unless the environment already requires it.
 "#;
 
 /// Get the skills directory path for a given AI tool.
@@ -193,6 +306,15 @@ fn get_skills_dir(tool_id: &str) -> Option<PathBuf> {
         "opencode" => Some(home.join(".opencode").join("skills")),
         "gemini-cli" => Some(home.join(".gemini").join("skills")),
         "openclaw" => Some(home.join(".openclaw").join("skills")),
+        "windsurf" => Some(home.join(".codeium").join("windsurf").join("skills")),
+        "roo-code" => Some(home.join(".roo").join("skills")),
+        "augment" => Some(home.join(".augment").join("skills")),
+        "continue" => Some(home.join(".continue").join("skills")),
+        "kiro" => Some(home.join(".kiro").join("skills")),
+        "trae" => Some(home.join(".trae").join("skills")),
+        "openhands" => Some(home.join(".openhands").join("skills")),
+        "agents" => Some(home.join(".agents").join("skills")),
+        "stepfun" => Some(home.join(".stepfun").join("skills")),
         _ => None,
     }
 }
@@ -205,13 +327,23 @@ fn install_skill_file(tool_id: &str) -> Result<PathBuf> {
     let skills_dir = get_skills_dir(tool_id)
         .ok_or_else(|| anyhow!("No skills directory known for tool: {}", tool_id))?;
 
-    let skill_dir = skills_dir.join("vibeshell");
+    let skill_dir = skills_dir.join(SKILL_DIR_NAME);
     fs::create_dir_all(&skill_dir)
         .with_context(|| format!("Failed to create skill directory {:?}", skill_dir))?;
 
     let skill_path = skill_dir.join("SKILL.md");
     fs::write(&skill_path, SKILL_MD_CONTENT)
         .with_context(|| format!("Failed to write skill file {:?}", skill_path))?;
+
+    let legacy_skill_dir = skills_dir.join(LEGACY_SKILL_DIR_NAME);
+    if legacy_skill_dir.exists() && legacy_skill_dir != skill_dir {
+        fs::remove_dir_all(&legacy_skill_dir).with_context(|| {
+            format!(
+                "Failed to remove legacy skill directory {:?}",
+                legacy_skill_dir
+            )
+        })?;
+    }
 
     log::info!("[Install] Skill file installed to {:?}", skill_path);
     Ok(skill_path)
@@ -220,11 +352,13 @@ fn install_skill_file(tool_id: &str) -> Result<PathBuf> {
 /// Remove the SKILL.md file from the tool's skills directory.
 fn uninstall_skill_file(tool_id: &str) -> Result<()> {
     if let Some(skills_dir) = get_skills_dir(tool_id) {
-        let skill_dir = skills_dir.join("vibeshell");
-        if skill_dir.exists() {
-            fs::remove_dir_all(&skill_dir)
-                .with_context(|| format!("Failed to remove skill directory {:?}", skill_dir))?;
-            log::info!("[Install] Skill file removed from {:?}", skill_dir);
+        for dir_name in [SKILL_DIR_NAME, LEGACY_SKILL_DIR_NAME] {
+            let skill_dir = skills_dir.join(dir_name);
+            if skill_dir.exists() {
+                fs::remove_dir_all(&skill_dir)
+                    .with_context(|| format!("Failed to remove skill directory {:?}", skill_dir))?;
+                log::info!("[Install] Skill file removed from {:?}", skill_dir);
+            }
         }
     }
     Ok(())
@@ -261,8 +395,7 @@ pub fn uninstall_from_tool(tool_id: &str, _config_path: &PathBuf) -> Result<Opti
 
 /// Install VibeShell skill to a tool by ID.
 pub fn install_by_id(tool_id: &str) -> Result<InstallResult> {
-    let tool = find_tool(tool_id)
-        .ok_or_else(|| anyhow!("Unknown tool: {}", tool_id))?;
+    let tool = find_tool(tool_id).ok_or_else(|| anyhow!("Unknown tool: {}", tool_id))?;
 
     match install_to_tool(&tool.id, &tool.config_path) {
         Ok(path) => Ok(InstallResult {
@@ -282,8 +415,7 @@ pub fn install_by_id(tool_id: &str) -> Result<InstallResult> {
 
 /// Uninstall VibeShell skill from a tool by ID.
 pub fn uninstall_by_id(tool_id: &str) -> Result<InstallResult> {
-    let tool = find_tool(tool_id)
-        .ok_or_else(|| anyhow!("Unknown tool: {}", tool_id))?;
+    let tool = find_tool(tool_id).ok_or_else(|| anyhow!("Unknown tool: {}", tool_id))?;
 
     match uninstall_from_tool(&tool.id, &tool.config_path) {
         Ok(_) => Ok(InstallResult {
@@ -307,21 +439,19 @@ pub fn install_to_all() -> Vec<InstallResult> {
 
     get_installed_tools()
         .into_iter()
-        .map(|tool| {
-            match install_to_tool(&tool.id, &tool.config_path) {
-                Ok(path) => InstallResult {
-                    tool,
-                    success: true,
-                    backup_path: path,
-                    error: None,
-                },
-                Err(e) => InstallResult {
-                    tool,
-                    success: false,
-                    backup_path: None,
-                    error: Some(e.to_string()),
-                },
-            }
+        .map(|tool| match install_to_tool(&tool.id, &tool.config_path) {
+            Ok(path) => InstallResult {
+                tool,
+                success: true,
+                backup_path: path,
+                error: None,
+            },
+            Err(e) => InstallResult {
+                tool,
+                success: false,
+                backup_path: None,
+                error: Some(e.to_string()),
+            },
         })
         .collect()
 }
@@ -332,8 +462,8 @@ pub fn uninstall_from_all() -> Vec<InstallResult> {
 
     get_configured_tools()
         .into_iter()
-        .map(|tool| {
-            match uninstall_from_tool(&tool.id, &tool.config_path) {
+        .map(
+            |tool| match uninstall_from_tool(&tool.id, &tool.config_path) {
                 Ok(_) => InstallResult {
                     tool,
                     success: true,
@@ -346,8 +476,8 @@ pub fn uninstall_from_all() -> Vec<InstallResult> {
                     backup_path: None,
                     error: Some(e.to_string()),
                 },
-            }
-        })
+            },
+        )
         .collect()
 }
 
@@ -359,6 +489,8 @@ mod tests {
     #[test]
     fn test_skill_md_content_is_valid() {
         assert!(SKILL_MD_CONTENT.contains("vshell"));
+        assert!(SKILL_MD_CONTENT.contains("name: vshell"));
+        assert!(SKILL_MD_CONTENT.contains("servers"));
         assert!(SKILL_MD_CONTENT.contains("ssh"));
         assert!(SKILL_MD_CONTENT.contains("sessions"));
         assert!(SKILL_MD_CONTENT.contains("kill"));

@@ -129,6 +129,8 @@ interface SessionStore {
   resizeSession: (sessionId: string, cols: number, rows: number) => Promise<boolean>;
   /** Fetch all sessions from the backend */
   fetchSessions: () => Promise<void>;
+  /** Sync remote (CLI-created) sessions into the local store without losing local shell sessions */
+  syncRemoteSessions: () => Promise<void>;
 
   // Local shell session methods
   /** Create a local shell session */
@@ -437,7 +439,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         sessionType: 'ssh' as const,
       }));
 
-      set({ sessions, loading: false });
+      set((state) => {
+        const activeSessionStillExists = state.activeSessionId
+          ? sessions.some((session) => session.id === state.activeSessionId)
+          : false;
+
+        return {
+          sessions,
+          loading: false,
+          activeSessionId: activeSessionStillExists
+            ? state.activeSessionId
+            : (sessions[0]?.id ?? null),
+        };
+      });
     } else {
       // Set empty state but track the error
       const errorMsg = result.error.isTauriUnavailable
@@ -449,6 +463,71 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         showError('Failed to Load Sessions', result.error);
       }
     }
+  },
+
+  syncRemoteSessions: async () => {
+    const result = await safeInvoke<SessionInfo[]>('session_list');
+    if (!result.success) return;
+
+    const backendSessions = result.data;
+    const { sessions: localSessions } = get();
+
+    const localSshIds = new Set(
+      localSessions.filter((s) => s.sessionType === 'ssh').map((s) => s.id)
+    );
+    const backendIds = new Set(backendSessions.map((s) => s.id));
+
+    // Add sessions that exist in the backend but not in the local store
+    const newSessions: Session[] = backendSessions
+      .filter((info) => !localSshIds.has(info.id))
+      .map((info) => ({
+        id: info.id,
+        serverId: info.server_id,
+        serverName: info.server_name,
+        state: info.state,
+        createdAt: info.created_at * 1000,
+        sessionType: 'ssh' as const,
+      }));
+
+    if (newSessions.length === 0) {
+      // Still update state of existing SSH sessions (e.g. disconnected)
+      const updated = localSessions.map((s) => {
+        if (s.sessionType !== 'ssh') return s;
+        const backend = backendSessions.find((b) => b.id === s.id);
+        if (backend && backend.state !== s.state) {
+          return { ...s, state: backend.state };
+        }
+        if (!backend) {
+          return { ...s, state: 'disconnected' as const };
+        }
+        return s;
+      });
+      set({ sessions: updated });
+      return;
+    }
+
+    // Merge: keep local-shell sessions + update existing SSH + add new CLI sessions
+    const merged = localSessions
+      .map((s) => {
+        if (s.sessionType !== 'ssh') return s;
+        const backend = backendSessions.find((b) => b.id === s.id);
+        if (backend && backend.state !== s.state) {
+          return { ...s, state: backend.state };
+        }
+        if (!backendIds.has(s.id)) {
+          return { ...s, state: 'disconnected' as const };
+        }
+        return s;
+      })
+      .concat(newSessions);
+
+    set((state) => ({
+      sessions: merged,
+      activeSessionId:
+        state.activeSessionId && merged.some((session) => session.id === state.activeSessionId)
+          ? state.activeSessionId
+          : (merged[0]?.id ?? null),
+    }));
   },
 
   // Local shell session methods

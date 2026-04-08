@@ -198,8 +198,21 @@ export function PreviewModal({
     const hasUnsavedChanges = isEditing && editContent !== (content?.content ?? '');
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isNativeTextInput =
+        target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || !!target?.isContentEditable;
+
+      // Preserve browser-native editing shortcuts (Ctrl/Cmd+C/V/X/A) in textarea/input/contenteditable.
+      // Keep Ctrl/Cmd+S working for save in editor mode.
+      if (isNativeTextInput && (e.ctrlKey || e.metaKey)) {
+        const key = e.key.toLowerCase();
+        if (key === 'c' || key === 'v' || key === 'x' || key === 'a') {
+          return;
+        }
+      }
+
       // Ctrl+S / Cmd+S to save when editing
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         if (isEditing && hasUnsavedChanges && !isSaving && onSave) {
           setIsSaving(true);

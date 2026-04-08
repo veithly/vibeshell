@@ -1,3 +1,5 @@
 pub mod socket;
 
-pub use socket::{IpcClient, IpcMessage, IpcServer};
+pub use socket::{
+    IpcClient, IpcEndpointStatus, IpcMessage, IpcServer, IpcServerRunError, IpcSessionInfo,
+};

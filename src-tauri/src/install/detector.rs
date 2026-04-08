@@ -10,6 +10,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+const SKILL_DIR_NAMES: [&str; 2] = ["vshell", "vibeshell"];
+
 /// Represents an AI coding tool that can have the VibeShell skill installed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiTool {
@@ -32,8 +34,8 @@ impl AiTool {
     /// - `installed`: true if any of the candidate directories exist
     /// - `vibeshell_installed`: true if SKILL.md exists in the skills dir
     fn from_candidates(id: &str, name: &str, candidates: Vec<PathBuf>) -> Self {
-        let config_path = select_preferred_config_path(&candidates)
-            .unwrap_or_else(|| PathBuf::from("mcp.json"));
+        let config_path =
+            select_preferred_config_path(&candidates).unwrap_or_else(|| PathBuf::from("mcp.json"));
 
         let installed = candidates
             .iter()
@@ -81,10 +83,21 @@ fn check_skill_installed(tool_id: &str) -> bool {
         "opencode" => home.join(".opencode").join("skills"),
         "gemini-cli" => home.join(".gemini").join("skills"),
         "openclaw" => home.join(".openclaw").join("skills"),
+        "windsurf" => home.join(".codeium").join("windsurf").join("skills"),
+        "roo-code" => home.join(".roo").join("skills"),
+        "augment" => home.join(".augment").join("skills"),
+        "continue" => home.join(".continue").join("skills"),
+        "kiro" => home.join(".kiro").join("skills"),
+        "trae" => home.join(".trae").join("skills"),
+        "openhands" => home.join(".openhands").join("skills"),
+        "agents" => home.join(".agents").join("skills"),
+        "stepfun" => home.join(".stepfun").join("skills"),
         _ => return false,
     };
 
-    skills_dir.join("vibeshell").join("SKILL.md").exists()
+    SKILL_DIR_NAMES
+        .iter()
+        .any(|dir_name| skills_dir.join(dir_name).join("SKILL.md").exists())
 }
 
 /// Detect all supported AI tools and their skill installation status.
@@ -114,8 +127,14 @@ pub fn detect_ai_tools() -> Vec<AiTool> {
             vec![
                 home.join(".cursor").join("mcp.json"),
                 home.join(".cursor").join("mcpServers.json"),
-                home.join(".config").join("Cursor").join("User").join("mcp.json"),
-                home.join(".config").join("Cursor").join("User").join("mcpServers.json"),
+                home.join(".config")
+                    .join("Cursor")
+                    .join("User")
+                    .join("mcp.json"),
+                home.join(".config")
+                    .join("Cursor")
+                    .join("User")
+                    .join("mcpServers.json"),
             ],
         ));
 
@@ -144,7 +163,9 @@ pub fn detect_ai_tools() -> Vec<AiTool> {
             "Gemini CLI",
             vec![
                 home.join(".gemini").join("settings.json"),
-                home.join(".config").join("gemini-cli").join("settings.json"),
+                home.join(".config")
+                    .join("gemini-cli")
+                    .join("settings.json"),
             ],
         ));
 
@@ -155,6 +176,95 @@ pub fn detect_ai_tools() -> Vec<AiTool> {
             vec![
                 home.join(".openclaw").join("openclaw.json"),
                 home.join(".config").join("openclaw").join("openclaw.json"),
+            ],
+        ));
+
+        // Windsurf (Codeium): uses ~/.codeium/windsurf/ for config and skills
+        tools.push(AiTool::from_candidates(
+            "windsurf",
+            "Windsurf",
+            vec![
+                home.join(".codeium")
+                    .join("windsurf")
+                    .join("mcp_config.json"),
+                home.join(".codeium").join("windsurf").join("mcp.json"),
+            ],
+        ));
+
+        // Roo Code: global skills at ~/.roo/skills/
+        tools.push(AiTool::from_candidates(
+            "roo-code",
+            "Roo Code",
+            vec![
+                home.join(".roo").join("mcp.json"),
+                home.join(".config").join("roo-code").join("mcp.json"),
+            ],
+        ));
+
+        // Augment Code: AI coding assistant
+        tools.push(AiTool::from_candidates(
+            "augment",
+            "Augment Code",
+            vec![
+                home.join(".augment").join("config.json"),
+                home.join(".augment").join("mcp.json"),
+            ],
+        ));
+
+        // Continue: open-source AI code assistant
+        tools.push(AiTool::from_candidates(
+            "continue",
+            "Continue",
+            vec![
+                home.join(".continue").join("config.json"),
+                home.join(".continue").join("mcp.json"),
+            ],
+        ));
+
+        // Kiro (AWS): AI coding IDE
+        tools.push(AiTool::from_candidates(
+            "kiro",
+            "Kiro",
+            vec![
+                home.join(".kiro").join("settings.json"),
+                home.join(".kiro").join("mcp.json"),
+            ],
+        ));
+
+        // Trae (ByteDance): AI IDE
+        tools.push(AiTool::from_candidates(
+            "trae",
+            "Trae",
+            vec![
+                home.join(".trae").join("settings.json"),
+                home.join(".trae").join("mcp.json"),
+            ],
+        ));
+
+        // OpenHands: open-source AI agent platform
+        tools.push(AiTool::from_candidates(
+            "openhands",
+            "OpenHands",
+            vec![
+                home.join(".openhands").join("config.json"),
+                home.join(".openhands").join("mcp.json"),
+            ],
+        ));
+
+        // Universal .agents directory (shared by Amp, Gemini CLI, GitHub Copilot, etc.)
+        tools.push(AiTool::from_candidates(
+            "agents",
+            "Agents (Universal)",
+            vec![home.join(".agents").join("config.json")],
+        ));
+
+        // StepFun: AI coding assistant
+        tools.push(AiTool::from_candidates(
+            "stepfun",
+            "StepFun",
+            vec![
+                home.join(".stepfun").join("config.json"),
+                home.join(".stepfun").join("mcp.json"),
             ],
         ));
     }
@@ -192,7 +302,7 @@ mod tests {
     #[test]
     fn test_detect_ai_tools() {
         let tools = detect_ai_tools();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 15);
 
         let tool_ids: Vec<&str> = tools.iter().map(|t| t.id.as_str()).collect();
         assert!(tool_ids.contains(&"claude-code"));
@@ -201,6 +311,15 @@ mod tests {
         assert!(tool_ids.contains(&"opencode"));
         assert!(tool_ids.contains(&"gemini-cli"));
         assert!(tool_ids.contains(&"openclaw"));
+        assert!(tool_ids.contains(&"windsurf"));
+        assert!(tool_ids.contains(&"roo-code"));
+        assert!(tool_ids.contains(&"augment"));
+        assert!(tool_ids.contains(&"continue"));
+        assert!(tool_ids.contains(&"kiro"));
+        assert!(tool_ids.contains(&"trae"));
+        assert!(tool_ids.contains(&"openhands"));
+        assert!(tool_ids.contains(&"agents"));
+        assert!(tool_ids.contains(&"stepfun"));
     }
 
     #[test]
@@ -232,5 +351,11 @@ mod tests {
 
         let selected = select_preferred_config_path(&[default_path.clone(), second]);
         assert_eq!(selected, Some(default_path));
+    }
+
+    #[test]
+    fn test_skill_dir_names_include_current_and_legacy_names() {
+        assert!(SKILL_DIR_NAMES.contains(&"vshell"));
+        assert!(SKILL_DIR_NAMES.contains(&"vibeshell"));
     }
 }

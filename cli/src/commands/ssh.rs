@@ -1,31 +1,250 @@
 //! SSH connection commands for the CLI.
 //!
-//! These commands allow initiating SSH connections to configured servers.
+//! These commands allow initiating SSH connections to configured servers,
+//! entering an interactive terminal session, or running a single remote command.
+//! Interactive sessions are automatically assigned a short 3-digit alias so
+//! users can reference them via `vshell ssh-session <alias>` later.
 
-use anyhow::{bail, Context, Result};
-use vibeshell_core::ipc::{IpcClient, IpcMessage};
+use std::time::Duration;
 
-/// Connect to a configured SSH server.
+use anyhow::{bail, Result};
+use vibeshell_core::ipc::{IpcMessage, IpcSessionInfo};
+
+use crate::ipc_support;
+use crate::session_alias;
+use crate::terminal::{self, CommandHandoff};
+
+/// Connect to a configured SSH server and enter interactive mode.
 ///
-/// Sends a CreateSession request to the GUI with the specified server name.
-/// The server must be previously configured in the VibeShell GUI.
-pub fn connect(server_name: &str) -> Result<()> {
-    let response = IpcClient::send(&IpcMessage::CreateSession {
-        server_name: server_name.to_string(),
-    })
-    .context("Failed to communicate with VibeShell GUI")?;
+/// Creates a session via IPC, then attaches to it with a streaming
+/// terminal connection. Press Ctrl+] to detach (session keeps running).
+///
+/// A persistent 3-digit alias is assigned automatically so subsequent
+/// interactions can use `vshell ssh-session <alias>`.
+pub fn connect(server_name: &str, command: &[String], wait: bool, force_new: bool) -> Result<()> {
+    let reused = if force_new {
+        None
+    } else {
+        find_reusable_session(server_name)?
+    };
 
+    let (session_id, reused_existing) = match reused {
+        Some(info) => (info.id, true),
+        None => (create_session_with_retry(server_name, wait)?, false),
+    };
+
+    let alias = session_alias::find_by_session_id(&session_id)
+        .or_else(|| session_alias::register(&session_id, server_name).ok())
+        .unwrap_or_else(|| session_id[..8].to_string());
+
+    // Single-command mode: keep the shell session alive if the command
+    // needs follow-up input so an agent can continue interacting.
+    if !command.is_empty() {
+        let joined = command.join(" ");
+        return run_single_command(
+            server_name,
+            &session_id,
+            &alias,
+            &joined,
+            !reused_existing,
+        );
+    }
+
+    if reused_existing {
+        eprintln!(
+            "Reusing server '{}' session {} (alias: {})",
+            server_name, session_id, alias
+        );
+    } else {
+        eprintln!(
+            "Connected to server '{}' (session: {}, alias: {})",
+            server_name, session_id, alias
+        );
+    }
+    eprintln!("Press Ctrl+] to detach. Session continues in the background.\r");
+
+    let result = terminal::run_interactive(&session_id);
+
+    eprintln!();
+    eprintln!(
+        "Session {} (alias: {}) is still running.",
+        session_id, alias
+    );
+    eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
+    eprintln!();
+    eprintln!("  Next time, interact with this session using:");
+    eprintln!(
+        "    vshell ssh-session {}              # Reattach interactively",
+        alias
+    );
+    eprintln!(
+        "    vshell ssh-session {} -- <command>  # Execute a single command",
+        alias
+    );
+    eprintln!(
+        "    vshell sftp --session {}            # Open SFTP file browser",
+        session_id
+    );
+    eprintln!(
+        "    vshell kill {}                      # Terminate the session",
+        alias
+    );
+
+    result
+}
+
+/// Create a session with optional retry logic for flaky connections (e.g., Tailscale/VPN).
+fn create_session_with_retry(server_name: &str, wait: bool) -> Result<String> {
+    let max_attempts = if wait { 30 } else { 1 };
+    let mut last_error = String::new();
+
+    for attempt in 1..=max_attempts {
+        if attempt > 1 {
+            let delay = std::cmp::min(2u64.pow((attempt - 1).min(4) as u32), 16);
+            eprintln!(
+                "Connection failed, retrying in {}s ({}/{})...",
+                delay, attempt, max_attempts
+            );
+            std::thread::sleep(Duration::from_secs(delay));
+        }
+
+        match ipc_support::send(&IpcMessage::CreateSession {
+            server_name: server_name.to_string(),
+        }) {
+            Ok(IpcMessage::SessionCreated { session_id }) => return Ok(session_id),
+            Ok(IpcMessage::Error { message }) => {
+                last_error = message;
+                if !wait {
+                    bail!(
+                        "Error connecting to server '{}': {}",
+                        server_name,
+                        last_error
+                    );
+                }
+                eprintln!("  Error: {}", last_error);
+            }
+            Ok(_) => {
+                bail!("Unexpected response from background service");
+            }
+            Err(e) => {
+                last_error = e.to_string();
+                if !wait {
+                    return Err(e);
+                }
+                eprintln!("  Error: {}", last_error);
+            }
+        }
+    }
+
+    bail!(
+        "Failed to connect to '{}' after {} attempts: {}",
+        server_name,
+        max_attempts,
+        last_error
+    )
+}
+
+fn find_reusable_session(server_name: &str) -> Result<Option<IpcSessionInfo>> {
+    let response = ipc_support::send(&IpcMessage::ListSessions)?;
     match response {
-        IpcMessage::SessionCreated { session_id } => {
-            println!("Created session: {}", session_id);
-            println!("Connected to server: {}", server_name);
+        IpcMessage::SessionList { sessions } => Ok(pick_reusable_session(&sessions, server_name)),
+        IpcMessage::Error { message } => bail!("Error listing sessions: {}", message),
+        _ => bail!("Unexpected response from background service"),
+    }
+}
+
+fn pick_reusable_session(sessions: &[IpcSessionInfo], server_name: &str) -> Option<IpcSessionInfo> {
+    sessions
+        .iter()
+        .filter(|info| info.server_name == server_name)
+        .filter(|info| matches!(info.state.as_str(), "connected" | "connecting"))
+        .min_by_key(|info| info.created_at)
+        .cloned()
+}
+
+fn run_single_command(
+    server_name: &str,
+    session_id: &str,
+    alias: &str,
+    command: &str,
+    owns_session: bool,
+) -> Result<()> {
+    match terminal::run_command_with_handoff(session_id, command)? {
+        CommandHandoff::Completed | CommandHandoff::SessionEnded => {
+            if owns_session {
+                let _ = ipc_support::send(&IpcMessage::KillSession {
+                    session_id: session_id.to_string(),
+                });
+                let _ = session_alias::remove_by_session_id(session_id);
+            } else {
+                eprintln!();
+                eprintln!(
+                    "Command completed on reused '{}' session {} (alias: {}).",
+                    server_name, session_id, alias
+                );
+                eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
+            }
             Ok(())
         }
-        IpcMessage::Error { message } => {
-            bail!("Error connecting to server '{}': {}", server_name, message);
+        CommandHandoff::AwaitingInput => {
+            eprintln!();
+            eprintln!(
+                "Command on '{}' is waiting for more input. Session kept alive as alias {}.",
+                server_name, alias
+            );
+            eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
+            eprintln!(
+                "Use 'vshell ssh-session {}' to continue, or 'vshell kill {}' when finished.",
+                alias, alias
+            );
+            Ok(())
         }
-        _ => {
-            bail!("Unexpected response from GUI");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_reusable_session;
+    use vibeshell_core::ipc::IpcSessionInfo;
+
+    fn session(
+        id: &str,
+        server_name: &str,
+        state: &str,
+        created_at: i64,
+    ) -> IpcSessionInfo {
+        IpcSessionInfo {
+            id: id.to_string(),
+            server_id: format!("server-{server_name}"),
+            server_name: server_name.to_string(),
+            state: state.to_string(),
+            created_at,
+            clients: 0,
         }
+    }
+
+    #[test]
+    fn pick_reusable_session_prefers_oldest_active_session_for_same_server() {
+        let sessions = vec![
+            session("newer", "prod", "connected", 200),
+            session("other", "staging", "connected", 100),
+            session("oldest", "prod", "connected", 50),
+        ];
+
+        let picked = pick_reusable_session(&sessions, "prod").expect("should reuse prod session");
+        assert_eq!(picked.id, "oldest");
+    }
+
+    #[test]
+    fn pick_reusable_session_ignores_disconnected_sessions() {
+        let sessions = vec![
+            session("dead", "prod", "disconnected", 1),
+            session("errored", "prod", "error", 2),
+        ];
+
+        assert!(
+            pick_reusable_session(&sessions, "prod").is_none(),
+            "inactive sessions must not be reused"
+        );
     }
 }

@@ -1,18 +1,22 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
-use log::{info, warn, error, debug};
 
 use crate::session::{Session, SessionInfo, SessionState};
-use crate::ssh::{SshClient, PtyConfig};
+use crate::ssh::{PtyConfig, SshClient};
 use crate::storage::{Database, Server};
 
 /// Credentials for SSH authentication
 #[derive(Debug, Clone)]
 pub enum SshCredential {
     Password(String),
-    PrivateKey { key: String, passphrase: Option<String> },
+    PrivateKey {
+        key: String,
+        passphrase: Option<String>,
+    },
 }
 
 pub struct SessionManager {
@@ -42,14 +46,42 @@ impl SessionManager {
         sessions.get(id).cloned()
     }
 
+    pub async fn reap_inactive_sessions(&self, max_idle: Duration) -> Result<Vec<String>> {
+        let sessions = {
+            let sessions = self.sessions.read().await;
+            sessions.values().cloned().collect::<Vec<_>>()
+        };
+
+        let mut stale_ids = Vec::new();
+        for session in sessions {
+            if session.should_reap(max_idle).await {
+                stale_ids.push(session.id.clone());
+            }
+        }
+
+        for session_id in &stale_ids {
+            info!(
+                "[SessionManager] Reaping inactive session {} after {:?} idle",
+                session_id, max_idle
+            );
+            self.kill(session_id).await?;
+        }
+
+        Ok(stale_ids)
+    }
+
     pub async fn create(&self, server_id: &str) -> Result<Arc<Session>> {
-        let server = self.database.server_get(server_id)?
+        let server = self
+            .database
+            .server_get(server_id)?
             .ok_or_else(|| anyhow!("Server not found: {}", server_id))?;
         self.create_for_server(&server).await
     }
 
     pub async fn create_by_name(&self, server_name: &str) -> Result<Arc<Session>> {
-        let server = self.database.server_get_by_name(server_name)?
+        let server = self
+            .database
+            .server_get_by_name(server_name)?
             .ok_or_else(|| anyhow!("Server not found: {}", server_name))?;
         self.create_for_server(&server).await
     }
@@ -82,15 +114,23 @@ impl SessionManager {
         credential: SshCredential,
         pty_config: Option<PtyConfig>,
     ) -> Result<Arc<Session>> {
-        info!("[SessionManager] Creating session for server '{}'", server_name);
+        info!(
+            "[SessionManager] Creating session for server '{}'",
+            server_name
+        );
 
-        let server = self.database.server_get_by_name(server_name)?
+        let server = self
+            .database
+            .server_get_by_name(server_name)?
             .ok_or_else(|| {
                 error!("[SessionManager] Server not found: {}", server_name);
                 anyhow!("Server not found: {}", server_name)
             })?;
 
-        info!("[SessionManager] Found server: {}@{}:{}", server.username, server.host, server.port);
+        info!(
+            "[SessionManager] Found server: {}@{}:{}",
+            server.username, server.host, server.port
+        );
 
         // Create channels for input/output
         let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
@@ -111,22 +151,37 @@ impl SessionManager {
 
         // === Jump Host Support ===
         // If server has a jump_host_id, we connect through the jump host first
-        let _jump_bridge_handle: Option<tokio::task::JoinHandle<()>> = if let Some(ref jump_id) = server.jump_host_id {
-            info!("[SessionManager] Server has jump host configured: {}", jump_id);
+        let _jump_bridge_handle: Option<tokio::task::JoinHandle<()>> = if let Some(ref jump_id) =
+            server.jump_host_id
+        {
+            info!(
+                "[SessionManager] Server has jump host configured: {}",
+                jump_id
+            );
 
-            let jump_server = self.database.server_get(jump_id)?
-                .ok_or_else(|| {
-                    error!("[SessionManager] Jump host server not found: {}", jump_id);
-                    anyhow!("Jump host server not found: {}", jump_id)
-                })?;
+            let jump_server = self.database.server_get(jump_id)?.ok_or_else(|| {
+                error!("[SessionManager] Jump host server not found: {}", jump_id);
+                anyhow!("Jump host server not found: {}", jump_id)
+            })?;
 
-            info!("[SessionManager] Jump host: {}@{}:{}", jump_server.username, jump_server.host, jump_server.port);
+            info!(
+                "[SessionManager] Jump host: {}@{}:{}",
+                jump_server.username, jump_server.host, jump_server.port
+            );
 
             // Get saved credentials for jump host
-            let jump_cred = self.database.credential_get(&jump_server.name)?
+            let jump_cred = self
+                .database
+                .credential_get(&jump_server.name)?
                 .ok_or_else(|| {
-                    error!("[SessionManager] No saved credentials for jump host '{}'", jump_server.name);
-                    anyhow!("No saved credentials for jump host '{}'. Please save credentials first.", jump_server.name)
+                    error!(
+                        "[SessionManager] No saved credentials for jump host '{}'",
+                        jump_server.name
+                    );
+                    anyhow!(
+                        "No saved credentials for jump host '{}'. Please save credentials first.",
+                        jump_server.name
+                    )
                 })?;
 
             // Create a separate SSH client for the jump host (with a dummy output channel)
@@ -137,25 +192,32 @@ impl SessionManager {
             match jump_cred.auth_type.as_str() {
                 "password" => {
                     info!("[SessionManager] Connecting to jump host with password...");
-                    jump_ssh.connect_password(
-                        &jump_server.host,
-                        jump_server.port,
-                        &jump_server.username,
-                        &jump_cred.credential,
-                    ).await?;
+                    jump_ssh
+                        .connect_password(
+                            &jump_server.host,
+                            jump_server.port,
+                            &jump_server.username,
+                            &jump_cred.credential,
+                        )
+                        .await?;
                 }
                 "key" | "key_with_passphrase" => {
                     info!("[SessionManager] Connecting to jump host with key...");
-                    jump_ssh.connect_key(
-                        &jump_server.host,
-                        jump_server.port,
-                        &jump_server.username,
-                        &jump_cred.credential,
-                        jump_cred.passphrase.as_deref(),
-                    ).await?;
+                    jump_ssh
+                        .connect_key(
+                            &jump_server.host,
+                            jump_server.port,
+                            &jump_server.username,
+                            &jump_cred.credential,
+                            jump_cred.passphrase.as_deref(),
+                        )
+                        .await?;
                 }
                 _ => {
-                    return Err(anyhow!("Unknown auth type for jump host: {}", jump_cred.auth_type));
+                    return Err(anyhow!(
+                        "Unknown auth type for jump host: {}",
+                        jump_cred.auth_type
+                    ));
                 }
             }
 
@@ -165,7 +227,8 @@ impl SessionManager {
             let jump_handle_arc = jump_ssh.session_arc();
             let forward_channel = {
                 let handle_guard = jump_handle_arc.lock().await;
-                let handle = handle_guard.as_ref()
+                let handle = handle_guard
+                    .as_ref()
                     .ok_or_else(|| anyhow!("Jump host SSH session not available"))?;
                 handle
                     .channel_open_direct_tcpip(&server.host, server.port as u32, "127.0.0.1", 0)
@@ -179,7 +242,10 @@ impl SessionManager {
             // The target SSH client will connect to this local port which bridges through the jump host
             let bridge_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
             let bridge_port = bridge_listener.local_addr()?.port();
-            info!("[SessionManager] Bridge listener on 127.0.0.1:{}", bridge_port);
+            info!(
+                "[SessionManager] Bridge listener on 127.0.0.1:{}",
+                bridge_port
+            );
 
             // Spawn bridge task
             let bridge_handle = tokio::spawn(async move {
@@ -201,7 +267,9 @@ impl SessionManager {
                                 match tcp_reader.read(&mut buf).await {
                                     Ok(0) => break,
                                     Ok(n) => {
-                                        if (ch_writer.write_all(&buf[..n]).await).is_err() { break; }
+                                        if (ch_writer.write_all(&buf[..n]).await).is_err() {
+                                            break;
+                                        }
                                     }
                                     Err(_) => break,
                                 }
@@ -219,7 +287,9 @@ impl SessionManager {
                                 match ch_reader.read(&mut buf).await {
                                     Ok(0) => break,
                                     Ok(n) => {
-                                        if (tcp_writer.write_all(&buf[..n]).await).is_err() { break; }
+                                        if (tcp_writer.write_all(&buf[..n]).await).is_err() {
+                                            break;
+                                        }
                                     }
                                     Err(_) => break,
                                 }
@@ -242,25 +312,27 @@ impl SessionManager {
 
             // Now connect the target SSH through our local bridge
             let mut ssh_client = SshClient::new(ssh_output_tx);
-            info!("[SessionManager] Connecting to target through bridge at 127.0.0.1:{}...", bridge_port);
+            info!(
+                "[SessionManager] Connecting to target through bridge at 127.0.0.1:{}...",
+                bridge_port
+            );
 
             match credential {
                 SshCredential::Password(password) => {
-                    ssh_client.connect_password(
-                        "127.0.0.1",
-                        bridge_port,
-                        &server.username,
-                        &password,
-                    ).await?;
+                    ssh_client
+                        .connect_password("127.0.0.1", bridge_port, &server.username, &password)
+                        .await?;
                 }
                 SshCredential::PrivateKey { key, passphrase } => {
-                    ssh_client.connect_key(
-                        "127.0.0.1",
-                        bridge_port,
-                        &server.username,
-                        &key,
-                        passphrase.as_deref(),
-                    ).await?;
+                    ssh_client
+                        .connect_key(
+                            "127.0.0.1",
+                            bridge_port,
+                            &server.username,
+                            &key,
+                            passphrase.as_deref(),
+                        )
+                        .await?;
                 }
             }
 
@@ -281,28 +353,29 @@ impl SessionManager {
                     info!("[SessionManager] Using password authentication");
                 }
                 SshCredential::PrivateKey { passphrase, .. } => {
-                    info!("[SessionManager] Using key authentication (passphrase: {})",
-                          if passphrase.is_some() { "yes" } else { "no" });
+                    info!(
+                        "[SessionManager] Using key authentication (passphrase: {})",
+                        if passphrase.is_some() { "yes" } else { "no" }
+                    );
                 }
             }
 
             match credential {
                 SshCredential::Password(password) => {
-                    ssh_client.connect_password(
-                        &server.host,
-                        server.port,
-                        &server.username,
-                        &password,
-                    ).await?;
+                    ssh_client
+                        .connect_password(&server.host, server.port, &server.username, &password)
+                        .await?;
                 }
                 SshCredential::PrivateKey { key, passphrase } => {
-                    ssh_client.connect_key(
-                        &server.host,
-                        server.port,
-                        &server.username,
-                        &key,
-                        passphrase.as_deref(),
-                    ).await?;
+                    ssh_client
+                        .connect_key(
+                            &server.host,
+                            server.port,
+                            &server.username,
+                            &key,
+                            passphrase.as_deref(),
+                        )
+                        .await?;
                 }
             }
 
@@ -318,29 +391,43 @@ impl SessionManager {
         info!("[SessionManager] Shell opened successfully");
 
         // Spawn task to bridge SSH output to broadcast channel
-        let output_tx_clone = output_tx.clone();
+        let session_for_output = session.clone();
         let session_id_for_output = session.id.clone();
         tokio::spawn(async move {
-            debug!("[SessionManager] Output bridge task started for session {}", session_id_for_output);
+            debug!(
+                "[SessionManager] Output bridge task started for session {}",
+                session_id_for_output
+            );
             while let Some(data) = ssh_output_rx.recv().await {
-                // Ignore send errors (no receivers)
-                let _ = output_tx_clone.send(data);
+                session_for_output.publish_output(data).await;
             }
-            debug!("[SessionManager] Output bridge task ended for session {}", session_id_for_output);
+            debug!(
+                "[SessionManager] Output bridge task ended for session {}",
+                session_id_for_output
+            );
         });
 
         // Spawn task to bridge input channel to SSH stdin
         let session_clone = session.clone();
         let session_id_for_input = session.id.clone();
         tokio::spawn(async move {
-            debug!("[SessionManager] Input bridge task started for session {}", session_id_for_input);
+            debug!(
+                "[SessionManager] Input bridge task started for session {}",
+                session_id_for_input
+            );
             while let Some(data) = input_rx.recv().await {
                 if let Err(e) = session_clone.write_to_ssh(&data).await {
-                    error!("[SessionManager] Error writing to SSH for session {}: {}", session_id_for_input, e);
+                    error!(
+                        "[SessionManager] Error writing to SSH for session {}: {}",
+                        session_id_for_input, e
+                    );
                     break;
                 }
             }
-            debug!("[SessionManager] Input bridge task ended for session {}", session_id_for_input);
+            debug!(
+                "[SessionManager] Input bridge task ended for session {}",
+                session_id_for_input
+            );
         });
 
         // === Post-login Command ===
@@ -353,10 +440,19 @@ impl SessionManager {
                     // Small delay to let shell initialize
                     tokio::time::sleep(std::time::Duration::from_millis(800)).await;
                     let cmd_with_newline = format!("{}\n", cmd_str);
-                    if let Err(e) = session_for_cmd.write_to_ssh(cmd_with_newline.as_bytes()).await {
-                        warn!("[SessionManager] Failed to send post-login command for session {}: {}", sid, e);
+                    if let Err(e) = session_for_cmd
+                        .write_to_ssh(cmd_with_newline.as_bytes())
+                        .await
+                    {
+                        warn!(
+                            "[SessionManager] Failed to send post-login command for session {}: {}",
+                            sid, e
+                        );
                     } else {
-                        info!("[SessionManager] Sent post-login command for session {}: {}", sid, cmd_str);
+                        info!(
+                            "[SessionManager] Sent post-login command for session {}: {}",
+                            sid, cmd_str
+                        );
                     }
                 });
             }
@@ -366,7 +462,10 @@ impl SessionManager {
         let mut sessions = self.sessions.write().await;
         sessions.insert(session.id.clone(), session.clone());
 
-        info!("[SessionManager] Session {} ready and connected", session.id);
+        info!(
+            "[SessionManager] Session {} ready and connected",
+            session.id
+        );
         Ok(session)
     }
 
@@ -377,25 +476,35 @@ impl SessionManager {
         credential: SshCredential,
         pty_config: Option<PtyConfig>,
     ) -> Result<()> {
-        info!("[SessionManager] Connecting existing session {}", session_id);
+        info!(
+            "[SessionManager] Connecting existing session {}",
+            session_id
+        );
 
         let session = {
             let sessions = self.sessions.read().await;
-            sessions.get(session_id).cloned()
-                .ok_or_else(|| {
-                    error!("[SessionManager] Session not found: {}", session_id);
-                    anyhow!("Session not found: {}", session_id)
-                })?
+            sessions.get(session_id).cloned().ok_or_else(|| {
+                error!("[SessionManager] Session not found: {}", session_id);
+                anyhow!("Session not found: {}", session_id)
+            })?
         };
 
         // Get server info
-        let server = self.database.server_get(&session.server_id)?
+        let server = self
+            .database
+            .server_get(&session.server_id)?
             .ok_or_else(|| {
-                error!("[SessionManager] Server not found for session {}", session_id);
+                error!(
+                    "[SessionManager] Server not found for session {}",
+                    session_id
+                );
                 anyhow!("Server not found for session")
             })?;
 
-        info!("[SessionManager] Connecting to {}@{}:{}", server.username, server.host, server.port);
+        info!(
+            "[SessionManager] Connecting to {}@{}:{}",
+            server.username, server.host, server.port
+        );
 
         // Create channel for SSH output
         let (ssh_output_tx, mut ssh_output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
@@ -409,28 +518,29 @@ impl SessionManager {
                 info!("[SessionManager] Using password authentication");
             }
             SshCredential::PrivateKey { passphrase, .. } => {
-                info!("[SessionManager] Using key authentication (passphrase: {})",
-                      if passphrase.is_some() { "yes" } else { "no" });
+                info!(
+                    "[SessionManager] Using key authentication (passphrase: {})",
+                    if passphrase.is_some() { "yes" } else { "no" }
+                );
             }
         }
 
         match credential {
             SshCredential::Password(password) => {
-                ssh_client.connect_password(
-                    &server.host,
-                    server.port,
-                    &server.username,
-                    &password,
-                ).await?;
+                ssh_client
+                    .connect_password(&server.host, server.port, &server.username, &password)
+                    .await?;
             }
             SshCredential::PrivateKey { key, passphrase } => {
-                ssh_client.connect_key(
-                    &server.host,
-                    server.port,
-                    &server.username,
-                    &key,
-                    passphrase.as_deref(),
-                ).await?;
+                ssh_client
+                    .connect_key(
+                        &server.host,
+                        server.port,
+                        &server.username,
+                        &key,
+                        passphrase.as_deref(),
+                    )
+                    .await?;
             }
         }
 
@@ -439,24 +549,36 @@ impl SessionManager {
         // Open shell with PTY
         ssh_client.open_shell(pty_config).await?;
 
-        info!("[SessionManager] Shell opened successfully for session {}", session_id);
+        info!(
+            "[SessionManager] Shell opened successfully for session {}",
+            session_id
+        );
 
         // Store the SSH client in the session
         session.set_ssh_client(ssh_client).await;
         session.set_state(SessionState::Connected).await;
 
         // Bridge SSH output to session broadcast
-        let output_tx = session.output_sender();
+        let session_for_output = session.clone();
         let session_id_clone = session_id.to_string();
         tokio::spawn(async move {
-            debug!("[SessionManager] Output bridge task started for session {}", session_id_clone);
+            debug!(
+                "[SessionManager] Output bridge task started for session {}",
+                session_id_clone
+            );
             while let Some(data) = ssh_output_rx.recv().await {
-                let _ = output_tx.send(data);
+                session_for_output.publish_output(data).await;
             }
-            debug!("[SessionManager] Output bridge task ended for session {}", session_id_clone);
+            debug!(
+                "[SessionManager] Output bridge task ended for session {}",
+                session_id_clone
+            );
         });
 
-        info!("[SessionManager] Session {} connected successfully", session_id);
+        info!(
+            "[SessionManager] Session {} connected successfully",
+            session_id
+        );
         Ok(())
     }
 

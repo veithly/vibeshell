@@ -6,17 +6,12 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::session::SessionManager;
+use crate::sftp::helpers::{resolve_remote_path, sftp_mkdir_recursive, sftp_remove_recursive};
 use crate::storage::models::{AuthType, Server};
 use crate::storage::Database;
 
@@ -163,11 +158,17 @@ async fn handle_jsonrpc(
         "initialize" => handle_initialize(request.params).await,
         "tools/list" => handle_tools_list().await,
         "tools/call" => handle_tools_call(&state, request.params).await,
-        _ => Err((METHOD_NOT_FOUND, format!("Unknown method: {}", request.method))),
+        _ => Err((
+            METHOD_NOT_FOUND,
+            format!("Unknown method: {}", request.method),
+        )),
     };
 
     match result {
-        Ok(value) => (StatusCode::OK, Json(JsonRpcResponse::success(request.id, value))),
+        Ok(value) => (
+            StatusCode::OK,
+            Json(JsonRpcResponse::success(request.id, value)),
+        ),
         Err((code, message)) => (
             StatusCode::OK,
             Json(JsonRpcResponse::error(request.id, code, message, None)),
@@ -236,7 +237,11 @@ async fn handle_tools_call(
 // === Tool Execution ===
 
 /// Execute a tool by name — public wrapper for use by stdio transport.
-pub async fn execute_tool_public(state: &McpState, name: &str, args: &Value) -> Result<String, String> {
+pub async fn execute_tool_public(
+    state: &McpState,
+    name: &str,
+    args: &Value,
+) -> Result<String, String> {
     execute_tool(state, name, args).await
 }
 
@@ -266,6 +271,8 @@ async fn execute_tool(state: &McpState, name: &str, args: &Value) -> Result<Stri
         "sftp_mkdir" => tool_sftp_mkdir(state, args).await,
         "sftp_rm" => tool_sftp_rm(state, args).await,
         "sftp_mv" => tool_sftp_mv(state, args).await,
+        "sftp_read" => tool_sftp_read(state, args).await,
+        "sftp_write" => tool_sftp_write(state, args).await,
 
         _ => Err(format!("Unknown tool: {}", name)),
     }
@@ -313,7 +320,10 @@ async fn tool_server_add(state: &McpState, args: &Value) -> Result<String, Strin
         _ => return Err(format!("Invalid auth_type: {}", auth_type_str)),
     };
 
-    let group_id = args.get("group_id").and_then(|v| v.as_str()).map(String::from);
+    let group_id = args
+        .get("group_id")
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let tags: Vec<String> = args
         .get("tags")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -435,21 +445,53 @@ async fn tool_session_list(state: &McpState) -> Result<String, String> {
 }
 
 async fn tool_session_create(state: &McpState, args: &Value) -> Result<String, String> {
-    let session = if let Some(server_id) = args.get("server_id").and_then(|v| v.as_str()) {
-        state
-            .session_manager
-            .create(server_id)
-            .await
+    // Resolve the server name: either from server_name directly or by looking up server_id
+    let server_name = if let Some(name) = args.get("server_name").and_then(|v| v.as_str()) {
+        name.to_string()
+    } else if let Some(server_id) = args.get("server_id").and_then(|v| v.as_str()) {
+        let server = state
+            .database
+            .server_get(server_id)
             .map_err(|e| e.to_string())?
-    } else if let Some(server_name) = args.get("server_name").and_then(|v| v.as_str()) {
-        state
-            .session_manager
-            .create_by_name(server_name)
-            .await
-            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Server not found: {}", server_id))?;
+        server.name
     } else {
         return Err("Either 'server_id' or 'server_name' must be provided".to_string());
     };
+
+    // Look up saved credentials for this server
+    let cred = state
+        .database
+        .credential_get(&server_name)
+        .map_err(|e| format!("Failed to look up credentials: {}", e))?
+        .ok_or_else(|| {
+            format!(
+                "No saved credentials for server '{}'. Please save credentials in the VibeShell GUI first.",
+                server_name
+            )
+        })?;
+
+    // Convert stored credential to SshCredential
+    let ssh_cred = match cred.auth_type.as_str() {
+        "password" => crate::session::SshCredential::Password(cred.credential),
+        "key" | "key_with_passphrase" => crate::session::SshCredential::PrivateKey {
+            key: cred.credential,
+            passphrase: cred.passphrase,
+        },
+        other => {
+            return Err(format!(
+                "Unknown auth type '{}' for server '{}'",
+                other, server_name
+            ))
+        }
+    };
+
+    // Create session with actual SSH connection (no PTY needed for exec/SFTP)
+    let session = state
+        .session_manager
+        .create_with_credentials(&server_name, ssh_cred, None)
+        .await
+        .map_err(|e| format!("Failed to connect to '{}': {}", server_name, e))?;
 
     let info = session.get_info().await;
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
@@ -536,7 +578,7 @@ async fn tool_exec(state: &McpState, args: &Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: command")?;
 
-    let _timeout_ms = args
+    let timeout_ms = args
         .get("timeout_ms")
         .and_then(|v| v.as_u64())
         .unwrap_or(30000);
@@ -547,38 +589,141 @@ async fn tool_exec(state: &McpState, args: &Value) -> Result<String, String> {
         .await
         .ok_or("Session not found")?;
 
-    // Send the command to the session
-    session
-        .send_input(format!("{}\n", command).into_bytes())
+    // Execute command via a dedicated exec channel (separate from the shell).
+    // This opens a new SSH channel, runs the command, and captures stdout+stderr.
+    let timeout_duration = tokio::time::Duration::from_millis(timeout_ms);
+    let result = tokio::time::timeout(timeout_duration, session.exec_command(command))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|_| format!("Command timed out after {}ms", timeout_ms))?
+        .map_err(|e| format!("Command execution failed: {}", e))?;
 
-    // TODO: Implement proper command execution with output capture
-    // For now, we just send the input and acknowledge
-    Ok(format!("Command '{}' sent to session '{}'", command, session_id))
+    Ok(result)
 }
 
 // === SFTP Tool Implementations ===
-// Note: These are placeholder implementations. Full SFTP integration
-// requires the SftpClient to be associated with sessions.
 
-async fn tool_sftp_ls(_state: &McpState, args: &Value) -> Result<String, String> {
+/// Open a fresh SFTP session for the given session_id.
+/// Returns (SftpSession, home_dir). The SFTP channel closes when dropped.
+async fn open_sftp_for_session(
+    state: &McpState,
+    session_id: &str,
+) -> Result<(russh_sftp::client::SftpSession, String), String> {
+    let session = state
+        .session_manager
+        .get(session_id)
+        .await
+        .ok_or("Session not found")?;
+
+    let sftp = session
+        .open_sftp_session()
+        .await
+        .map_err(|e| format!("Failed to open SFTP session: {}", e))?;
+
+    let home_dir = sftp
+        .canonicalize(".")
+        .await
+        .map_err(|e| format!("Failed to resolve home directory: {}", e))?;
+
+    Ok((sftp, home_dir))
+}
+
+/// Format file size in human-readable form.
+fn format_file_size(size: u64) -> String {
+    if size < 1024 {
+        format!("{}B", size)
+    } else if size < 1024 * 1024 {
+        format!("{:.1}K", size as f64 / 1024.0)
+    } else if size < 1024 * 1024 * 1024 {
+        format!("{:.1}M", size as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}G", size as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+async fn tool_sftp_ls(state: &McpState, args: &Value) -> Result<String, String> {
     let session_id = args
         .get("session_id")
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: session_id")?;
 
     let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-    let _show_hidden = args.get("show_hidden").and_then(|v| v.as_bool()).unwrap_or(false);
+    let show_hidden = args
+        .get("show_hidden")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-    // TODO: Implement actual SFTP ls operation
-    Ok(format!(
-        "SFTP ls for session '{}' at path '{}' (not yet implemented)",
-        session_id, path
-    ))
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
+
+    let dir_entries = sftp
+        .read_dir(&resolved_path)
+        .await
+        .map_err(|e| format!("Failed to list directory {}: {}", resolved_path, e))?;
+
+    let mut text_lines: Vec<String> = Vec::new();
+    text_lines.push(format!("Directory: {}", resolved_path));
+    text_lines.push(String::new());
+
+    // Collect entries for sorting
+    struct EntryInfo {
+        name: String,
+        is_dir: bool,
+        size: u64,
+        permissions: String,
+    }
+    let mut entries: Vec<EntryInfo> = Vec::new();
+
+    for entry in dir_entries {
+        let name = entry.file_name();
+        if name == "." || name == ".." {
+            continue;
+        }
+        if !show_hidden && name.starts_with('.') {
+            continue;
+        }
+
+        let file_type = entry.file_type();
+        let is_directory = file_type.is_dir();
+        let metadata = entry.metadata();
+        let size = if is_directory { 0 } else { metadata.len() };
+        let perms = metadata.permissions();
+        let permissions = format!("{}{}", if is_directory { "d" } else { "-" }, perms);
+
+        entries.push(EntryInfo {
+            name,
+            is_dir: is_directory,
+            size,
+            permissions,
+        });
+    }
+
+    // Sort: directories first, then alphabetical
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    for entry in &entries {
+        let size_str = if entry.is_dir {
+            "-".to_string()
+        } else {
+            format_file_size(entry.size)
+        };
+        let type_indicator = if entry.is_dir { "/" } else { "" };
+        text_lines.push(format!(
+            "{} {:>8} {}{}",
+            entry.permissions, size_str, entry.name, type_indicator
+        ));
+    }
+
+    text_lines.push(String::new());
+    text_lines.push(format!("Total: {} entries", entries.len()));
+
+    Ok(text_lines.join("\n"))
 }
 
-async fn tool_sftp_upload(_state: &McpState, args: &Value) -> Result<String, String> {
+async fn tool_sftp_upload(state: &McpState, args: &Value) -> Result<String, String> {
     let session_id = args
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -594,14 +739,27 @@ async fn tool_sftp_upload(_state: &McpState, args: &Value) -> Result<String, Str
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: remote_path")?;
 
-    // TODO: Implement actual SFTP upload operation
+    // Read local file
+    let content = tokio::fs::read(local_path)
+        .await
+        .map_err(|e| format!("Failed to read local file '{}': {}", local_path, e))?;
+
+    let file_size = content.len();
+
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_remote = resolve_remote_path(remote_path, &home_dir, &home_dir);
+
+    sftp.write(&resolved_remote, &content)
+        .await
+        .map_err(|e| format!("Failed to upload to '{}': {}", resolved_remote, e))?;
+
     Ok(format!(
-        "SFTP upload for session '{}': '{}' -> '{}' (not yet implemented)",
-        session_id, local_path, remote_path
+        "Uploaded '{}' -> '{}' ({} bytes)",
+        local_path, resolved_remote, file_size
     ))
 }
 
-async fn tool_sftp_download(_state: &McpState, args: &Value) -> Result<String, String> {
+async fn tool_sftp_download(state: &McpState, args: &Value) -> Result<String, String> {
     let session_id = args
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -617,14 +775,36 @@ async fn tool_sftp_download(_state: &McpState, args: &Value) -> Result<String, S
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: local_path")?;
 
-    // TODO: Implement actual SFTP download operation
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_remote = resolve_remote_path(remote_path, &home_dir, &home_dir);
+
+    let content = sftp
+        .read(&resolved_remote)
+        .await
+        .map_err(|e| format!("Failed to read remote file '{}': {}", resolved_remote, e))?;
+
+    let file_size = content.len();
+
+    // Ensure parent directory exists locally
+    if let Some(parent) = std::path::Path::new(local_path).parent() {
+        if !parent.as_os_str().is_empty() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| format!("Failed to create local directory: {}", e))?;
+        }
+    }
+
+    tokio::fs::write(local_path, &content)
+        .await
+        .map_err(|e| format!("Failed to write local file '{}': {}", local_path, e))?;
+
     Ok(format!(
-        "SFTP download for session '{}': '{}' -> '{}' (not yet implemented)",
-        session_id, remote_path, local_path
+        "Downloaded '{}' -> '{}' ({} bytes)",
+        resolved_remote, local_path, file_size
     ))
 }
 
-async fn tool_sftp_mkdir(_state: &McpState, args: &Value) -> Result<String, String> {
+async fn tool_sftp_mkdir(state: &McpState, args: &Value) -> Result<String, String> {
     let session_id = args
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -635,16 +815,26 @@ async fn tool_sftp_mkdir(_state: &McpState, args: &Value) -> Result<String, Stri
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: path")?;
 
-    let _recursive = args.get("recursive").and_then(|v| v.as_bool()).unwrap_or(false);
+    let recursive = args
+        .get("recursive")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-    // TODO: Implement actual SFTP mkdir operation
-    Ok(format!(
-        "SFTP mkdir for session '{}': '{}' (not yet implemented)",
-        session_id, path
-    ))
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
+
+    if recursive {
+        sftp_mkdir_recursive(&sftp, &resolved_path).await?;
+    } else {
+        sftp.create_dir(&resolved_path)
+            .await
+            .map_err(|e| format!("Failed to create directory '{}': {}", resolved_path, e))?;
+    }
+
+    Ok(format!("Created directory '{}'", resolved_path))
 }
 
-async fn tool_sftp_rm(_state: &McpState, args: &Value) -> Result<String, String> {
+async fn tool_sftp_rm(state: &McpState, args: &Value) -> Result<String, String> {
     let session_id = args
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -655,16 +845,43 @@ async fn tool_sftp_rm(_state: &McpState, args: &Value) -> Result<String, String>
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: path")?;
 
-    let _recursive = args.get("recursive").and_then(|v| v.as_bool()).unwrap_or(false);
+    let recursive = args
+        .get("recursive")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-    // TODO: Implement actual SFTP rm operation
-    Ok(format!(
-        "SFTP rm for session '{}': '{}' (not yet implemented)",
-        session_id, path
-    ))
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
+
+    let meta = sftp
+        .metadata(&resolved_path)
+        .await
+        .map_err(|e| format!("Failed to stat '{}': {}", resolved_path, e))?;
+
+    if meta.is_dir() {
+        if recursive {
+            sftp_remove_recursive(&sftp, &resolved_path, 0).await?;
+            Ok(format!("Removed directory '{}' recursively", resolved_path))
+        } else {
+            sftp.remove_dir(&resolved_path)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Failed to remove directory '{}': {}. Use recursive=true for non-empty directories.",
+                        resolved_path, e
+                    )
+                })?;
+            Ok(format!("Removed directory '{}'", resolved_path))
+        }
+    } else {
+        sftp.remove_file(&resolved_path)
+            .await
+            .map_err(|e| format!("Failed to remove file '{}': {}", resolved_path, e))?;
+        Ok(format!("Removed file '{}'", resolved_path))
+    }
 }
 
-async fn tool_sftp_mv(_state: &McpState, args: &Value) -> Result<String, String> {
+async fn tool_sftp_mv(state: &McpState, args: &Value) -> Result<String, String> {
     let session_id = args
         .get("session_id")
         .and_then(|v| v.as_str())
@@ -680,10 +897,95 @@ async fn tool_sftp_mv(_state: &McpState, args: &Value) -> Result<String, String>
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: destination")?;
 
-    // TODO: Implement actual SFTP mv operation
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_source = resolve_remote_path(source, &home_dir, &home_dir);
+    let resolved_dest = resolve_remote_path(destination, &home_dir, &home_dir);
+
+    sftp.rename(&resolved_source, &resolved_dest)
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to move '{}' to '{}': {}",
+                resolved_source, resolved_dest, e
+            )
+        })?;
+
     Ok(format!(
-        "SFTP mv for session '{}': '{}' -> '{}' (not yet implemented)",
-        session_id, source, destination
+        "Moved '{}' -> '{}'",
+        resolved_source, resolved_dest
+    ))
+}
+
+async fn tool_sftp_read(state: &McpState, args: &Value) -> Result<String, String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: session_id")?;
+
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: path")?;
+
+    let max_bytes = args
+        .get("max_bytes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1_048_576) as usize; // 1MB default
+
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
+
+    let content = sftp
+        .read(&resolved_path)
+        .await
+        .map_err(|e| format!("Failed to read '{}': {}", resolved_path, e))?;
+
+    if content.len() > max_bytes {
+        let truncated = &content[..max_bytes];
+        let text = String::from_utf8_lossy(truncated);
+        Ok(format!(
+            "[Truncated: showing {}/{} bytes]\n{}",
+            max_bytes,
+            content.len(),
+            text
+        ))
+    } else {
+        String::from_utf8(content).map_err(|_| {
+            format!(
+                "File '{}' contains non-UTF-8 binary content. Use sftp_download instead.",
+                resolved_path
+            )
+        })
+    }
+}
+
+async fn tool_sftp_write(state: &McpState, args: &Value) -> Result<String, String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: session_id")?;
+
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: path")?;
+
+    let content = args
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: content")?;
+
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
+
+    sftp.write(&resolved_path, content.as_bytes())
+        .await
+        .map_err(|e| format!("Failed to write '{}': {}", resolved_path, e))?;
+
+    Ok(format!(
+        "Written {} bytes to '{}'",
+        content.len(),
+        resolved_path
     ))
 }
 

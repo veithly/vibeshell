@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
-use tauri::{State, AppHandle, Emitter};
+use std::collections::HashSet;
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
+use tauri::{AppHandle, Emitter, State};
 
+use crate::ipc::{IpcClient, IpcMessage, IpcSessionInfo};
 use crate::local_shell::LocalShellManager;
-use crate::session::{SessionManager, SessionInfo, SshCredential};
+use crate::session::{Session, SessionInfo, SessionManager, SshCredential};
 use crate::ssh::PtyConfig;
+
+use super::SftpState;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,8 +21,8 @@ pub struct CreateSessionRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ConnectRequest {
     pub server_name: String,
-    pub auth_type: String,  // "password" or "key"
-    pub credential: String, // password or private key content
+    pub auth_type: String,          // "password" or "key"
+    pub credential: String,         // password or private key content
     pub passphrase: Option<String>, // for encrypted keys
     pub cols: Option<u32>,
     pub rows: Option<u32>,
@@ -58,11 +62,229 @@ pub struct ResizeRequest {
     pub rows: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionAccessMode {
+    Local,
+    Remote,
+}
+
+pub struct SessionAccessState {
+    mode: RwLock<SessionAccessMode>,
+    remote_forwarders: Mutex<HashSet<String>>,
+}
+
+impl SessionAccessState {
+    pub fn new(mode: SessionAccessMode) -> Self {
+        Self {
+            mode: RwLock::new(mode),
+            remote_forwarders: Mutex::new(HashSet::new()),
+        }
+    }
+
+    pub fn mode(&self) -> SessionAccessMode {
+        *self.mode.read().expect("session access mode lock poisoned")
+    }
+
+    pub fn set_mode(&self, mode: SessionAccessMode) {
+        *self
+            .mode
+            .write()
+            .expect("session access mode lock poisoned") = mode;
+    }
+
+    pub fn is_remote(&self) -> bool {
+        self.mode() == SessionAccessMode::Remote
+    }
+
+    fn mark_remote_forwarder_started(&self, session_id: &str) -> bool {
+        let mut started = self
+            .remote_forwarders
+            .lock()
+            .expect("remote forwarder lock poisoned");
+        started.insert(session_id.to_string())
+    }
+
+    fn clear_remote_forwarder(&self, session_id: &str) {
+        self.remote_forwarders
+            .lock()
+            .expect("remote forwarder lock poisoned")
+            .remove(session_id);
+    }
+}
+
+fn emit_session_output_event(app: &AppHandle, session_id: &str, data: Vec<u8>) {
+    let event = SessionOutputEvent {
+        session_id: session_id.to_string(),
+        data,
+    };
+
+    let _ = app.emit("session-output", event);
+}
+
+async fn emit_replay_output(app: &AppHandle, session: &Arc<Session>) {
+    let session_id = session.id.clone();
+    for data in session.replay_output().await {
+        emit_session_output_event(app, &session_id, data);
+    }
+}
+
+async fn ensure_session_output_forwarder(app: AppHandle, session: Arc<Session>) {
+    if !session.try_start_output_forwarder().await {
+        return;
+    }
+
+    let session_id = session.id.clone();
+    let mut receiver = session.subscribe();
+
+    tokio::spawn(async move {
+        while let Ok(data) = receiver.recv().await {
+            emit_session_output_event(&app, &session_id, data);
+        }
+    });
+}
+
+async fn ipc_send(message: IpcMessage) -> Result<IpcMessage, String> {
+    tokio::task::spawn_blocking(move || IpcClient::send(&message).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| format!("IPC worker failed: {}", e))?
+}
+
+fn parse_remote_session_state(state: &str) -> crate::session::SessionState {
+    match state {
+        "connected" => crate::session::SessionState::Connected,
+        "disconnected" => crate::session::SessionState::Disconnected,
+        "error" => crate::session::SessionState::Error,
+        _ => crate::session::SessionState::Connecting,
+    }
+}
+
+fn map_remote_session(info: IpcSessionInfo) -> SessionInfo {
+    SessionInfo {
+        id: info.id,
+        server_id: info.server_id,
+        server_name: info.server_name,
+        state: parse_remote_session_state(&info.state),
+        created_at: info.created_at,
+        clients: info.clients,
+    }
+}
+
+async fn fetch_remote_sessions() -> Result<Vec<SessionInfo>, String> {
+    match ipc_send(IpcMessage::ListSessions).await? {
+        IpcMessage::SessionList { sessions } => {
+            Ok(sessions.into_iter().map(map_remote_session).collect())
+        }
+        IpcMessage::Error { message } => Err(message),
+        other => Err(format!(
+            "Unexpected IPC response while listing sessions: {:?}",
+            other
+        )),
+    }
+}
+
+async fn fetch_remote_session(session_id: &str) -> Result<SessionInfo, String> {
+    let sessions = fetch_remote_sessions().await?;
+    sessions
+        .into_iter()
+        .find(|session| session.id == session_id)
+        .ok_or_else(|| format!("Session not found: {}", session_id))
+}
+
+fn start_remote_session_forwarder(
+    app: AppHandle,
+    session_id: String,
+    access_state: Arc<SessionAccessState>,
+) {
+    if !access_state.mark_remote_forwarder_started(&session_id) {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(), String> {
+            use std::io::BufRead;
+
+            let mut reader = IpcClient::connect_streaming(&IpcMessage::AttachSession {
+                session_id: session_id.clone(),
+            })
+            .map_err(|e| e.to_string())?;
+
+            let mut first_line = String::new();
+            reader
+                .read_line(&mut first_line)
+                .map_err(|e| format!("Failed to read remote attach response: {}", e))?;
+
+            match serde_json::from_str::<IpcMessage>(first_line.trim())
+                .map_err(|e| format!("Failed to parse remote attach response: {}", e))?
+            {
+                IpcMessage::Ok => {}
+                IpcMessage::Error { message } => return Err(message),
+                other => {
+                    return Err(format!(
+                        "Unexpected IPC response while attaching remote session: {:?}",
+                        other
+                    ));
+                }
+            }
+
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        match serde_json::from_str::<IpcMessage>(trimmed) {
+                            Ok(IpcMessage::SessionOutput { session_id, data }) => {
+                                emit_session_output_event(&app, &session_id, data);
+                            }
+                            Ok(IpcMessage::SessionEnded { .. }) => break,
+                            Ok(_) => {}
+                            Err(err) => {
+                                log::warn!(
+                                    "[RemoteSession] Failed to parse streaming IPC payload for {}: {}",
+                                    session_id,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        return Err(format!(
+                            "Failed to read remote streaming output for {}: {}",
+                            session_id, err
+                        ));
+                    }
+                }
+            }
+
+            Ok(())
+        })();
+
+        if let Err(err) = result {
+            log::warn!(
+                "[RemoteSession] Forwarder for {} stopped with error: {}",
+                session_id,
+                err
+            );
+        }
+
+        access_state.clear_remote_forwarder(&session_id);
+    });
+}
+
 /// List all active sessions
 #[tauri::command]
 pub async fn session_list(
     manager: State<'_, Arc<SessionManager>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
 ) -> Result<Vec<SessionInfo>, String> {
+    if access_state.is_remote() {
+        return fetch_remote_sessions().await;
+    }
     Ok(manager.list().await)
 }
 
@@ -70,8 +292,28 @@ pub async fn session_list(
 #[tauri::command]
 pub async fn session_create(
     manager: State<'_, Arc<SessionManager>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
     request: CreateSessionRequest,
 ) -> Result<SessionInfo, String> {
+    if access_state.is_remote() {
+        match ipc_send(IpcMessage::CreateSession {
+            server_name: request.server_name,
+        })
+        .await?
+        {
+            IpcMessage::SessionCreated { session_id } => {
+                return fetch_remote_session(&session_id).await
+            }
+            IpcMessage::Error { message } => return Err(message),
+            other => {
+                return Err(format!(
+                    "Unexpected IPC response while creating session: {:?}",
+                    other
+                ));
+            }
+        }
+    }
+
     let session = manager
         .create_by_name(&request.server_name)
         .await
@@ -85,8 +327,38 @@ pub async fn session_create(
 pub async fn session_connect(
     app: AppHandle,
     manager: State<'_, Arc<SessionManager>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
     request: ConnectRequest,
 ) -> Result<SessionInfo, String> {
+    if access_state.is_remote() {
+        match ipc_send(IpcMessage::CreateSessionWithCredentials {
+            server_name: request.server_name,
+            auth_type: request.auth_type,
+            credential: request.credential,
+            passphrase: request.passphrase,
+            cols: request.cols,
+            rows: request.rows,
+        })
+        .await?
+        {
+            IpcMessage::SessionCreated { session_id } => {
+                start_remote_session_forwarder(
+                    app,
+                    session_id.clone(),
+                    access_state.inner().clone(),
+                );
+                return fetch_remote_session(&session_id).await;
+            }
+            IpcMessage::Error { message } => return Err(message),
+            other => {
+                return Err(format!(
+                    "Unexpected IPC response while connecting session: {:?}",
+                    other
+                ));
+            }
+        }
+    }
+
     // Parse credentials based on auth type
     let ssh_credential = match request.auth_type.as_str() {
         "password" => SshCredential::Password(request.credential),
@@ -112,21 +384,10 @@ pub async fn session_connect(
         .await
         .map_err(|e| e.to_string())?;
 
-    let session_id = session.id.clone();
     let info = session.get_info().await;
 
-    // Subscribe to session output and emit events
-    let mut receiver = session.subscribe();
-    tokio::spawn(async move {
-        while let Ok(data) = receiver.recv().await {
-            let event = SessionOutputEvent {
-                session_id: session_id.clone(),
-                data,
-            };
-            // Emit to frontend
-            let _ = app.emit("session-output", event);
-        }
-    });
+    // Keep a single long-lived session forwarder alive for future output.
+    ensure_session_output_forwarder(app, session).await;
 
     Ok(info)
 }
@@ -135,8 +396,28 @@ pub async fn session_connect(
 #[tauri::command]
 pub async fn session_kill(
     manager: State<'_, Arc<SessionManager>>,
+    sftp_state: State<'_, Arc<SftpState>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
     request: SessionIdRequest,
 ) -> Result<(), String> {
+    // Clean up SFTP session state to prevent memory leaks
+    sftp_state.cleanup_session(&request.session_id).await;
+
+    if access_state.is_remote() {
+        return match ipc_send(IpcMessage::KillSession {
+            session_id: request.session_id,
+        })
+        .await?
+        {
+            IpcMessage::Ok => Ok(()),
+            IpcMessage::Error { message } => Err(message),
+            other => Err(format!(
+                "Unexpected IPC response while killing session: {:?}",
+                other
+            )),
+        };
+    }
+
     manager
         .kill(&request.session_id)
         .await
@@ -147,19 +428,63 @@ pub async fn session_kill(
 #[tauri::command]
 pub async fn session_kill_all(
     manager: State<'_, Arc<SessionManager>>,
+    sftp_state: State<'_, Arc<SftpState>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
 ) -> Result<(), String> {
-    manager
-        .kill_all()
-        .await
-        .map_err(|e| e.to_string())
+    // Clean up all SFTP session state to prevent memory leaks
+    sftp_state.cleanup_all().await;
+
+    if access_state.is_remote() {
+        for session in fetch_remote_sessions().await? {
+            match ipc_send(IpcMessage::KillSession {
+                session_id: session.id.clone(),
+            })
+            .await?
+            {
+                IpcMessage::Ok => {}
+                IpcMessage::Error { message } => {
+                    return Err(format!(
+                        "Failed to kill session {}: {}",
+                        session.id, message
+                    ));
+                }
+                other => {
+                    return Err(format!(
+                        "Unexpected IPC response while killing session {}: {:?}",
+                        session.id, other
+                    ));
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    manager.kill_all().await.map_err(|e| e.to_string())
 }
 
 /// Send input data to a session (as string)
 #[tauri::command]
 pub async fn session_send_input(
     manager: State<'_, Arc<SessionManager>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
     request: SendInputRequest,
 ) -> Result<(), String> {
+    if access_state.is_remote() {
+        return match ipc_send(IpcMessage::SendInput {
+            session_id: request.session_id,
+            data: request.data.into_bytes(),
+        })
+        .await?
+        {
+            IpcMessage::Ok => Ok(()),
+            IpcMessage::Error { message } => Err(message),
+            other => Err(format!(
+                "Unexpected IPC response while sending input: {:?}",
+                other
+            )),
+        };
+    }
+
     let session = manager
         .get(&request.session_id)
         .await
@@ -175,8 +500,25 @@ pub async fn session_send_input(
 #[tauri::command]
 pub async fn session_send_bytes(
     manager: State<'_, Arc<SessionManager>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
     request: SendBytesRequest,
 ) -> Result<(), String> {
+    if access_state.is_remote() {
+        return match ipc_send(IpcMessage::SendInput {
+            session_id: request.session_id,
+            data: request.data,
+        })
+        .await?
+        {
+            IpcMessage::Ok => Ok(()),
+            IpcMessage::Error { message } => Err(message),
+            other => Err(format!(
+                "Unexpected IPC response while sending bytes: {:?}",
+                other
+            )),
+        };
+    }
+
     let session = manager
         .get(&request.session_id)
         .await
@@ -192,8 +534,26 @@ pub async fn session_send_bytes(
 #[tauri::command]
 pub async fn session_resize(
     manager: State<'_, Arc<SessionManager>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
     request: ResizeRequest,
 ) -> Result<(), String> {
+    if access_state.is_remote() {
+        return match ipc_send(IpcMessage::Resize {
+            session_id: request.session_id,
+            cols: request.cols,
+            rows: request.rows,
+        })
+        .await?
+        {
+            IpcMessage::Ok => Ok(()),
+            IpcMessage::Error { message } => Err(message),
+            other => Err(format!(
+                "Unexpected IPC response while resizing session: {:?}",
+                other
+            )),
+        };
+    }
+
     let session = manager
         .get(&request.session_id)
         .await
@@ -210,8 +570,18 @@ pub async fn session_resize(
 pub async fn session_attach(
     app: AppHandle,
     manager: State<'_, Arc<SessionManager>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
     request: SessionIdRequest,
 ) -> Result<SessionInfo, String> {
+    if access_state.is_remote() {
+        start_remote_session_forwarder(
+            app,
+            request.session_id.clone(),
+            access_state.inner().clone(),
+        );
+        return fetch_remote_session(&request.session_id).await;
+    }
+
     let session = manager
         .get(&request.session_id)
         .await
@@ -219,19 +589,11 @@ pub async fn session_attach(
 
     session.attach().await;
 
-    let sid = request.session_id.clone();
-    let mut receiver = session.subscribe();
+    // Replay buffered output so late listeners still receive the initial prompt/MOTD.
+    emit_replay_output(&app, &session).await;
 
-    // Spawn task to forward output to frontend
-    tokio::spawn(async move {
-        while let Ok(data) = receiver.recv().await {
-            let event = SessionOutputEvent {
-                session_id: sid.clone(),
-                data,
-            };
-            let _ = app.emit("session-output", event);
-        }
-    });
+    // Ensure future output continues flowing to the frontend without duplicate forwarders.
+    ensure_session_output_forwarder(app, session.clone()).await;
 
     Ok(session.get_info().await)
 }
@@ -240,8 +602,24 @@ pub async fn session_attach(
 #[tauri::command]
 pub async fn session_detach(
     manager: State<'_, Arc<SessionManager>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
     request: SessionIdRequest,
 ) -> Result<(), String> {
+    if access_state.is_remote() {
+        return match ipc_send(IpcMessage::DetachSession {
+            session_id: request.session_id,
+        })
+        .await?
+        {
+            IpcMessage::Ok => Ok(()),
+            IpcMessage::Error { message } => Err(message),
+            other => Err(format!(
+                "Unexpected IPC response while detaching session: {:?}",
+                other
+            )),
+        };
+    }
+
     let session = manager
         .get(&request.session_id)
         .await
@@ -458,9 +836,17 @@ fn parse_disk_info(df_output: &str) -> Vec<DiskInfo> {
             let mount_point = parts[5];
 
             // Only include real filesystems
-            if filesystem.starts_with('/') || filesystem.starts_with("tmpfs") || filesystem.starts_with("/dev") {
+            if filesystem.starts_with('/')
+                || filesystem.starts_with("tmpfs")
+                || filesystem.starts_with("/dev")
+            {
                 // Skip tmpfs, devtmpfs, etc. but keep /dev/* partitions
-                if mount_point == "/" || mount_point.starts_with("/home") || mount_point.starts_with("/var") || mount_point.starts_with("/mnt") || mount_point.starts_with("/data") {
+                if mount_point == "/"
+                    || mount_point.starts_with("/home")
+                    || mount_point.starts_with("/var")
+                    || mount_point.starts_with("/mnt")
+                    || mount_point.starts_with("/data")
+                {
                     let total: u64 = parts[1].parse().unwrap_or(0) * 1024; // Convert 1K blocks to bytes
                     let used: u64 = parts[2].parse().unwrap_or(0) * 1024;
                     let available: u64 = parts[3].parse().unwrap_or(0) * 1024;
@@ -587,10 +973,7 @@ fn run_command_output(program: &str, args: &[&str]) -> Option<String> {
 
 fn parse_load_average_macos(vm_loadavg_output: &str) -> [f64; 3] {
     // macOS `sysctl -n vm.loadavg` output example: { 1.20 1.35 1.42 }
-    let normalized = vm_loadavg_output
-        .replace(['{', '}'], "")
-        .trim()
-        .to_string();
+    let normalized = vm_loadavg_output.replace(['{', '}'], "").trim().to_string();
 
     let parts: Vec<&str> = normalized.split_whitespace().collect();
     let mut load = [0.0, 0.0, 0.0];
@@ -766,7 +1149,12 @@ fn collect_local_server_status() -> ServerStatus {
         "windows" => {
             if let Some(mem_output) = run_command_output(
                 "wmic",
-                &["OS", "get", "FreePhysicalMemory,TotalVisibleMemorySize", "/value"],
+                &[
+                    "OS",
+                    "get",
+                    "FreePhysicalMemory,TotalVisibleMemorySize",
+                    "/value",
+                ],
             ) {
                 let free_kb = parse_wmic_value(&mem_output, "FreePhysicalMemory").unwrap_or(0);
                 let total_kb = parse_wmic_value(&mem_output, "TotalVisibleMemorySize").unwrap_or(0);
@@ -792,7 +1180,12 @@ fn collect_local_server_status() -> ServerStatus {
 
             if let Some(disk_output) = run_command_output(
                 "wmic",
-                &["logicaldisk", "get", "DeviceID,FileSystem,FreeSpace,Size", "/format:csv"],
+                &[
+                    "logicaldisk",
+                    "get",
+                    "DeviceID,FileSystem,FreeSpace,Size",
+                    "/format:csv",
+                ],
             ) {
                 disks = parse_disk_info_windows(&disk_output);
             }
@@ -818,17 +1211,17 @@ fn collect_local_server_status() -> ServerStatus {
 pub async fn get_server_status(
     manager: State<'_, Arc<SessionManager>>,
     local_shell_manager: State<'_, Arc<LocalShellManager>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
     request: SessionIdRequest,
 ) -> Result<ServerStatus, String> {
     // Local shell sessions are not SSH-backed; collect metrics directly from this machine.
-    if local_shell_manager.get_session(&request.session_id).await.is_some() {
+    if local_shell_manager
+        .get_session(&request.session_id)
+        .await
+        .is_some()
+    {
         return Ok(collect_local_server_status());
     }
-
-    let session = manager
-        .get(&request.session_id)
-        .await
-        .ok_or_else(|| format!("Session not found: {}", request.session_id))?;
 
     // Remote SSH logic remains Linux-oriented and unchanged.
     let combined_cmd = r#"
@@ -842,10 +1235,30 @@ echo "===DISKINFO==="; df -P;
 echo "===NETDEV==="; cat /proc/net/dev
 "#;
 
-    let output = session
-        .exec_command(combined_cmd)
-        .await
-        .map_err(|e| format!("Failed to execute status command: {}", e))?;
+    let output = if let Some(session) = manager.get(&request.session_id).await {
+        session
+            .exec_command(combined_cmd)
+            .await
+            .map_err(|e| format!("Failed to execute status command: {}", e))?
+    } else if access_state.is_remote() {
+        match ipc_send(IpcMessage::ExecCommand {
+            session_id: request.session_id.clone(),
+            command: combined_cmd.to_string(),
+        })
+        .await?
+        {
+            IpcMessage::CommandOutput { output } => output,
+            IpcMessage::Error { message } => return Err(message),
+            other => {
+                return Err(format!(
+                    "Unexpected IPC response while collecting server status: {:?}",
+                    other
+                ));
+            }
+        }
+    } else {
+        return Err(format!("Session not found: {}", request.session_id));
+    };
 
     // Parse the combined output
     let mut hostname = String::from("unknown");
