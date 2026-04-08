@@ -1,6 +1,6 @@
 use std::io::BufReader;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use interprocess::local_socket::Stream;
 use vibeshell_core::ipc::{IpcClient, IpcMessage};
 
@@ -44,4 +44,32 @@ pub fn connect_streaming(message: &IpcMessage) -> Result<BufReader<Stream>> {
 #[allow(dead_code)]
 pub fn send_without_autostart(message: &IpcMessage) -> Result<IpcMessage> {
     IpcClient::send(message).context("IPC server is unavailable")
+}
+
+/// Return the number of clients currently attached to a session.
+/// Returns 0 on any IPC error so callers can fall back to the default path.
+pub fn session_client_count(session_id: &str) -> usize {
+    match send(&IpcMessage::ListSessions) {
+        Ok(IpcMessage::SessionList { sessions }) => sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .map(|s| s.clients)
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Execute a command via SSH exec channel (separate from the shared PTY).
+///
+/// This opens a dedicated SSH channel for the command, so the command text
+/// never appears in the interactive terminal that may be displayed by the GUI.
+pub fn exec_isolated(session_id: &str, command: &str) -> Result<String> {
+    match send(&IpcMessage::ExecCommand {
+        session_id: session_id.to_string(),
+        command: command.to_string(),
+    })? {
+        IpcMessage::CommandOutput { output } => Ok(output),
+        IpcMessage::Error { message } => bail!("Command failed: {}", message),
+        _ => bail!("Unexpected response from background service"),
+    }
 }

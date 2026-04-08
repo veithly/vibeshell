@@ -12,6 +12,35 @@ use crate::ipc_support;
 use crate::session_alias;
 use crate::terminal::{self, CommandHandoff};
 
+fn parse_key_tokens(tokens: &[String]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for token in tokens {
+        match token.to_ascii_lowercase().as_str() {
+            "enter" | "return" | "cr" => bytes.push(b'\r'),
+            "space" => bytes.push(b' '),
+            "tab" => bytes.push(b'\t'),
+            "esc" | "escape" => bytes.push(0x1b),
+            "backspace" | "bs" => bytes.push(0x7f),
+            "delete" | "del" => bytes.extend_from_slice(b"\x1b[3~"),
+            "up" => bytes.extend_from_slice(b"\x1b[A"),
+            "down" => bytes.extend_from_slice(b"\x1b[B"),
+            "right" => bytes.extend_from_slice(b"\x1b[C"),
+            "left" => bytes.extend_from_slice(b"\x1b[D"),
+            "ctrl-c" => bytes.push(0x03),
+            "ctrl-d" => bytes.push(0x04),
+            "ctrl-z" => bytes.push(0x1a),
+            _ => {
+                for ch in token.chars() {
+                    let mut buf = [0u8; 4];
+                    let s = ch.encode_utf8(&mut buf);
+                    bytes.extend_from_slice(s.as_bytes());
+                }
+            }
+        }
+    }
+    bytes
+}
+
 /// Send an IPC message with a human-friendly error wrapper.
 fn ipc_send(message: &IpcMessage) -> Result<IpcMessage> {
     ipc_support::send(message)
@@ -139,17 +168,28 @@ pub fn kill_all() -> Result<()> {
 }
 
 /// Execute a command on an existing session.
+///
+/// When other clients (e.g. GUI) are attached, uses a dedicated SSH exec
+/// channel to avoid injecting keystrokes into the shared PTY. Otherwise
+/// uses the PTY approach which supports interactive prompts.
 pub fn exec(session_id: &str, command: &[String]) -> Result<()> {
     let joined = command.join(" ");
+
+    if ipc_support::session_client_count(session_id) > 0 {
+        let output = ipc_support::exec_isolated(session_id, &joined)?;
+        print!("{}", output);
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        return Ok(());
+    }
+
     match terminal::run_command_with_handoff(session_id, &joined)? {
         CommandHandoff::Completed | CommandHandoff::SessionEnded => Ok(()),
         CommandHandoff::AwaitingInput => {
             eprintln!();
-            eprintln!("Next use: vshell exec {} -- <command>", session_id);
-            eprintln!(
-                "Session '{}' is waiting for more input. Reattach with 'vshell attach {}'.",
-                session_id, session_id
-            );
+            eprintln!("Session is waiting for input. Send a response:");
+            eprintln!("  vshell send-key {} y enter   # send 'y' then Enter", session_id);
+            eprintln!("  vshell send-key {} enter      # press Enter", session_id);
+            eprintln!("  vshell attach {}              # attach interactively", session_id);
             Ok(())
         }
     }
@@ -179,20 +219,99 @@ pub fn ssh_session(alias: &str, command: &[String]) -> Result<()> {
             session_id, display_name, alias
         );
         eprintln!("Press Ctrl+] to detach.\r");
-        terminal::run_interactive(&session_id)
-    } else {
-        let joined = command.join(" ");
-        match terminal::run_command_with_handoff(&session_id, &joined)? {
-            CommandHandoff::Completed | CommandHandoff::SessionEnded => Ok(()),
-            CommandHandoff::AwaitingInput => {
-                eprintln!();
-                eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
-                eprintln!(
-                    "Session '{}' (alias {}) is waiting for more input. Reattach with 'vshell ssh-session {}'.",
-                    display_name, alias, alias
-                );
-                Ok(())
-            }
+        return terminal::run_interactive(&session_id);
+    }
+
+    let joined = command.join(" ");
+
+    if ipc_support::session_client_count(&session_id) > 0 {
+        let output = ipc_support::exec_isolated(&session_id, &joined)?;
+        print!("{}", output);
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        return Ok(());
+    }
+
+    match terminal::run_command_with_handoff(&session_id, &joined)? {
+        CommandHandoff::Completed | CommandHandoff::SessionEnded => Ok(()),
+        CommandHandoff::AwaitingInput => {
+            eprintln!();
+            eprintln!("Session is waiting for input. Send a response:");
+            eprintln!("  vshell send-key {} y enter   # send 'y' then Enter", alias);
+            eprintln!("  vshell send-key {} enter      # press Enter", alias);
+            eprintln!("  vshell ssh-session {}          # attach interactively", alias);
+            Ok(())
         }
+    }
+}
+
+/// Send raw keystrokes to a session's PTY.
+///
+/// Tokens are parsed as named keys (`enter`, `space`, `tab`, `ctrl-c`, ...)
+/// or as literal text. Multiple tokens are concatenated in order.
+///
+/// Examples:
+///   vshell send-key 001 y enter          # sends "y\r"
+///   vshell send-key 001 yes enter        # sends "yes\r"
+///   vshell send-key 001 ctrl-c           # sends Ctrl+C
+///   vshell send-key 001 space            # sends a space character
+pub fn send_key(session_id: &str, tokens: &[String]) -> Result<()> {
+    if tokens.is_empty() {
+        bail!("No keys specified. Usage: vshell send-key <alias> <key> [key...]");
+    }
+
+    let data = parse_key_tokens(tokens);
+    if data.is_empty() {
+        bail!("Could not parse any key input from the provided tokens");
+    }
+
+    ipc_support::send(&IpcMessage::SendInput {
+        session_id: session_id.to_string(),
+        data,
+    })?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_key_tokens;
+
+    fn tokens(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn named_keys_produce_expected_bytes() {
+        assert_eq!(parse_key_tokens(&tokens(&["enter"])), vec![b'\r']);
+        assert_eq!(parse_key_tokens(&tokens(&["space"])), vec![b' ']);
+        assert_eq!(parse_key_tokens(&tokens(&["tab"])), vec![b'\t']);
+        assert_eq!(parse_key_tokens(&tokens(&["ctrl-c"])), vec![0x03]);
+        assert_eq!(parse_key_tokens(&tokens(&["ctrl-d"])), vec![0x04]);
+        assert_eq!(parse_key_tokens(&tokens(&["backspace"])), vec![0x7f]);
+    }
+
+    #[test]
+    fn literal_text_passed_through() {
+        assert_eq!(parse_key_tokens(&tokens(&["yes"])), b"yes".to_vec());
+        assert_eq!(parse_key_tokens(&tokens(&["y"])), b"y".to_vec());
+    }
+
+    #[test]
+    fn mixed_tokens_concatenated() {
+        assert_eq!(
+            parse_key_tokens(&tokens(&["y", "enter"])),
+            vec![b'y', b'\r']
+        );
+        assert_eq!(
+            parse_key_tokens(&tokens(&["yes", "enter"])),
+            vec![b'y', b'e', b's', b'\r']
+        );
+    }
+
+    #[test]
+    fn case_insensitive_named_keys() {
+        assert_eq!(parse_key_tokens(&tokens(&["ENTER"])), vec![b'\r']);
+        assert_eq!(parse_key_tokens(&tokens(&["Ctrl-C"])), vec![0x03]);
+        assert_eq!(parse_key_tokens(&tokens(&["Space"])), vec![b' ']);
     }
 }

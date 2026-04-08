@@ -5,6 +5,7 @@
 //! Interactive sessions are automatically assigned a short 3-digit alias so
 //! users can reference them via `vshell ssh-session <alias>` later.
 
+use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
@@ -12,7 +13,7 @@ use vibeshell_core::ipc::{IpcMessage, IpcSessionInfo};
 
 use crate::ipc_support;
 use crate::session_alias;
-use crate::terminal::{self, CommandHandoff};
+use crate::terminal;
 
 /// Connect to a configured SSH server and enter interactive mode.
 ///
@@ -37,17 +38,13 @@ pub fn connect(server_name: &str, command: &[String], wait: bool, force_new: boo
         .or_else(|| session_alias::register(&session_id, server_name).ok())
         .unwrap_or_else(|| session_id[..8].to_string());
 
-    // Single-command mode: keep the shell session alive if the command
-    // needs follow-up input so an agent can continue interacting.
+    // Single-command mode: use a dedicated SSH exec channel so the
+    // command output is clean (no MOTD banner), and the command never
+    // gets typed into the shared PTY (avoids garbled input when the
+    // GUI terminal is also attached).
     if !command.is_empty() {
         let joined = command.join(" ");
-        return run_single_command(
-            server_name,
-            &session_id,
-            &alias,
-            &joined,
-            !reused_existing,
-        );
+        return run_isolated_command(&session_id, &alias, &joined, !reused_existing);
     }
 
     if reused_existing {
@@ -162,44 +159,65 @@ fn pick_reusable_session(sessions: &[IpcSessionInfo], server_name: &str) -> Opti
         .cloned()
 }
 
-fn run_single_command(
-    server_name: &str,
+/// Execute a command via a dedicated SSH exec channel.
+///
+/// The exec channel bypasses the interactive PTY entirely, which:
+/// 1. Suppresses the remote server's MOTD / welcome banner.
+/// 2. Prevents garbled input when the GUI terminal shares the same session.
+fn run_isolated_command(
     session_id: &str,
     alias: &str,
     command: &str,
     owns_session: bool,
 ) -> Result<()> {
-    match terminal::run_command_with_handoff(session_id, command)? {
-        CommandHandoff::Completed | CommandHandoff::SessionEnded => {
-            if owns_session {
-                let _ = ipc_support::send(&IpcMessage::KillSession {
-                    session_id: session_id.to_string(),
-                });
-                let _ = session_alias::remove_by_session_id(session_id);
-            } else {
-                eprintln!();
-                eprintln!(
-                    "Command completed on reused '{}' session {} (alias: {}).",
-                    server_name, session_id, alias
-                );
-                eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
-            }
-            Ok(())
-        }
-        CommandHandoff::AwaitingInput => {
-            eprintln!();
-            eprintln!(
-                "Command on '{}' is waiting for more input. Session kept alive as alias {}.",
-                server_name, alias
-            );
-            eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
-            eprintln!(
-                "Use 'vshell ssh-session {}' to continue, or 'vshell kill {}' when finished.",
-                alias, alias
-            );
-            Ok(())
-        }
+    let output = ipc_support::exec_isolated(session_id, command)?;
+    print!("{}", output);
+    let _ = std::io::stdout().flush();
+
+    if output_looks_interactive(&output) {
+        eprintln!();
+        eprintln!("Interactive input may be required. Send a response:");
+        eprintln!("  vshell send-key {} y enter   # send 'y' then Enter", alias);
+        eprintln!("  vshell send-key {} enter      # press Enter", alias);
+        eprintln!(
+            "  vshell ssh-session {}          # attach interactively",
+            alias
+        );
+        return Ok(());
     }
+
+    if owns_session {
+        let _ = ipc_support::send(&IpcMessage::KillSession {
+            session_id: session_id.to_string(),
+        });
+        let _ = session_alias::remove_by_session_id(session_id);
+    } else {
+        eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
+    }
+
+    Ok(())
+}
+
+fn output_looks_interactive(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    [
+        "[y/n]",
+        "[yes/no]",
+        "(y/n)",
+        "(yes/no)",
+        "press enter",
+        "continue?",
+        "are you sure",
+        "password:",
+        "passphrase:",
+        "confirmation",
+        "confirm ",
+        "do you want",
+        "[y] yes",
+        "[n] no",
+    ]
+    .iter()
+    .any(|marker| lower.contains(&marker.to_ascii_lowercase()))
 }
 
 #[cfg(test)]
@@ -246,5 +264,16 @@ mod tests {
             pick_reusable_session(&sessions, "prod").is_none(),
             "inactive sessions must not be reused"
         );
+    }
+
+    #[test]
+    fn output_looks_interactive_detects_common_prompts() {
+        use super::output_looks_interactive;
+        assert!(output_looks_interactive("Do you want to continue? [Y/n] "));
+        assert!(output_looks_interactive("Are you sure you want to proceed?"));
+        assert!(output_looks_interactive("Enter password: "));
+        assert!(output_looks_interactive("Press ENTER to continue"));
+        assert!(!output_looks_interactive("total 42\ndrwxr-xr-x 2 root root"));
+        assert!(!output_looks_interactive("Linux hostname 5.15.0"));
     }
 }

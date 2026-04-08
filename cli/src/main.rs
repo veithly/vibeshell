@@ -110,6 +110,21 @@ enum Commands {
     /// Execute a command on an existing SSH session by alias or UUID
     Exec(ExecArgs),
 
+    /// Send keystrokes to a session (for responding to interactive prompts)
+    #[command(
+        alias = "sk",
+        long_about = "Send keystrokes to an existing session's PTY.\n\n\
+        Each argument is either a named key or literal text, sent in order.\n\n\
+        Named keys: enter, space, tab, esc, backspace, delete,\n\
+                    up, down, left, right, ctrl-c, ctrl-d, ctrl-z\n\n\
+        Examples:\n\
+          vshell send-key 001 y enter          # answer 'y' + Enter\n\
+          vshell send-key 001 yes enter        # type 'yes' + Enter\n\
+          vshell send-key 001 ctrl-c           # interrupt running process\n\
+          vshell send-key 001 space            # press Space (e.g. for pager)"
+    )]
+    SendKey(SendKeyArgs),
+
     /// Kill/terminate session(s)
     Kill(KillArgs),
 
@@ -175,6 +190,16 @@ struct ExecArgs {
     /// Command to execute
     #[arg(last = true)]
     command: Vec<String>,
+}
+
+#[derive(Args)]
+struct SendKeyArgs {
+    /// Session alias or UUID to send keys to
+    session_id: String,
+
+    /// Keys to send (named keys like 'enter', 'space', 'ctrl-c', or literal text)
+    #[arg(required = true, num_args = 1..)]
+    keys: Vec<String>,
 }
 
 #[derive(Args)]
@@ -274,6 +299,11 @@ fn main() -> Result<()> {
             let resolved =
                 session_alias::resolve(&args.session_id).unwrap_or_else(|| args.session_id.clone());
             commands::session::exec(&resolved, &args.command)
+        }
+        Some(Commands::SendKey(args)) => {
+            let resolved = session_alias::resolve(&args.session_id)
+                .unwrap_or_else(|| args.session_id.clone());
+            commands::session::send_key(&resolved, &args.keys)
         }
         Some(Commands::Kill(args)) => {
             if args.all {
@@ -435,6 +465,24 @@ mod tests {
         assert!(
             parsed.is_ok(),
             "vshell ss <alias> should parse (alias for ssh-session)"
+        );
+    }
+
+    #[test]
+    fn parses_send_key_command() {
+        let parsed = Cli::try_parse_from(["vshell", "send-key", "001", "y", "enter"]);
+        assert!(
+            parsed.is_ok(),
+            "vshell send-key <alias> <keys...> should parse"
+        );
+    }
+
+    #[test]
+    fn parses_send_key_alias_sk() {
+        let parsed = Cli::try_parse_from(["vshell", "sk", "001", "ctrl-c"]);
+        assert!(
+            parsed.is_ok(),
+            "vshell sk <alias> <key> should parse (alias for send-key)"
         );
     }
 }
