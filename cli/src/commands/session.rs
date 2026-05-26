@@ -187,9 +187,15 @@ pub fn exec(session_id: &str, command: &[String]) -> Result<()> {
         CommandHandoff::AwaitingInput => {
             eprintln!();
             eprintln!("Session is waiting for input. Send a response:");
-            eprintln!("  vshell send-key {} y enter   # send 'y' then Enter", session_id);
+            eprintln!(
+                "  vshell send-key {} y enter   # send 'y' then Enter",
+                session_id
+            );
             eprintln!("  vshell send-key {} enter      # press Enter", session_id);
-            eprintln!("  vshell attach {}              # attach interactively", session_id);
+            eprintln!(
+                "  vshell attach {}              # attach interactively",
+                session_id
+            );
             Ok(())
         }
     }
@@ -236,9 +242,15 @@ pub fn ssh_session(alias: &str, command: &[String]) -> Result<()> {
         CommandHandoff::AwaitingInput => {
             eprintln!();
             eprintln!("Session is waiting for input. Send a response:");
-            eprintln!("  vshell send-key {} y enter   # send 'y' then Enter", alias);
+            eprintln!(
+                "  vshell send-key {} y enter   # send 'y' then Enter",
+                alias
+            );
             eprintln!("  vshell send-key {} enter      # press Enter", alias);
-            eprintln!("  vshell ssh-session {}          # attach interactively", alias);
+            eprintln!(
+                "  vshell ssh-session {}          # attach interactively",
+                alias
+            );
             Ok(())
         }
     }

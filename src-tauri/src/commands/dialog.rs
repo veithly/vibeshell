@@ -3,8 +3,8 @@
 //! This module provides Tauri commands for file system dialogs,
 //! specifically for picking SSH key files.
 
+use rfd::FileDialog;
 use std::fs;
-use tauri_plugin_dialog::DialogExt;
 
 /// Opens a file dialog to pick an SSH private key file.
 ///
@@ -17,16 +17,14 @@ use tauri_plugin_dialog::DialogExt;
 /// Returns `Ok(Some(path))` if a file was selected, `Ok(None)` if cancelled,
 /// or an error if the dialog failed to open.
 #[tauri::command]
-pub async fn pick_ssh_key_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let file = app
-        .dialog()
-        .file()
+pub async fn pick_ssh_key_file() -> Result<Option<String>, String> {
+    let file = FileDialog::new()
         .add_filter("SSH Keys", &["pem", "key", "pub", "ppk"])
         .add_filter("All Files", &["*"])
         .set_title("Select SSH Private Key")
-        .blocking_pick_file();
+        .pick_file();
 
-    Ok(file.map(|f| f.to_string()))
+    Ok(file.map(|f| f.to_string_lossy().to_string()))
 }
 
 /// Opens a file dialog to pick any file for upload.
@@ -39,15 +37,23 @@ pub async fn pick_ssh_key_file(app: tauri::AppHandle) -> Result<Option<String>, 
 ///
 /// Returns `Ok(Some(path))` if a file was selected, `Ok(None)` if cancelled.
 #[tauri::command]
-pub async fn pick_file_for_upload(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let file = app
-        .dialog()
-        .file()
+pub async fn pick_file_for_upload() -> Result<Option<String>, String> {
+    let file = FileDialog::new()
         .add_filter("All Files", &["*"])
         .set_title("Select File to Upload")
-        .blocking_pick_file();
+        .pick_file();
 
-    Ok(file.map(|f| f.to_string()))
+    Ok(file.map(|f| f.to_string_lossy().to_string()))
+}
+
+/// Opens a directory dialog to pick a folder for recursive upload or sync.
+#[tauri::command]
+pub async fn pick_directory_for_upload() -> Result<Option<String>, String> {
+    let folder = FileDialog::new()
+        .set_title("Select Directory to Upload")
+        .pick_folder();
+
+    Ok(folder.map(|f| f.to_string_lossy().to_string()))
 }
 
 /// Opens a directory dialog to pick a download location.
@@ -60,14 +66,12 @@ pub async fn pick_file_for_upload(app: tauri::AppHandle) -> Result<Option<String
 ///
 /// Returns `Ok(Some(path))` if a directory was selected, `Ok(None)` if cancelled.
 #[tauri::command]
-pub async fn pick_download_directory(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let folder = app
-        .dialog()
-        .file()
+pub async fn pick_download_directory() -> Result<Option<String>, String> {
+    let folder = FileDialog::new()
         .set_title("Select Download Location")
-        .blocking_pick_folder();
+        .pick_folder();
 
-    Ok(folder.map(|f| f.to_string()))
+    Ok(folder.map(|f| f.to_string_lossy().to_string()))
 }
 
 /// Reads the contents of an SSH key file.

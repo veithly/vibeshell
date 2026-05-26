@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
@@ -23,8 +23,13 @@ use interprocess::os::windows::security_descriptor::{
 
 use crate::commands::sftp::{SftpEntry, SftpFileContent};
 use crate::session::SessionManager;
-use crate::sftp::helpers::{resolve_remote_path, sftp_mkdir_recursive, sftp_remove_recursive};
-use crate::sftp::TransferProgress;
+use crate::sftp::helpers::{
+    resolve_remote_path, resolve_remote_upload_path, sftp_mkdir_recursive, sftp_remove_recursive,
+};
+use crate::sftp::{
+    effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
+    DirectoryTransferSummary, TransferProgress,
+};
 use crate::storage::{AuthType, Database};
 
 const DEFAULT_SOCKET_NAME: &str = "vibeshell.sock";
@@ -140,7 +145,12 @@ pub enum IpcMessage {
     /// Initialize SFTP context for a session
     SftpInit { session_id: String },
     /// List directory contents
-    SftpListDir { session_id: String, path: String },
+    SftpListDir {
+        session_id: String,
+        path: String,
+        #[serde(default)]
+        preserve_cwd: bool,
+    },
     /// Download a remote file to a local path
     SftpDownloadFile {
         session_id: String,
@@ -152,6 +162,19 @@ pub enum IpcMessage {
         session_id: String,
         local_path: String,
         remote_path: String,
+    },
+    /// Upload or sync a local directory to a remote directory
+    SftpUploadDirectory {
+        session_id: String,
+        local_path: String,
+        remote_path: String,
+        mode: DirectoryTransferMode,
+        #[serde(default)]
+        delete_extra: bool,
+        #[serde(default)]
+        respect_gitignore: Option<bool>,
+        #[serde(default)]
+        excluded_paths: Vec<String>,
     },
     /// Create a remote directory
     SftpMkdir { session_id: String, path: String },
@@ -178,6 +201,12 @@ pub enum IpcMessage {
         max_size: Option<u64>,
         as_binary: Option<bool>,
     },
+    /// Write text content to a remote file
+    SftpWriteFile {
+        session_id: String,
+        path: String,
+        content: String,
+    },
 
     // Responses from GUI to CLI
     /// List of configured servers
@@ -202,6 +231,8 @@ pub enum IpcMessage {
     SftpFileContent { content: SftpFileContent },
     /// SFTP transfer response
     SftpTransfer { progress: TransferProgress },
+    /// SFTP directory transfer response
+    SftpDirectoryTransfer { summary: DirectoryTransferSummary },
     /// Error response
     Error { message: String },
     /// Success acknowledgment
@@ -882,7 +913,11 @@ impl IpcServer {
                     Err(message) => IpcMessage::Error { message },
                 }
             }
-            IpcMessage::SftpListDir { session_id, path } => {
+            IpcMessage::SftpListDir {
+                session_id,
+                path,
+                preserve_cwd,
+            } => {
                 let context = match Self::get_sftp_context(&sftp_contexts, &session_id) {
                     Ok(context) => context,
                     Err(message) => return IpcMessage::Error { message },
@@ -948,6 +983,10 @@ impl IpcServer {
                     Ok::<Vec<SftpEntry>, String>(entries)
                 }) {
                     std::result::Result::Ok(entries) => {
+                        if preserve_cwd {
+                            return IpcMessage::SftpEntries { entries };
+                        }
+
                         Self::set_sftp_context(
                             &sftp_contexts,
                             &session_id,
@@ -1088,6 +1127,33 @@ impl IpcServer {
                     Err(message) => IpcMessage::Error { message },
                 }
             }
+            IpcMessage::SftpWriteFile {
+                session_id,
+                path,
+                content,
+            } => {
+                let context = match Self::get_sftp_context(&sftp_contexts, &session_id) {
+                    Ok(context) => context,
+                    Err(message) => return IpcMessage::Error { message },
+                };
+                let resolved = resolve_remote_path(&path, &context.home_dir, &context.current_path);
+                match rt.block_on(async {
+                    let session = session_manager
+                        .get(&session_id)
+                        .await
+                        .ok_or_else(|| format!("Session not found: {}", session_id))?;
+                    let sftp = session
+                        .open_sftp_session()
+                        .await
+                        .map_err(|e| format!("Failed to open SFTP subsystem: {}", e))?;
+                    sftp.write(&resolved, content.as_bytes())
+                        .await
+                        .map_err(|e| format!("Failed to write remote file {}: {}", resolved, e))
+                }) {
+                    std::result::Result::Ok(_) => IpcMessage::Ok,
+                    Err(message) => IpcMessage::Error { message },
+                }
+            }
             IpcMessage::SftpDownloadFile {
                 session_id,
                 remote_path,
@@ -1162,21 +1228,67 @@ impl IpcServer {
                         .map_err(|e| format!("Failed to open SFTP subsystem: {}", e))?;
                     let content = std::fs::read(&local_path)
                         .map_err(|e| format!("Failed to read local file {}: {}", local_path, e))?;
-                    sftp.write(&resolved, &content)
-                        .await
-                        .map_err(|e| format!("Failed to write remote file {}: {}", resolved, e))?;
-
                     let filename = Path::new(&local_path)
                         .file_name()
                         .and_then(|v| v.to_str())
                         .unwrap_or("unknown")
                         .to_string();
+                    let resolved = resolve_remote_upload_path(&sftp, &resolved, &filename).await;
+                    sftp.write(&resolved, &content)
+                        .await
+                        .map_err(|e| format!("Failed to write remote file {}: {}", resolved, e))?;
+
                     let mut progress = TransferProgress::new(filename, content.len() as u64);
                     progress.transferred_bytes = content.len() as u64;
                     progress.status = crate::sftp::TransferStatus::Completed;
                     Ok::<TransferProgress, String>(progress)
                 }) {
                     std::result::Result::Ok(progress) => IpcMessage::SftpTransfer { progress },
+                    Err(message) => IpcMessage::Error { message },
+                }
+            }
+            IpcMessage::SftpUploadDirectory {
+                session_id,
+                local_path,
+                remote_path,
+                mode,
+                delete_extra,
+                respect_gitignore,
+                excluded_paths,
+            } => {
+                let context = match Self::get_sftp_context(&sftp_contexts, &session_id) {
+                    Ok(context) => context,
+                    Err(message) => return IpcMessage::Error { message },
+                };
+                let resolved =
+                    resolve_remote_path(&remote_path, &context.home_dir, &context.current_path);
+                let options = effective_directory_transfer_options(
+                    Some(excluded_paths),
+                    respect_gitignore,
+                    delete_extra,
+                );
+
+                match rt.block_on(async {
+                    let session = session_manager
+                        .get(&session_id)
+                        .await
+                        .ok_or_else(|| format!("Session not found: {}", session_id))?;
+                    let sftp = session
+                        .open_sftp_session()
+                        .await
+                        .map_err(|e| format!("Failed to open SFTP subsystem: {}", e))?;
+                    transfer_directory_to_sftp(
+                        &sftp,
+                        &PathBuf::from(local_path),
+                        &resolved,
+                        mode,
+                        &options,
+                    )
+                    .await
+                }) {
+                    std::result::Result::Ok(summary) => {
+                        IpcMessage::SftpDirectoryTransfer { summary }
+                    }
                     Err(message) => IpcMessage::Error { message },
                 }
             }
@@ -1340,7 +1452,7 @@ impl IpcClient {
         }
 
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!(Self::connect_error_message())))
-            .with_context(|| Self::connect_error_message())
+            .with_context(Self::connect_error_message)
     }
 
     #[cfg_attr(windows, allow(dead_code))]
@@ -1351,12 +1463,7 @@ impl IpcClient {
     ) -> IpcEndpointStatus {
         match bind_outcome {
             Ok(()) => IpcEndpointStatus::NotRunning,
-            Err(bind_kind)
-                if matches!(
-                    bind_kind,
-                    io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
-                ) =>
-            {
+            Err(io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied) => {
                 IpcEndpointStatus::Occupied
             }
             Err(_) => {
@@ -1622,9 +1729,32 @@ mod tests {
         let msg = IpcMessage::SftpListDir {
             session_id: "abc".to_string(),
             path: ".".to_string(),
+            preserve_cwd: true,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("SftpListDir"));
+        assert!(json.contains("preserve_cwd"));
+
+        let msg = IpcMessage::SftpWriteFile {
+            session_id: "abc".to_string(),
+            path: "notes.txt".to_string(),
+            content: "hello".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("SftpWriteFile"));
+
+        let msg = IpcMessage::SftpUploadDirectory {
+            session_id: "abc".to_string(),
+            local_path: "dist".to_string(),
+            remote_path: "/var/www".to_string(),
+            mode: DirectoryTransferMode::Sync,
+            delete_extra: true,
+            respect_gitignore: None,
+            excluded_paths: vec!["node_modules/".to_string()],
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("SftpUploadDirectory"));
+        assert!(json.contains("delete_extra"));
     }
 
     #[test]
@@ -1651,6 +1781,21 @@ mod tests {
             assert_eq!(session_id, "s1");
         } else {
             panic!("Expected SftpPwd message");
+        }
+
+        let json = r#"{"type":"SftpListDir","payload":{"session_id":"s1","path":"."}}"#;
+        let msg: IpcMessage = serde_json::from_str(json).unwrap();
+        if let IpcMessage::SftpListDir {
+            session_id,
+            path,
+            preserve_cwd,
+        } = msg
+        {
+            assert_eq!(session_id, "s1");
+            assert_eq!(path, ".");
+            assert!(!preserve_cwd);
+        } else {
+            panic!("Expected SftpListDir message");
         }
 
         let json = r#"{"type":"ExecCommand","payload":{"session_id":"s1","command":"hostname"}}"#;

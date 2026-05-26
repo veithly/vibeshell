@@ -1,8 +1,8 @@
 use anyhow::Result;
-use log::{info, warn, debug};
+use log::{debug, info, warn};
 use russh::*;
+use std::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicU32};
 use tokio::sync::watch;
 
 use crate::ssh::ClientHandler;
@@ -50,7 +50,8 @@ pub async fn run_remote_forward(
     // tcpip_forward returns the actual port (useful when remote_port is 0)
     let actual_port = {
         let mut handle_guard = ssh_handle.lock().await;
-        let handle = handle_guard.as_mut()
+        let handle = handle_guard
+            .as_mut()
             .ok_or_else(|| anyhow::anyhow!("SSH session not available"))?;
         handle
             .tcpip_forward(&remote_host, remote_port as u32)

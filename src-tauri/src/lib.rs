@@ -6,6 +6,7 @@ pub mod ipc;
 pub mod local_shell;
 pub mod logging;
 pub mod mcp;
+pub mod remote_tools;
 pub mod session;
 pub mod sftp;
 pub mod ssh;
@@ -58,6 +59,7 @@ use commands::{
     local_shell_resize,
     local_shell_send_bytes,
     local_shell_send_input,
+    pick_directory_for_upload,
     pick_download_directory,
     pick_file_for_upload,
     // Dialog commands
@@ -79,6 +81,7 @@ use commands::{
     sftp_delete,
     sftp_download_file,
     sftp_extract,
+    sftp_get_upload_ignore_config,
     // SFTP commands
     sftp_init,
     sftp_list_dir,
@@ -86,7 +89,9 @@ use commands::{
     sftp_pwd,
     sftp_read_file,
     sftp_rename,
+    sftp_save_upload_ignore_config,
     sftp_stat,
+    sftp_upload_directory,
     sftp_upload_file,
     sftp_write_file,
     snippet_add,
@@ -365,6 +370,7 @@ pub fn run() {
             // Dialog commands
             pick_ssh_key_file,
             pick_file_for_upload,
+            pick_directory_for_upload,
             pick_download_directory,
             read_ssh_key_file,
             // SFTP commands
@@ -372,6 +378,7 @@ pub fn run() {
             sftp_list_dir,
             sftp_download_file,
             sftp_upload_file,
+            sftp_upload_directory,
             sftp_mkdir,
             sftp_delete,
             sftp_rename,
@@ -381,6 +388,8 @@ pub fn run() {
             sftp_write_file,
             sftp_compress,
             sftp_extract,
+            sftp_get_upload_ignore_config,
+            sftp_save_upload_ignore_config,
             // Fingerprint commands
             get_fingerprint,
             save_fingerprint,

@@ -1,16 +1,16 @@
 //! Local shell session management using portable-pty.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::Utc;
-use portable_pty::{CommandBuilder, PtySize, native_pty_system, Child, MasterPty};
+use log::{debug, error, info};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::thread;
 use tokio::sync::{broadcast, RwLock};
 use uuid::Uuid;
-use log::{debug, error, info};
 
 use super::ShellInfo;
 
@@ -65,12 +65,11 @@ pub struct LocalShellSession {
 
 impl LocalShellSession {
     /// Create a new local shell session
-    pub fn new(
-        shell_info: &ShellInfo,
-        cols: u16,
-        rows: u16,
-    ) -> Result<Self> {
-        info!("[LocalShell] Creating session for shell: {} ({})", shell_info.name, shell_info.path);
+    pub fn new(shell_info: &ShellInfo, cols: u16, rows: u16) -> Result<Self> {
+        info!(
+            "[LocalShell] Creating session for shell: {} ({})",
+            shell_info.name, shell_info.path
+        );
 
         // Create the PTY system
         let pty_system = native_pty_system();
@@ -145,13 +144,19 @@ impl LocalShellSession {
         let state = self.state.clone();
 
         thread::spawn(move || {
-            debug!("[LocalShell] Output reader thread started for session {}", session_id);
+            debug!(
+                "[LocalShell] Output reader thread started for session {}",
+                session_id
+            );
 
             let mut buf = [0u8; 4096];
             loop {
                 // Check for shutdown
                 if shutdown.load(Ordering::Relaxed) {
-                    debug!("[LocalShell] Shutdown signal received for session {}", session_id);
+                    debug!(
+                        "[LocalShell] Shutdown signal received for session {}",
+                        session_id
+                    );
                     break;
                 }
 
@@ -167,9 +172,15 @@ impl LocalShellSession {
                     }
                     Err(e) => {
                         if shutdown.load(Ordering::Relaxed) {
-                            debug!("[LocalShell] Session {} stopped, exiting reader", session_id);
+                            debug!(
+                                "[LocalShell] Session {} stopped, exiting reader",
+                                session_id
+                            );
                         } else {
-                            error!("[LocalShell] PTY read error for session {}: {}", session_id, e);
+                            error!(
+                                "[LocalShell] PTY read error for session {}: {}",
+                                session_id, e
+                            );
                         }
                         break;
                     }
@@ -188,7 +199,10 @@ impl LocalShellSession {
                 });
             }
 
-            info!("[LocalShell] Output reader thread ended for session {}", session_id_clone);
+            info!(
+                "[LocalShell] Output reader thread ended for session {}",
+                session_id_clone
+            );
         });
     }
 
@@ -227,7 +241,9 @@ impl LocalShellSession {
 
     /// Send input to the shell
     pub fn write_input(&self, data: &[u8]) -> Result<()> {
-        let mut writer_guard = self.writer.lock()
+        let mut writer_guard = self
+            .writer
+            .lock()
             .map_err(|e| anyhow!("Failed to lock writer: {}", e))?;
 
         if let Some(ref mut writer) = *writer_guard {
@@ -241,7 +257,9 @@ impl LocalShellSession {
 
     /// Resize the PTY
     pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
-        let master_guard = self.master.lock()
+        let master_guard = self
+            .master
+            .lock()
             .map_err(|e| anyhow!("Failed to lock master: {}", e))?;
 
         if let Some(ref master) = *master_guard {
@@ -251,7 +269,10 @@ impl LocalShellSession {
                 pixel_width: 0,
                 pixel_height: 0,
             })?;
-            debug!("[LocalShell] Resized session {} to {}x{}", self.id, cols, rows);
+            debug!(
+                "[LocalShell] Resized session {} to {}x{}",
+                self.id, cols, rows
+            );
         }
         Ok(())
     }
@@ -286,14 +307,18 @@ impl LocalShellSession {
 
         // Clear writer
         {
-            let mut writer_guard = self.writer.lock()
+            let mut writer_guard = self
+                .writer
+                .lock()
                 .map_err(|e| anyhow!("Failed to lock writer: {}", e))?;
             *writer_guard = None;
         }
 
         // Kill the child process
         {
-            let mut child_guard = self.child.lock()
+            let mut child_guard = self
+                .child
+                .lock()
                 .map_err(|e| anyhow!("Failed to lock child: {}", e))?;
             if let Some(ref mut child) = *child_guard {
                 child.kill()?;
@@ -304,7 +329,9 @@ impl LocalShellSession {
 
         // Clear the master
         {
-            let mut master_guard = self.master.lock()
+            let mut master_guard = self
+                .master
+                .lock()
                 .map_err(|e| anyhow!("Failed to lock master: {}", e))?;
             *master_guard = None;
         }

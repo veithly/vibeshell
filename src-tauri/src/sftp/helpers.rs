@@ -26,6 +26,44 @@ pub fn resolve_remote_path(path: &str, home_dir: &str, current_path: &str) -> St
     }
 }
 
+pub fn join_remote_child(parent: &str, child_name: &str) -> String {
+    let parent = parent.trim_end_matches('/');
+    let child_name = child_name.trim_start_matches('/');
+
+    if parent.is_empty() {
+        format!("/{}", child_name)
+    } else {
+        format!("{}/{}", parent, child_name)
+    }
+}
+
+/// Resolve the final remote file path for an upload.
+///
+/// Upload callers often pass a directory as the destination, especially from
+/// CLI-style `put local /remote/dir` usage. In that case SFTP writes must target
+/// `dir/<local filename>` rather than attempting to write bytes over the
+/// directory path itself.
+pub async fn resolve_remote_upload_path(
+    sftp: &SftpSession,
+    resolved_remote_path: &str,
+    local_filename: &str,
+) -> String {
+    if local_filename.is_empty() {
+        return resolved_remote_path.to_string();
+    }
+
+    if resolved_remote_path.ends_with('/') {
+        return join_remote_child(resolved_remote_path, local_filename);
+    }
+
+    match sftp.metadata(resolved_remote_path).await {
+        Ok(metadata) if metadata.is_dir() => {
+            join_remote_child(resolved_remote_path, local_filename)
+        }
+        _ => resolved_remote_path.to_string(),
+    }
+}
+
 /// Recursively delete a directory via SFTP with depth limit to prevent symlink loops
 pub async fn sftp_remove_recursive(
     sftp: &SftpSession,
@@ -136,6 +174,23 @@ mod tests {
         assert_eq!(
             resolve_remote_path("relative", "/home/user", ""),
             "/home/user/relative"
+        );
+    }
+
+    #[test]
+    fn test_join_remote_child() {
+        assert_eq!(
+            join_remote_child("/home/user/uploads", "file.txt"),
+            "/home/user/uploads/file.txt"
+        );
+        assert_eq!(
+            join_remote_child("/home/user/uploads/", "file.txt"),
+            "/home/user/uploads/file.txt"
+        );
+        assert_eq!(join_remote_child("/", "file.txt"), "/file.txt");
+        assert_eq!(
+            join_remote_child("/home/user/uploads", "/file.txt"),
+            "/home/user/uploads/file.txt"
         );
     }
 }

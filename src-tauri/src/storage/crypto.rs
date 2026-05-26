@@ -1,5 +1,5 @@
-use anyhow::{Result, anyhow};
-use argon2::{Argon2, password_hash::SaltString};
+use anyhow::{anyhow, Result};
+use argon2::{password_hash::SaltString, Argon2};
 use rand::rngs::OsRng;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
 use ring::rand::{SecureRandom, SystemRandom};
@@ -17,11 +17,9 @@ impl Crypto {
         let argon2 = Argon2::default();
         let mut key_bytes = [0u8; KEY_LEN];
 
-        argon2.hash_password_into(
-            password.as_bytes(),
-            salt,
-            &mut key_bytes,
-        ).map_err(|e| anyhow!("Key derivation failed: {}", e))?;
+        argon2
+            .hash_password_into(password.as_bytes(), salt, &mut key_bytes)
+            .map_err(|e| anyhow!("Key derivation failed: {}", e))?;
 
         let unbound_key = UnboundKey::new(&AES_256_GCM, &key_bytes)
             .map_err(|_| anyhow!("Failed to create encryption key"))?;
@@ -47,7 +45,8 @@ impl Crypto {
         let nonce = Nonce::assume_unique_for_key(nonce_bytes);
         let mut ciphertext = plaintext.to_vec();
 
-        self.key.seal_in_place_append_tag(nonce, Aad::empty(), &mut ciphertext)
+        self.key
+            .seal_in_place_append_tag(nonce, Aad::empty(), &mut ciphertext)
             .map_err(|_| anyhow!("Encryption failed"))?;
 
         // Prepend nonce to ciphertext
@@ -66,7 +65,8 @@ impl Crypto {
         let nonce = Nonce::assume_unique_for_key(nonce_bytes.try_into().unwrap());
 
         let mut plaintext = encrypted.to_vec();
-        self.key.open_in_place(nonce, Aad::empty(), &mut plaintext)
+        self.key
+            .open_in_place(nonce, Aad::empty(), &mut plaintext)
             .map_err(|_| anyhow!("Decryption failed - wrong password?"))?;
 
         // Remove auth tag

@@ -1,12 +1,14 @@
 //! Local shell session manager.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use log::{info, warn, error};
 
-use super::{LocalShellSession, LocalShellInfo, ShellInfo, detect_available_shells, get_default_shell};
+use super::{
+    detect_available_shells, get_default_shell, LocalShellInfo, LocalShellSession, ShellInfo,
+};
 
 /// Manages local shell sessions
 pub struct LocalShellManager {
@@ -54,22 +56,26 @@ impl LocalShellManager {
         cols: u16,
         rows: u16,
     ) -> Result<Arc<LocalShellSession>> {
-        info!("[LocalShellManager] Creating session for shell: {}", shell_id);
+        info!(
+            "[LocalShellManager] Creating session for shell: {}",
+            shell_id
+        );
 
         // Find the shell info
         let shells = detect_available_shells();
-        let shell_info = shells.iter()
-            .find(|s| s.id == shell_id)
-            .ok_or_else(|| {
-                error!("[LocalShellManager] Shell not found: {}", shell_id);
-                anyhow!("Shell not found: {}", shell_id)
-            })?;
+        let shell_info = shells.iter().find(|s| s.id == shell_id).ok_or_else(|| {
+            error!("[LocalShellManager] Shell not found: {}", shell_id);
+            anyhow!("Shell not found: {}", shell_id)
+        })?;
 
         // Create the session
         let session = LocalShellSession::new(shell_info, cols, rows)?;
         let session = Arc::new(session);
 
-        info!("[LocalShellManager] Session created with ID: {}", session.id);
+        info!(
+            "[LocalShellManager] Session created with ID: {}",
+            session.id
+        );
 
         // Store the session
         let mut sessions = self.sessions.write().await;
@@ -84,8 +90,7 @@ impl LocalShellManager {
         cols: u16,
         rows: u16,
     ) -> Result<Arc<LocalShellSession>> {
-        let default_shell = get_default_shell()
-            .ok_or_else(|| anyhow!("No default shell found"))?;
+        let default_shell = get_default_shell().ok_or_else(|| anyhow!("No default shell found"))?;
 
         self.create_session(&default_shell.id, cols, rows).await
     }

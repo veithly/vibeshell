@@ -27,6 +27,7 @@ pub struct FileInfo {
 
 /// Progress information for a file transfer operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TransferProgress {
     /// Unique identifier for this transfer.
     pub id: String,

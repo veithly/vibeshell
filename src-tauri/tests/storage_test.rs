@@ -1,6 +1,5 @@
 /// Integration tests for the storage layer (database CRUD operations)
 /// Run with: cargo test --test storage_test
-
 use rusqlite::Connection;
 
 /// Helper to create an in-memory database with the same schema as production.
@@ -68,7 +67,7 @@ fn setup_test_db() -> Connection {
             ended_at INTEGER,
             file_size INTEGER NOT NULL DEFAULT 0
         );
-        "
+        ",
     )
     .unwrap();
 
@@ -84,7 +83,16 @@ fn test_create_and_read_server() {
     conn.execute(
         "INSERT INTO servers (id, name, host, port, username, auth_type, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        rusqlite::params![id, "test-server", "192.168.1.100", 22, "root", "password", now, now],
+        rusqlite::params![
+            id,
+            "test-server",
+            "192.168.1.100",
+            22,
+            "root",
+            "password",
+            now,
+            now
+        ],
     )
     .unwrap();
 
@@ -108,7 +116,16 @@ fn test_create_tunnel_config() {
     conn.execute(
         "INSERT INTO servers (id, name, host, port, username, auth_type, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        rusqlite::params![server_id, "tunnel-server", "10.0.0.1", 22, "admin", "password", now, now],
+        rusqlite::params![
+            server_id,
+            "tunnel-server",
+            "10.0.0.1",
+            22,
+            "admin",
+            "password",
+            now,
+            now
+        ],
     )
     .unwrap();
 
@@ -121,9 +138,11 @@ fn test_create_tunnel_config() {
     .unwrap();
 
     let name: String = conn
-        .query_row("SELECT name FROM tunnel_configs WHERE id = ?1", [&tunnel_id], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT name FROM tunnel_configs WHERE id = ?1",
+            [&tunnel_id],
+            |row| row.get(0),
+        )
         .unwrap();
 
     assert_eq!(name, "DB Tunnel");
@@ -168,9 +187,11 @@ fn test_create_recording() {
     .unwrap();
 
     let path: String = conn
-        .query_row("SELECT file_path FROM recordings WHERE id = ?1", [&id], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT file_path FROM recordings WHERE id = ?1",
+            [&id],
+            |row| row.get(0),
+        )
         .unwrap();
 
     assert_eq!(path, "/tmp/recording.cast");
@@ -222,7 +243,16 @@ fn test_server_with_jump_host() {
     conn.execute(
         "INSERT INTO servers (id, name, host, port, username, auth_type, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        rusqlite::params![bastion_id, "bastion", "bastion.example.com", 22, "admin", "key", now, now],
+        rusqlite::params![
+            bastion_id,
+            "bastion",
+            "bastion.example.com",
+            22,
+            "admin",
+            "key",
+            now,
+            now
+        ],
     )
     .unwrap();
 
@@ -269,7 +299,14 @@ fn test_cascade_delete_tunnel_configs() {
         conn.execute(
             "INSERT INTO tunnel_configs (id, server_id, name, tunnel_type, listen_port, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![tunnel_id, server_id, format!("Tunnel {}", i), "local", 8080 + i, now],
+            rusqlite::params![
+                tunnel_id,
+                server_id,
+                format!("Tunnel {}", i),
+                "local",
+                8080 + i,
+                now
+            ],
         )
         .unwrap();
     }

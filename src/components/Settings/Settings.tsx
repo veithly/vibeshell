@@ -230,6 +230,30 @@ function TextInput({ value, onChange, placeholder }: TextInputProps) {
   );
 }
 
+interface TextAreaProps {
+  value: string;
+  onChange: (value: string) => void;
+  onBlur?: () => void;
+  placeholder?: string;
+}
+
+function TextArea({ value, onChange, onBlur, placeholder }: TextAreaProps) {
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={onBlur}
+      placeholder={placeholder}
+      rows={8}
+      className="w-80 px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
+                 text-tokyo-fg text-sm font-mono resize-y
+                 focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue
+                 hover:border-tokyo-comment transition-colors
+                 placeholder:text-tokyo-comment"
+    />
+  );
+}
+
 // ============================================================================
 // Theme Preview Component
 // ============================================================================
@@ -407,6 +431,7 @@ export function Settings() {
   const {
     aiTools,
     settings,
+    uploadIgnoreConfig,
     loading,
     loadingToolId,
     error,
@@ -419,16 +444,24 @@ export function Settings() {
     updateAppearanceSettings,
     updateSshDefaultSettings,
     updateServerStatusSettings,
+    updateUploadIgnoreConfig,
     resetSettings,
   } = useSettingsStore();
 
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [uploadExcludeText, setUploadExcludeText] = useState(
+    uploadIgnoreConfig.excludedPaths.join('\n')
+  );
 
   // Initialize settings and fetch AI tools on mount
   useEffect(() => {
     initializeSettings();
     fetchAiTools();
   }, [initializeSettings, fetchAiTools]);
+
+  useEffect(() => {
+    setUploadExcludeText(uploadIgnoreConfig.excludedPaths.join('\n'));
+  }, [uploadIgnoreConfig.excludedPaths]);
 
   const handleInstall = (toolId: string) => {
     installTo(toolId);
@@ -441,6 +474,15 @@ export function Settings() {
   const handleResetSettings = () => {
     resetSettings();
     setShowResetConfirm(false);
+  };
+
+  const handleSaveUploadIgnores = () => {
+    updateUploadIgnoreConfig({
+      excludedPaths: uploadExcludeText
+        .split(/\r?\n|,|;/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+    });
   };
 
   // Show loading state while settings are initializing
@@ -638,6 +680,47 @@ export function Settings() {
             onChange={(showNetworkRates) => updateServerStatusSettings({ showNetworkRates })}
           />
         </SettingRow>
+      </SettingsSection>
+
+      {/* ================================================================== */}
+      {/* File Transfer Section */}
+      {/* ================================================================== */}
+      <SettingsSection
+        icon={<FolderOpen className="w-5 h-5" />}
+        title={t('settings.fileTransfer')}
+        description={t('settings.fileTransferDesc')}
+      >
+        <SettingRow
+          label={t('settings.respectGitignore')}
+          description={t('settings.respectGitignoreDesc')}
+        >
+          <Toggle
+            checked={uploadIgnoreConfig.respectGitignore}
+            onChange={(respectGitignore) => updateUploadIgnoreConfig({ respectGitignore })}
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.uploadExcludePatterns')}
+          description={t('settings.uploadExcludePatternsDesc')}
+        >
+          <TextArea
+            value={uploadExcludeText}
+            onChange={setUploadExcludeText}
+            onBlur={handleSaveUploadIgnores}
+            placeholder="node_modules/"
+          />
+        </SettingRow>
+
+        <div className="flex justify-end">
+          <button
+            onClick={handleSaveUploadIgnores}
+            className="px-4 py-2 text-sm rounded-lg bg-tokyo-blue text-white
+                       hover:bg-tokyo-blue/80 transition-colors"
+          >
+            {t('common.save')}
+          </button>
+        </div>
       </SettingsSection>
 
       {/* ================================================================== */}

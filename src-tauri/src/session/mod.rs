@@ -3,4 +3,4 @@ pub mod manager;
 pub mod session;
 
 pub use manager::{SessionManager, SshCredential};
-pub use session::{Session, SessionState, SessionInfo};
+pub use session::{Session, SessionInfo, SessionState};

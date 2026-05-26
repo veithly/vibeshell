@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use uuid::Uuid;
 
-use crate::storage::models::{AuthType, Server, TunnelConfig, TunnelType, CommandSnippet, Recording};
+use crate::storage::models::{
+    AuthType, CommandSnippet, Recording, Server, TunnelConfig, TunnelType,
+};
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -340,16 +342,17 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT id, name, parent_id, color FROM groups")?;
 
-        let groups = stmt.query_map([], |row| {
-            Ok(Group {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                parent_id: row.get(2)?,
-                color: row.get(3)?,
-            })
-        })?
-        .filter_map(|g| g.ok())
-        .collect();
+        let groups = stmt
+            .query_map([], |row| {
+                Ok(Group {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    parent_id: row.get(2)?,
+                    color: row.get(3)?,
+                })
+            })?
+            .filter_map(|g| g.ok())
+            .collect();
 
         Ok(groups)
     }
@@ -493,7 +496,10 @@ impl Database {
     /// Delete credentials for a server
     pub fn credential_delete(&self, server_name: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM server_credentials WHERE server_name = ?1", [server_name])?;
+        conn.execute(
+            "DELETE FROM server_credentials WHERE server_name = ?1",
+            [server_name],
+        )?;
         Ok(())
     }
 }
@@ -527,24 +533,25 @@ impl Database {
             "SELECT id, server_id, tunnel_type, local_host, local_port, remote_host, remote_port, auto_start, enabled FROM tunnel_configs WHERE server_id = ?1"
         )?;
 
-        let configs = stmt.query_map([server_id], |row| {
-            let tt_str: String = row.get(2)?;
-            let auto_start_int: i32 = row.get(7)?;
-            let enabled_int: i32 = row.get(8)?;
-            Ok(TunnelConfig {
-                id: row.get(0)?,
-                server_id: row.get(1)?,
-                tunnel_type: string_to_tunnel_type(&tt_str),
-                local_host: row.get(3)?,
-                local_port: row.get(4)?,
-                remote_host: row.get(5)?,
-                remote_port: row.get(6)?,
-                auto_start: auto_start_int != 0,
-                enabled: enabled_int != 0,
-            })
-        })?
-        .filter_map(|c| c.ok())
-        .collect();
+        let configs = stmt
+            .query_map([server_id], |row| {
+                let tt_str: String = row.get(2)?;
+                let auto_start_int: i32 = row.get(7)?;
+                let enabled_int: i32 = row.get(8)?;
+                Ok(TunnelConfig {
+                    id: row.get(0)?,
+                    server_id: row.get(1)?,
+                    tunnel_type: string_to_tunnel_type(&tt_str),
+                    local_host: row.get(3)?,
+                    local_port: row.get(4)?,
+                    remote_host: row.get(5)?,
+                    remote_port: row.get(6)?,
+                    auto_start: auto_start_int != 0,
+                    enabled: enabled_int != 0,
+                })
+            })?
+            .filter_map(|c| c.ok())
+            .collect();
 
         Ok(configs)
     }
@@ -606,7 +613,10 @@ impl Database {
     /// Delete all tunnel configs for a server
     pub fn tunnel_config_delete_for_server(&self, server_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM tunnel_configs WHERE server_id = ?1", [server_id])?;
+        conn.execute(
+            "DELETE FROM tunnel_configs WHERE server_id = ?1",
+            [server_id],
+        )?;
         Ok(())
     }
 }
@@ -620,7 +630,9 @@ impl Database {
     pub fn snippet_list(&self, category: Option<&str>) -> Result<Vec<CommandSnippet>> {
         let conn = self.conn.lock().unwrap();
 
-        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(cat) = category {
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(cat) =
+            category
+        {
             (
                 "SELECT id, name, command, category, description, tags, created_at, updated_at FROM command_snippets WHERE category = ?1 ORDER BY updated_at DESC".to_string(),
                 vec![Box::new(cat.to_string())],
@@ -633,22 +645,23 @@ impl Database {
         };
 
         let mut stmt = conn.prepare(&sql)?;
-        let snippets = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
-            let tags_json: String = row.get(5)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-            Ok(CommandSnippet {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                command: row.get(2)?,
-                category: row.get(3)?,
-                description: row.get(4)?,
-                tags,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
-        })?
-        .filter_map(|s| s.ok())
-        .collect();
+        let snippets = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                let tags_json: String = row.get(5)?;
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+                Ok(CommandSnippet {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    command: row.get(2)?,
+                    category: row.get(3)?,
+                    description: row.get(4)?,
+                    tags,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })?
+            .filter_map(|s| s.ok())
+            .collect();
 
         Ok(snippets)
     }
@@ -724,22 +737,23 @@ impl Database {
                ORDER BY updated_at DESC"#,
         )?;
 
-        let snippets = stmt.query_map([&pattern], |row| {
-            let tags_json: String = row.get(5)?;
-            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
-            Ok(CommandSnippet {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                command: row.get(2)?,
-                category: row.get(3)?,
-                description: row.get(4)?,
-                tags,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
-        })?
-        .filter_map(|s| s.ok())
-        .collect();
+        let snippets = stmt
+            .query_map([&pattern], |row| {
+                let tags_json: String = row.get(5)?;
+                let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+                Ok(CommandSnippet {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    command: row.get(2)?,
+                    category: row.get(3)?,
+                    description: row.get(4)?,
+                    tags,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                })
+            })?
+            .filter_map(|s| s.ok())
+            .collect();
 
         Ok(snippets)
     }
@@ -753,7 +767,9 @@ impl Database {
     /// List recordings, optionally filtered by server_id
     pub fn recording_list(&self, server_id: Option<&str>) -> Result<Vec<Recording>> {
         let conn = self.conn.lock().unwrap();
-        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(sid) = server_id {
+        let (sql, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(sid) =
+            server_id
+        {
             (
                 "SELECT id, session_id, server_id, started_at, ended_at, file_path, sync_status FROM recordings WHERE server_id = ?1 ORDER BY started_at DESC",
                 vec![Box::new(sid.to_string())],
@@ -766,25 +782,26 @@ impl Database {
         };
 
         let mut stmt = conn.prepare(sql)?;
-        let recordings = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
-            let sync_str: String = row.get(6)?;
-            let sync_status = match sync_str.as_str() {
-                "syncing" => crate::storage::models::SyncStatus::Syncing,
-                "synced" => crate::storage::models::SyncStatus::Synced,
-                _ => crate::storage::models::SyncStatus::Local,
-            };
-            Ok(Recording {
-                id: row.get(0)?,
-                session_id: row.get(1)?,
-                server_id: row.get(2)?,
-                started_at: row.get(3)?,
-                ended_at: row.get(4)?,
-                file_path: row.get(5)?,
-                sync_status,
-            })
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+        let recordings = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                let sync_str: String = row.get(6)?;
+                let sync_status = match sync_str.as_str() {
+                    "syncing" => crate::storage::models::SyncStatus::Syncing,
+                    "synced" => crate::storage::models::SyncStatus::Synced,
+                    _ => crate::storage::models::SyncStatus::Local,
+                };
+                Ok(Recording {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    server_id: row.get(2)?,
+                    started_at: row.get(3)?,
+                    ended_at: row.get(4)?,
+                    file_path: row.get(5)?,
+                    sync_status,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
 
         Ok(recordings)
     }
@@ -933,14 +950,10 @@ mod tests {
         assert_eq!(all.len(), 1);
 
         // List with tag filter
-        let by_tag = db
-            .server_list(None, Some(&["prod".to_string()]))
-            .unwrap();
+        let by_tag = db.server_list(None, Some(&["prod".to_string()])).unwrap();
         assert_eq!(by_tag.len(), 1);
 
-        let by_wrong_tag = db
-            .server_list(None, Some(&["dev".to_string()]))
-            .unwrap();
+        let by_wrong_tag = db.server_list(None, Some(&["dev".to_string()])).unwrap();
         assert_eq!(by_wrong_tag.len(), 0);
 
         // Update
@@ -951,7 +964,10 @@ mod tests {
 
         let fetched2 = db.server_get(&server.id).unwrap().unwrap();
         assert_eq!(fetched2.host, "192.168.1.2");
-        assert_eq!(fetched2.tags, vec!["prod".to_string(), "updated".to_string()]);
+        assert_eq!(
+            fetched2.tags,
+            vec!["prod".to_string(), "updated".to_string()]
+        );
 
         // Delete
         db.server_delete(&server.id).unwrap();
@@ -1034,7 +1050,10 @@ mod tests {
         );
 
         // Test string to auth type
-        assert!(matches!(string_to_auth_type("password"), AuthType::Password));
+        assert!(matches!(
+            string_to_auth_type("password"),
+            AuthType::Password
+        ));
         assert!(matches!(string_to_auth_type("key"), AuthType::Key));
         assert!(matches!(
             string_to_auth_type("key_with_passphrase"),

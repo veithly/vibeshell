@@ -94,6 +94,16 @@ export interface ServerStatusSettings {
 }
 
 /**
+ * Global ignore rules for recursive SFTP uploads and syncs.
+ */
+export interface UploadIgnoreConfig {
+  /** Exclude patterns, one per line in the settings UI */
+  excludedPaths: string[];
+  /** Whether .gitignore files under the upload root should be honored */
+  respectGitignore: boolean;
+}
+
+/**
  * All application settings combined.
  */
 export interface AppSettings {
@@ -131,6 +141,29 @@ export const defaultSettings: AppSettings = {
   },
 };
 
+export const defaultUploadIgnoreConfig: UploadIgnoreConfig = {
+  excludedPaths: [
+    'node_modules/',
+    '.git/',
+    '.svn/',
+    '.hg/',
+    'target/',
+    '.next/',
+    '.nuxt/',
+    '.turbo/',
+    '.cache/',
+    'coverage/',
+    '__pycache__/',
+    '.pytest_cache/',
+    '.mypy_cache/',
+    '.ruff_cache/',
+    '.venv/',
+    'venv/',
+    'env/',
+  ],
+  respectGitignore: true,
+};
+
 // ============================================================================
 // Store Interface
 // ============================================================================
@@ -146,6 +179,8 @@ interface SettingsStore {
   // App Settings state
   /** Current application settings */
   settings: AppSettings;
+  /** Global recursive upload ignore config */
+  uploadIgnoreConfig: UploadIgnoreConfig;
 
   // Loading/Error state
   /** Loading state for async operations */
@@ -176,6 +211,8 @@ interface SettingsStore {
   updateSshDefaultSettings: (settings: Partial<SshDefaultSettings>) => Promise<void>;
   /** Update server status settings */
   updateServerStatusSettings: (settings: Partial<ServerStatusSettings>) => Promise<void>;
+  /** Update global recursive upload ignore config */
+  updateUploadIgnoreConfig: (config: Partial<UploadIgnoreConfig>) => Promise<void>;
   /** Reset all settings to defaults */
   resetSettings: () => Promise<void>;
 }
@@ -254,6 +291,30 @@ async function saveSettings(settings: AppSettings): Promise<void> {
   }
 }
 
+async function loadUploadIgnoreConfig(): Promise<UploadIgnoreConfig> {
+  try {
+    const config = await invoke<UploadIgnoreConfig | null>('sftp_get_upload_ignore_config');
+    if (config) {
+      return {
+        excludedPaths: config.excludedPaths ?? defaultUploadIgnoreConfig.excludedPaths,
+        respectGitignore: config.respectGitignore ?? defaultUploadIgnoreConfig.respectGitignore,
+      };
+    }
+  } catch (error) {
+    console.warn('Failed to load upload ignore config:', error);
+  }
+  return { ...defaultUploadIgnoreConfig };
+}
+
+async function saveUploadIgnoreConfig(config: UploadIgnoreConfig): Promise<UploadIgnoreConfig> {
+  try {
+    return await invoke<UploadIgnoreConfig>('sftp_save_upload_ignore_config', { config });
+  } catch (error) {
+    console.warn('Failed to save upload ignore config:', error);
+    throw error;
+  }
+}
+
 // ============================================================================
 // Store Implementation
 // ============================================================================
@@ -265,6 +326,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   // Initial state
   aiTools: [],
   settings: { ...defaultSettings },
+  uploadIgnoreConfig: { ...defaultUploadIgnoreConfig },
   loading: false,
   loadingToolId: null,
   error: null,
@@ -327,8 +389,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     if (get().initialized) return;
 
     try {
-      const settings = await loadSettings();
-      set({ settings, initialized: true });
+      const [settings, uploadIgnoreConfig] = await Promise.all([
+        loadSettings(),
+        loadUploadIgnoreConfig(),
+      ]);
+      set({ settings, uploadIgnoreConfig, initialized: true });
     } catch (error) {
       console.error('Failed to initialize settings:', error);
       set({ initialized: true }); // Mark as initialized even on error to prevent infinite loops
@@ -391,9 +456,28 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     await saveSettings(newSettings);
   },
 
+  updateUploadIgnoreConfig: async (uploadIgnoreUpdates: Partial<UploadIgnoreConfig>) => {
+    const currentConfig = get().uploadIgnoreConfig;
+    const nextConfig: UploadIgnoreConfig = {
+      ...currentConfig,
+      ...uploadIgnoreUpdates,
+      excludedPaths:
+        uploadIgnoreUpdates.excludedPaths?.map((value) => value.trim()).filter(Boolean) ??
+        currentConfig.excludedPaths,
+    };
+
+    set({ uploadIgnoreConfig: nextConfig });
+    const savedConfig = await saveUploadIgnoreConfig(nextConfig);
+    set({ uploadIgnoreConfig: savedConfig });
+  },
+
   resetSettings: async () => {
-    set({ settings: { ...defaultSettings } });
+    set({
+      settings: { ...defaultSettings },
+      uploadIgnoreConfig: { ...defaultUploadIgnoreConfig },
+    });
     await saveSettings(defaultSettings);
+    await saveUploadIgnoreConfig(defaultUploadIgnoreConfig);
   },
 }));
 

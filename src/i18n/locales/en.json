@@ -153,6 +153,13 @@
     "showNetworkRates": "Show Network Rates",
     "showNetworkRatesDesc": "Display network transfer rates instead of total bytes",
 
+    "fileTransfer": "File Transfer",
+    "fileTransferDesc": "Configure recursive SFTP upload and sync behavior.",
+    "respectGitignore": "Respect .gitignore",
+    "respectGitignoreDesc": "Apply .gitignore rules from the uploaded directory and its subdirectories.",
+    "uploadExcludePatterns": "Upload Exclude Patterns",
+    "uploadExcludePatternsDesc": "One pattern per line. Used by VibeShell and vshell directory upload/sync.",
+
     "security": "Security",
     "securityDesc": "Manage SSH host key verification and security settings.",
     "hostKeyFingerprints": "SSH Host Key Fingerprints",

@@ -69,8 +69,6 @@ pub fn get_default_shell() -> Option<ShellInfo> {
 
 #[cfg(target_os = "windows")]
 fn detect_windows_shells() -> Vec<ShellInfo> {
-    
-
     let mut shells = Vec::new();
 
     // PowerShell 7+ (pwsh)
@@ -295,7 +293,10 @@ mod tests {
         assert!(!shells.is_empty(), "Should detect at least one shell");
 
         // Should have at least one default
-        assert!(shells.iter().any(|s| s.is_default), "Should have a default shell");
+        assert!(
+            shells.iter().any(|s| s.is_default),
+            "Should have a default shell"
+        );
     }
 
     #[test]

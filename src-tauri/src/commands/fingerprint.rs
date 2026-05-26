@@ -4,10 +4,10 @@
 //! for verifying SSH server host keys and managing trusted hosts.
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
 use std::sync::Arc;
+use tauri::State;
 
-use crate::ssh::{FingerprintStore, StoredFingerprint, FingerprintVerificationResult};
+use crate::ssh::{FingerprintStore, FingerprintVerificationResult, StoredFingerprint};
 
 /// Request to get a fingerprint by host and port
 #[derive(Debug, Serialize, Deserialize)]
@@ -57,7 +57,7 @@ pub struct VerifyFingerprintRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyFingerprintResponse {
-    pub status: String,  // "trusted", "unknown", or "changed"
+    pub status: String, // "trusted", "unknown", or "changed"
     pub fingerprint: Option<String>,
     pub algorithm: Option<String>,
     pub stored_fingerprint: Option<String>,
@@ -76,7 +76,10 @@ impl From<FingerprintVerificationResult> for VerifyFingerprintResponse {
                 stored_algorithm: None,
                 stored_at: None,
             },
-            FingerprintVerificationResult::Unknown { fingerprint, algorithm } => VerifyFingerprintResponse {
+            FingerprintVerificationResult::Unknown {
+                fingerprint,
+                algorithm,
+            } => VerifyFingerprintResponse {
                 status: "unknown".to_string(),
                 fingerprint: Some(fingerprint),
                 algorithm: Some(algorithm),
@@ -132,13 +135,16 @@ pub fn save_fingerprint(
     state: State<'_, FingerprintState>,
     request: SaveFingerprintRequest,
 ) -> Result<StoredFingerprint, String> {
-    state.store.save(
-        &request.host,
-        request.port,
-        &request.fingerprint,
-        &request.algorithm,
-        request.server_name.as_deref(),
-    ).map_err(|e| e.to_string())
+    state
+        .store
+        .save(
+            &request.host,
+            request.port,
+            &request.fingerprint,
+            &request.algorithm,
+            request.server_name.as_deref(),
+        )
+        .map_err(|e| e.to_string())
 }
 
 /// Delete a fingerprint by host and port
@@ -147,7 +153,9 @@ pub fn delete_fingerprint(
     state: State<'_, FingerprintState>,
     request: DeleteFingerprintRequest,
 ) -> Result<bool, String> {
-    state.store.delete(&request.host, request.port)
+    state
+        .store
+        .delete(&request.host, request.port)
         .map_err(|e| e.to_string())
 }
 
@@ -157,15 +165,15 @@ pub fn delete_fingerprint_by_id(
     state: State<'_, FingerprintState>,
     request: DeleteFingerprintByIdRequest,
 ) -> Result<bool, String> {
-    state.store.delete_by_id(&request.id)
+    state
+        .store
+        .delete_by_id(&request.id)
         .map_err(|e| e.to_string())
 }
 
 /// List all stored fingerprints
 #[tauri::command]
-pub fn list_fingerprints(
-    state: State<'_, FingerprintState>,
-) -> Vec<StoredFingerprint> {
+pub fn list_fingerprints(state: State<'_, FingerprintState>) -> Vec<StoredFingerprint> {
     state.store.list()
 }
 
@@ -190,15 +198,14 @@ pub fn touch_fingerprint(
     state: State<'_, FingerprintState>,
     request: GetFingerprintRequest,
 ) -> Result<(), String> {
-    state.store.touch(&request.host, request.port)
+    state
+        .store
+        .touch(&request.host, request.port)
         .map_err(|e| e.to_string())
 }
 
 /// Clear all stored fingerprints (for testing/reset purposes)
 #[tauri::command]
-pub fn clear_fingerprints(
-    state: State<'_, FingerprintState>,
-) -> Result<(), String> {
-    state.store.clear()
-        .map_err(|e| e.to_string())
+pub fn clear_fingerprints(state: State<'_, FingerprintState>) -> Result<(), String> {
+    state.store.clear().map_err(|e| e.to_string())
 }

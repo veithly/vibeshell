@@ -1,17 +1,17 @@
 use anyhow::Result;
-use log::{info, error};
+use log::{error, info};
 use russh::client;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tokio::sync::{RwLock, watch};
+use std::sync::Arc;
+use tokio::sync::{watch, RwLock};
 use uuid::Uuid;
 
 use crate::ssh::ClientHandler;
-use crate::storage::models::{TunnelConfig, TunnelType, TunnelInfo, TunnelStatus};
+use crate::storage::models::{TunnelConfig, TunnelInfo, TunnelStatus, TunnelType};
+use crate::tunnel::dynamic_forward::{self, DynamicForwardStats};
 use crate::tunnel::local_forward::{self, LocalForwardStats};
 use crate::tunnel::remote_forward::{self, RemoteForwardStats};
-use crate::tunnel::dynamic_forward::{self, DynamicForwardStats};
 
 /// Generic stats wrapper
 enum TunnelStatsInner {
@@ -98,7 +98,10 @@ impl TunnelManager {
                 let s2 = s.clone();
                 let lh = config.local_host.clone();
                 let lp = config.local_port;
-                let rh = config.remote_host.clone().unwrap_or_else(|| "localhost".to_string());
+                let rh = config
+                    .remote_host
+                    .clone()
+                    .unwrap_or_else(|| "localhost".to_string());
                 let rp = config.remote_port.unwrap_or(0);
                 let ssh = ssh_handle.clone();
 
@@ -107,9 +110,9 @@ impl TunnelManager {
                         let mut st = status_clone.write().await;
                         *st = TunnelStatus::Active;
                     }
-                    if let Err(e) = local_forward::run_local_forward(
-                        ssh, lh, lp, rh, rp, s2, shutdown_rx,
-                    ).await {
+                    if let Err(e) =
+                        local_forward::run_local_forward(ssh, lh, lp, rh, rp, s2, shutdown_rx).await
+                    {
                         error!("[TunnelManager] Local forward {} error: {}", tid, e);
                         let mut st = status_clone.write().await;
                         *st = TunnelStatus::Error;
@@ -126,7 +129,10 @@ impl TunnelManager {
                 let s2 = s.clone();
                 let lh = config.local_host.clone();
                 let lp = config.local_port;
-                let rh = config.remote_host.clone().unwrap_or_else(|| "0.0.0.0".to_string());
+                let rh = config
+                    .remote_host
+                    .clone()
+                    .unwrap_or_else(|| "0.0.0.0".to_string());
                 let rp = config.remote_port.unwrap_or(0);
                 let ssh = ssh_handle.clone();
 
@@ -135,9 +141,10 @@ impl TunnelManager {
                         let mut st = status_clone.write().await;
                         *st = TunnelStatus::Active;
                     }
-                    if let Err(e) = remote_forward::run_remote_forward(
-                        ssh, lh, lp, rh, rp, s2, shutdown_rx,
-                    ).await {
+                    if let Err(e) =
+                        remote_forward::run_remote_forward(ssh, lh, lp, rh, rp, s2, shutdown_rx)
+                            .await
+                    {
                         error!("[TunnelManager] Remote forward {} error: {}", tid, e);
                         let mut st = status_clone.write().await;
                         *st = TunnelStatus::Error;
@@ -161,9 +168,9 @@ impl TunnelManager {
                         let mut st = status_clone.write().await;
                         *st = TunnelStatus::Active;
                     }
-                    if let Err(e) = dynamic_forward::run_dynamic_forward(
-                        ssh, lh, lp, s2, shutdown_rx,
-                    ).await {
+                    if let Err(e) =
+                        dynamic_forward::run_dynamic_forward(ssh, lh, lp, s2, shutdown_rx).await
+                    {
                         error!("[TunnelManager] Dynamic forward {} error: {}", tid, e);
                         let mut st = status_clone.write().await;
                         *st = TunnelStatus::Error;
@@ -254,7 +261,8 @@ impl TunnelManager {
     /// Stop all tunnels for a specific session
     pub async fn stop_all_for_session(&self, session_id: &str) {
         let mut tunnels = self.tunnels.write().await;
-        let to_remove: Vec<String> = tunnels.iter()
+        let to_remove: Vec<String> = tunnels
+            .iter()
             .filter(|(_, h)| h.session_id == session_id)
             .map(|(k, _)| k.clone())
             .collect();

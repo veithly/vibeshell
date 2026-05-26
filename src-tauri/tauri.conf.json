@@ -45,6 +45,10 @@
       "nsis": {
         "installMode": "both",
         "installerHooks": "nsis-hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": ["wix-path-fragment.wxs"],
+        "componentGroupRefs": ["VshellPathEnvGroup"]
       }
     }
   }

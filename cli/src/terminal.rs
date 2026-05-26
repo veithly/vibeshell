@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 use vibeshell_core::ipc::IpcMessage;
 
@@ -189,6 +189,10 @@ fn run_interactive_loop<R: BufRead + Send + 'static>(session_id: &str, reader: R
 /// Convert a crossterm `KeyEvent` to the corresponding byte sequence
 /// that a terminal would send over a PTY.
 fn key_event_to_bytes(key: &KeyEvent) -> Vec<u8> {
+    if key.kind == KeyEventKind::Release {
+        return vec![];
+    }
+
     match key.code {
         KeyCode::Char(c) => {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -391,7 +395,9 @@ pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<Comma
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_input_prompt, looks_like_shell_prompt};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+    use super::{key_event_to_bytes, looks_like_input_prompt, looks_like_shell_prompt};
 
     #[test]
     fn detects_common_shell_prompts() {
@@ -405,5 +411,27 @@ mod tests {
         assert!(looks_like_input_prompt("Proceed? [y/N] "));
         assert!(looks_like_input_prompt("Press ENTER to continue"));
         assert!(looks_like_input_prompt("Enter password for deploy: "));
+    }
+
+    #[test]
+    fn release_events_do_not_generate_input_bytes() {
+        let key = KeyEvent::new_with_kind(
+            KeyCode::Char('c'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        );
+
+        assert!(
+            key_event_to_bytes(&key).is_empty(),
+            "release events should not be forwarded to the remote PTY"
+        );
+    }
+
+    #[test]
+    fn repeat_events_still_generate_input_bytes() {
+        let key =
+            KeyEvent::new_with_kind(KeyCode::Char('c'), KeyModifiers::NONE, KeyEventKind::Repeat);
+
+        assert_eq!(key_event_to_bytes(&key), b"c".to_vec());
     }
 }

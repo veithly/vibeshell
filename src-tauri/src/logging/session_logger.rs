@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use chrono::Utc;
 use directories::ProjectDirs;
-use log::{info, warn, error};
+use log::{error, info, warn};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -42,18 +42,17 @@ impl SessionLogger {
     }
 
     /// Start recording a session's terminal output
-    pub async fn start_recording(
-        &self,
-        session: Arc<Session>,
-        server_id: &str,
-    ) -> Result<String> {
+    pub async fn start_recording(&self, session: Arc<Session>, server_id: &str) -> Result<String> {
         let session_id = session.id.clone();
 
         // Check if already recording
         {
             let loggers = self.active_loggers.read().await;
             if loggers.values().any(|h| h.session_id == session_id) {
-                return Err(anyhow::anyhow!("Session {} is already being recorded", session_id));
+                return Err(anyhow::anyhow!(
+                    "Session {} is already being recorded",
+                    session_id
+                ));
             }
         }
 
@@ -137,13 +136,19 @@ impl SessionLogger {
 
         // Store the handle
         let mut loggers = self.active_loggers.write().await;
-        loggers.insert(recording_id.clone(), LoggerHandle {
-            recording_id: recording_id.clone(),
-            session_id,
-            abort_handle,
-        });
+        loggers.insert(
+            recording_id.clone(),
+            LoggerHandle {
+                recording_id: recording_id.clone(),
+                session_id,
+                abort_handle,
+            },
+        );
 
-        info!("[SessionLogger] Recording {} started for file {:?}", recording_id, file_path);
+        info!(
+            "[SessionLogger] Recording {} started for file {:?}",
+            recording_id, file_path
+        );
         Ok(recording_id)
     }
 
@@ -172,7 +177,8 @@ impl SessionLogger {
     /// Get the recording ID for a session
     pub async fn get_recording_id(&self, session_id: &str) -> Option<String> {
         let loggers = self.active_loggers.read().await;
-        loggers.values()
+        loggers
+            .values()
             .find(|h| h.session_id == session_id)
             .map(|h| h.recording_id.clone())
     }
@@ -194,7 +200,8 @@ impl SessionLogger {
         let mut loggers = self.active_loggers.write().await;
         let now = Utc::now().timestamp();
 
-        let to_remove: Vec<String> = loggers.iter()
+        let to_remove: Vec<String> = loggers
+            .iter()
             .filter(|(_, h)| h.session_id == session_id)
             .map(|(k, _)| k.clone())
             .collect();

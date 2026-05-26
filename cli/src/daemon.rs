@@ -160,7 +160,6 @@ pub fn start_background() -> Result<()> {
 }
 
 fn start_background_force() -> Result<()> {
-
     let current_exe = std::env::current_exe().context("Failed to resolve current executable")?;
     let log_path = daemon_log_path();
     let stdout = OpenOptions::new()

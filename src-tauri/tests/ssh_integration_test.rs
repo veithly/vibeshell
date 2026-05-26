@@ -21,11 +21,18 @@ async fn test_ssh_connection_with_key() -> Result<()> {
     use russh::*;
     use russh_keys::*;
 
-    println!("Testing SSH connection to {}@{}:{}", TEST_USER, TEST_HOST, TEST_PORT);
+    println!(
+        "Testing SSH connection to {}@{}:{}",
+        TEST_USER, TEST_HOST, TEST_PORT
+    );
 
     // Verify key file exists
     let key_path = Path::new(TEST_KEY_PATH);
-    assert!(key_path.exists(), "SSH key file should exist at {}", TEST_KEY_PATH);
+    assert!(
+        key_path.exists(),
+        "SSH key file should exist at {}",
+        TEST_KEY_PATH
+    );
 
     // Read the private key
     let private_key = std::fs::read_to_string(key_path)?;
@@ -139,7 +146,9 @@ async fn test_ssh_connection_with_key() -> Result<()> {
 
     // Disconnect
     println!("Disconnecting...");
-    session.disconnect(Disconnect::ByApplication, "", "en").await?;
+    session
+        .disconnect(Disconnect::ByApplication, "", "en")
+        .await?;
     println!("Test passed!");
 
     Ok(())

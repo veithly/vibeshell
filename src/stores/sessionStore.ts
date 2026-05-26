@@ -471,11 +471,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
     const backendSessions = result.data;
     const { sessions: localSessions } = get();
+    const backendById = new Map(backendSessions.map((session) => [session.id, session]));
 
     const localSshIds = new Set(
       localSessions.filter((s) => s.sessionType === 'ssh').map((s) => s.id)
     );
-    const backendIds = new Set(backendSessions.map((s) => s.id));
 
     // Add sessions that exist in the backend but not in the local store
     const newSessions: Session[] = backendSessions
@@ -490,32 +490,37 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       }));
 
     if (newSessions.length === 0) {
-      // Still update state of existing SSH sessions (e.g. disconnected)
-      const updated = localSessions.map((s) => {
-        if (s.sessionType !== 'ssh') return s;
-        const backend = backendSessions.find((b) => b.id === s.id);
-        if (backend && backend.state !== s.state) {
-          return { ...s, state: backend.state };
-        }
-        if (!backend) {
-          return { ...s, state: 'disconnected' as const };
-        }
-        return s;
-      });
-      set({ sessions: updated });
+      const updated = localSessions
+        .filter((s) => s.sessionType !== 'ssh' || backendById.has(s.id))
+        .map((s) => {
+          if (s.sessionType !== 'ssh') return s;
+          const backend = backendById.get(s.id);
+          if (!backend) return s;
+          if (backend.state !== s.state) {
+            return { ...s, state: backend.state };
+          }
+          return s;
+        });
+      set((state) => ({
+        sessions: updated,
+        activeSessionId:
+          state.activeSessionId && updated.some((session) => session.id === state.activeSessionId)
+            ? state.activeSessionId
+            : (updated[0]?.id ?? null),
+      }));
       return;
     }
 
-    // Merge: keep local-shell sessions + update existing SSH + add new CLI sessions
+    // Merge: keep local-shell sessions + update existing SSH + add new CLI sessions.
+    // If an SSH session no longer exists in the backend, drop it instead of keeping a
+    // disconnected zombie tab around in the GUI.
     const merged = localSessions
+      .filter((s) => s.sessionType !== 'ssh' || backendById.has(s.id))
       .map((s) => {
         if (s.sessionType !== 'ssh') return s;
-        const backend = backendSessions.find((b) => b.id === s.id);
+        const backend = backendById.get(s.id);
         if (backend && backend.state !== s.state) {
           return { ...s, state: backend.state };
-        }
-        if (!backendIds.has(s.id)) {
-          return { ...s, state: 'disconnected' as const };
         }
         return s;
       })

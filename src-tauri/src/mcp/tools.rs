@@ -19,7 +19,11 @@ pub struct ToolDefinition {
 
 impl ToolDefinition {
     /// Create a new tool definition
-    pub fn new(name: impl Into<String>, description: impl Into<String>, input_schema: Value) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        input_schema: Value,
+    ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -45,13 +49,21 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
         session_kill_tool(),
         // === Command Execution Tools ===
         exec_tool(),
+        remote_rg_tool(),
         // === SFTP Operations Tools ===
         sftp_ls_tool(),
         sftp_upload_tool(),
+        sftp_upload_directory_tool(),
+        sftp_sync_directory_tool(),
         sftp_download_tool(),
         sftp_mkdir_tool(),
         sftp_rm_tool(),
         sftp_mv_tool(),
+        sftp_read_tool(),
+        sftp_write_tool(),
+        get_content_tool(),
+        edit_file_tool(),
+        add_file_tool(),
     ]
 }
 
@@ -228,7 +240,7 @@ fn session_list_tool() -> ToolDefinition {
 fn session_create_tool() -> ToolDefinition {
     ToolDefinition::new(
         "session_create",
-        "Create a new SSH session to a configured server.",
+        "Create a new SSH session and connect to a configured server using saved credentials. Returns session info with a session_id that can be used for exec and SFTP operations. The server must have saved credentials in VibeShell.",
         json!({
             "type": "object",
             "properties": {
@@ -309,7 +321,7 @@ fn session_kill_tool() -> ToolDefinition {
 fn exec_tool() -> ToolDefinition {
     ToolDefinition::new(
         "exec",
-        "Execute a command in an active SSH session.",
+        "Execute a command on a connected SSH session. Opens a separate exec channel (does not interfere with the interactive shell). Returns stdout+stderr combined output.",
         json!({
             "type": "object",
             "properties": {
@@ -328,6 +340,63 @@ fn exec_tool() -> ToolDefinition {
                 }
             },
             "required": ["session_id", "command"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+fn remote_rg_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "rg",
+        "Search remote files with ripgrep-style output. Uses rg on the server when available and falls back to grep. Returns matching lines with path and line numbers.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID with active SSH connection"
+                },
+                "pattern": {
+                    "type": "string",
+                    "description": "Pattern to search for"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Remote file or directory to search",
+                    "default": "."
+                },
+                "ignore_case": {
+                    "type": "boolean",
+                    "description": "Case-insensitive search",
+                    "default": false
+                },
+                "fixed_strings": {
+                    "type": "boolean",
+                    "description": "Treat pattern as a literal string",
+                    "default": false
+                },
+                "hidden": {
+                    "type": "boolean",
+                    "description": "Include hidden files when rg is available",
+                    "default": false
+                },
+                "globs": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "rg-style glob filters such as *.rs or !target/"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum output lines to return",
+                    "default": 200
+                },
+                "timeout_ms": {
+                    "type": "integer",
+                    "description": "Command timeout in milliseconds",
+                    "default": 30000
+                }
+            },
+            "required": ["session_id", "pattern"],
             "additionalProperties": false
         }),
     )
@@ -392,6 +461,69 @@ fn sftp_upload_tool() -> ToolDefinition {
             "additionalProperties": false
         }),
     )
+}
+
+fn sftp_upload_directory_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "sftp_upload_directory",
+        "Upload a local directory recursively. Default excludes are configurable globally and .gitignore is respected by default.",
+        sftp_directory_transfer_schema(false),
+    )
+}
+
+fn sftp_sync_directory_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "sftp_sync_directory",
+        "Synchronize a local directory to a remote directory, skipping unchanged files. Set delete_extra=true only when remote extras should be removed.",
+        sftp_directory_transfer_schema(true),
+    )
+}
+
+fn sftp_directory_transfer_schema(include_delete: bool) -> Value {
+    let mut properties = json!({
+        "session_id": {
+            "type": "string",
+            "description": "Session ID with active SFTP connection"
+        },
+        "local_path": {
+            "type": "string",
+            "description": "Local directory path to upload or sync"
+        },
+        "remote_path": {
+            "type": "string",
+            "description": "Remote destination directory"
+        },
+        "respect_gitignore": {
+            "type": "boolean",
+            "description": "Respect .gitignore files under the uploaded directory",
+            "default": true
+        },
+        "excluded_paths": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Additional exclude patterns such as node_modules/ or .venv/"
+        }
+    });
+
+    if include_delete {
+        if let Some(map) = properties.as_object_mut() {
+            map.insert(
+                "delete_extra".to_string(),
+                json!({
+                    "type": "boolean",
+                    "description": "Delete remote entries that are absent locally. Excluded paths are protected.",
+                    "default": false
+                }),
+            );
+        }
+    }
+
+    json!({
+        "type": "object",
+        "properties": properties,
+        "required": ["session_id", "local_path", "remote_path"],
+        "additionalProperties": false
+    })
 }
 
 fn sftp_download_tool() -> ToolDefinition {
@@ -505,6 +637,161 @@ fn sftp_mv_tool() -> ToolDefinition {
     )
 }
 
+fn sftp_read_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "sftp_read",
+        "Read the content of a remote text file and return it as a string. Suitable for config files, scripts, logs, etc. For binary files, use sftp_download instead.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID with active SSH connection"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Remote file path to read"
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes to read (default: 1048576 = 1MB). Prevents accidentally reading huge files.",
+                    "default": 1048576
+                }
+            },
+            "required": ["session_id", "path"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+fn sftp_write_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "sftp_write",
+        "Write text content to a remote file. Creates the file if it doesn't exist, overwrites if it does. For binary files, use sftp_upload instead.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID with active SSH connection"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Remote file path to write"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Text content to write to the file"
+                }
+            },
+            "required": ["session_id", "path", "content"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+fn get_content_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "get_content",
+        "Read a remote text file. Agent-friendly alias for sftp_read.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID with active SSH connection"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Remote file path to read"
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes to read before truncating",
+                    "default": 1048576
+                }
+            },
+            "required": ["session_id", "path"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+fn edit_file_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "edit_file",
+        "Edit an existing remote text file. Provide content for a full-file replacement, or old_text/new_text for exact replacement.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID with active SSH connection"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Remote file path to edit"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Full replacement content"
+                },
+                "old_text": {
+                    "type": "string",
+                    "description": "Exact text to replace"
+                },
+                "new_text": {
+                    "type": "string",
+                    "description": "Replacement text used with old_text"
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence instead of only the first",
+                    "default": false
+                }
+            },
+            "required": ["session_id", "path"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+fn add_file_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "add_file",
+        "Create a remote text file. Fails if the file already exists unless overwrite=true.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID with active SSH connection"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Remote file path to create"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Text content to write"
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Replace the file if it already exists",
+                    "default": false
+                },
+                "parents": {
+                    "type": "boolean",
+                    "description": "Create parent directories if needed",
+                    "default": false
+                }
+            },
+            "required": ["session_id", "path", "content"],
+            "additionalProperties": false
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -514,12 +801,15 @@ mod tests {
         let tools = get_tool_definitions();
 
         // Verify we have all expected tools
-        assert_eq!(tools.len(), 17);
+        assert_eq!(tools.len(), 25);
 
         // Check that all tools have non-empty names and descriptions
         for tool in &tools {
             assert!(!tool.name.is_empty(), "Tool name should not be empty");
-            assert!(!tool.description.is_empty(), "Tool description should not be empty");
+            assert!(
+                !tool.description.is_empty(),
+                "Tool description should not be empty"
+            );
         }
 
         // Verify specific tools exist
@@ -527,7 +817,11 @@ mod tests {
         assert!(tool_names.contains(&"server_list"));
         assert!(tool_names.contains(&"session_create"));
         assert!(tool_names.contains(&"exec"));
+        assert!(tool_names.contains(&"rg"));
         assert!(tool_names.contains(&"sftp_ls"));
+        assert!(tool_names.contains(&"get_content"));
+        assert!(tool_names.contains(&"edit_file"));
+        assert!(tool_names.contains(&"add_file"));
     }
 
     #[test]

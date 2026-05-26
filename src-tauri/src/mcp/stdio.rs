@@ -91,7 +91,10 @@ const PARSE_ERROR: i32 = -32700;
 ///
 /// This is the entry point for AI tool integration. The server reads
 /// JSON-RPC requests from stdin and writes responses to stdout.
-pub async fn run_stdio(database: Arc<Database>, session_manager: Arc<SessionManager>) -> Result<()> {
+pub async fn run_stdio(
+    database: Arc<Database>,
+    session_manager: Arc<SessionManager>,
+) -> Result<()> {
     let state = McpState {
         database,
         session_manager,
@@ -142,16 +145,13 @@ pub async fn run_stdio(database: Arc<Database>, session_manager: Arc<SessionMana
 /// Handle a single JSON-RPC request and return a response.
 async fn handle_request(state: &McpState, request: JsonRpcRequest) -> JsonRpcResponse {
     if request.jsonrpc != "2.0" {
-        return JsonRpcResponse::error(
-            request.id,
-            -32600,
-            "Invalid JSON-RPC version".to_string(),
-        );
+        return JsonRpcResponse::error(request.id, -32600, "Invalid JSON-RPC version".to_string());
     }
 
     match request.method.as_str() {
-        "initialize" => {
-            JsonRpcResponse::success(request.id, json!({
+        "initialize" => JsonRpcResponse::success(
+            request.id,
+            json!({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {
                     "tools": {}
@@ -160,8 +160,8 @@ async fn handle_request(state: &McpState, request: JsonRpcRequest) -> JsonRpcRes
                     "name": SERVER_NAME,
                     "version": SERVER_VERSION
                 }
-            }))
-        }
+            }),
+        ),
         "notifications/initialized" => {
             // Client acknowledgment — no response needed for notifications
             // But we still return success if it has an id
@@ -177,15 +177,11 @@ async fn handle_request(state: &McpState, request: JsonRpcRequest) -> JsonRpcRes
             let tools = get_tool_definitions();
             JsonRpcResponse::success(request.id, json!({ "tools": tools }))
         }
-        "tools/call" => {
-            match handle_tool_call(state, request.params).await {
-                Ok(result) => JsonRpcResponse::success(request.id, result),
-                Err(msg) => JsonRpcResponse::error(request.id, INVALID_PARAMS, msg),
-            }
-        }
-        "ping" => {
-            JsonRpcResponse::success(request.id, json!({}))
-        }
+        "tools/call" => match handle_tool_call(state, request.params).await {
+            Ok(result) => JsonRpcResponse::success(request.id, result),
+            Err(msg) => JsonRpcResponse::error(request.id, INVALID_PARAMS, msg),
+        },
+        "ping" => JsonRpcResponse::success(request.id, json!({})),
         _ => {
             eprintln!("[VibeShell MCP] Unknown method: {}", request.method);
             JsonRpcResponse::error(

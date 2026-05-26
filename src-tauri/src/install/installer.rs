@@ -210,6 +210,7 @@ Need a new parallel shell?
 
 Run another command on the same session
 -> `vshell ssh-session 001 -- <command>`
+-> `vshell ssh-session 001 --command-file ./remote-command.sh`
 
 Reattach interactively
 -> `vshell ssh-session 001`
@@ -228,9 +229,45 @@ vshell ssh my-server --new
 vshell ssh --wait my-server
 vshell ssh-session 001 -- hostname
 vshell ssh-session 001 -- ls -la /var/log
+vshell ssh-session 001 --command-file ./remote-command.sh
 vshell exec <session-id> -- hostname
 vshell attach 001
 vshell kill 001
+```
+
+If the local shell is fighting nested quotes, especially in PowerShell, prefer
+`--command-file <path>` or pipe text into `--command-stdin` instead of stacking
+more escaping.
+
+### PowerShell-safe command input
+
+PowerShell parses quotes before `vshell` receives arguments. For commands that
+contain nested quotes, pipes, regexes, or redaction expressions, put the remote
+command in a file or pipe it through stdin.
+
+Prefer a temporary command file for repeatable work:
+
+```powershell
+@'
+sh -lc 'cd /srv/app && grep -E "POSTGRES|DATABASE|DB_" .env | sed -E "s/(PASSWORD|PASS|URL|DSN)=.*/\1=***REDACTED***/"'
+'@ | Set-Content -NoNewline -Encoding UTF8 .\remote-command.sh
+
+vshell ssh my-server --command-file .\remote-command.sh
+vshell ssh-session 001 --command-file .\remote-command.sh
+```
+
+For one-off commands, pipe a single-quoted here-string into stdin:
+
+```powershell
+@'
+sh -lc 'cd /srv/app && docker compose ps && curl -fsS http://127.0.0.1:8000/health'
+'@ | vshell ssh my-server --command-stdin
+```
+
+Avoid this fragile pattern in PowerShell for complex remote commands:
+
+```powershell
+vshell ssh my-server -- "sh -lc 'grep -E \"A|B\" .env | sed -E \"s/(PASSWORD)=.*/\\1=***/\"'"
 ```
 
 ## Interactive Command Flow
@@ -247,6 +284,7 @@ Recommended follow-up commands:
 
 ```bash
 vshell ssh-session 001 -- <command>
+vshell ssh-session 001 --command-file ./remote-command.sh
 vshell ssh-session 001
 vshell exec <session-id> -- <command>
 vshell attach <session-id>
@@ -261,14 +299,38 @@ Need file operations?
 -> perform SFTP operations on that session
 ```
 
+```text
+Need to inspect or edit text?
+-> search with `rg`
+-> read with `get_content`
+-> edit existing files with `edit_file`
+-> create new files with `add_file`
+```
+
+```text
+Need to upload a whole folder?
+-> use `sftp_upload_directory` or `vshell sftp <server> put <local-dir> <remote-dir>`
+
+Need repeatable deploy-style sync?
+-> use `sftp_sync_directory` or `vshell sftp <server> sync <local-dir> <remote-dir>`
+-> set delete_extra / --delete only when remote extras should really be removed
+```
+
 ### MCP
 
 ```json
 session_create({ "server_name": "my-server" })
 sftp_ls({ "session_id": "abc-123", "path": "/var/www", "show_hidden": true })
+rg({ "session_id": "abc-123", "pattern": "TODO", "path": "/srv/app", "globs": ["*.rs"], "max_results": 100 })
+get_content({ "session_id": "abc-123", "path": "/etc/nginx/nginx.conf" })
+edit_file({ "session_id": "abc-123", "path": "/etc/app.conf", "old_text": "debug=false", "new_text": "debug=true" })
+edit_file({ "session_id": "abc-123", "path": "/etc/app.conf", "content": "full replacement text\n" })
+add_file({ "session_id": "abc-123", "path": "/tmp/config.yml", "content": "key: value\n", "parents": true })
 sftp_read({ "session_id": "abc-123", "path": "/etc/nginx/nginx.conf" })
 sftp_write({ "session_id": "abc-123", "path": "/tmp/config.yml", "content": "key: value\n" })
 sftp_upload({ "session_id": "abc-123", "local_path": "C:/project/dist/app.js", "remote_path": "/var/www/app.js" })
+sftp_upload_directory({ "session_id": "abc-123", "local_path": "C:/project/dist", "remote_path": "/var/www/app", "respect_gitignore": true, "excluded_paths": ["node_modules/", ".venv/"] })
+sftp_sync_directory({ "session_id": "abc-123", "local_path": "C:/project/dist", "remote_path": "/var/www/app", "delete_extra": false, "respect_gitignore": true })
 sftp_download({ "session_id": "abc-123", "remote_path": "/var/log/app.log", "local_path": "C:/tmp/app.log" })
 sftp_mkdir({ "session_id": "abc-123", "path": "/var/www/uploads/2024", "recursive": true })
 sftp_rm({ "session_id": "abc-123", "path": "/tmp/old-backup", "recursive": true })
@@ -280,6 +342,14 @@ sftp_mv({ "session_id": "abc-123", "source": "/var/www/app.js", "destination": "
 ```bash
 vshell sftp --session <session-id>
 vshell sftp my-server
+vshell rg my-server TODO /srv/app --glob "*.rs"
+vshell get-content my-server /etc/nginx/nginx.conf
+vshell edit-file my-server /etc/app.conf --replace "debug=false" --with "debug=true"
+vshell add-file my-server /tmp/config.yml --content-file ./config.yml --parents
+Get-Content .\config.yml | vshell edit-file my-server /etc/app.conf --content-stdin
+vshell sftp my-server put ./dist /var/www/app
+vshell sftp my-server sync ./dist /var/www/app --exclude node_modules/ --no-gitignore
+vshell sftp my-server sync ./dist /var/www/app --delete
 ```
 
 ## Rules
@@ -289,8 +359,16 @@ vshell sftp my-server
 - Treat `vshell ssh <server>` as a reusable-session command; only add `--new` when the user explicitly wants another parallel session.
 - Prefer `exec` for non-interactive automation.
 - Prefer shell session reuse for interactive prompts or multi-step command flows.
-- Use `sftp_download` for binary files and `sftp_read` for text inspection.
-- Use `sftp_upload` for binary/local file transfer and `sftp_write` for direct text writes.
+- Use `rg` for remote text search before broad directory downloads.
+- Use `get_content` / `vshell get-content` for text inspection.
+- Use `edit_file` / `vshell edit-file` for existing remote text files; prefer exact `old_text`/`new_text` replacements for small targeted edits, and full `content` replacement only when you intentionally own the whole file.
+- Use `add_file` / `vshell add-file` when creating new remote text files; it should fail on existing files unless overwrite is explicit.
+- Use `sftp_download` for binary files and `sftp_read` for lower-level text inspection.
+- Use `sftp_upload` for binary/local file transfer and `sftp_write` for lower-level direct text writes.
+- Use `sftp_upload_directory` / `vshell sftp put <local-dir> <remote-dir>` for first-time recursive folder uploads.
+- Use `sftp_sync_directory` / `vshell sftp sync <local-dir> <remote-dir>` for repeatable deploy-style directory syncs.
+- Directory upload/sync respects .gitignore by default when configured; pass explicit excludes for heavy or unsafe paths such as `node_modules/`, `.venv/`, `target/`, and `.git/`.
+- Only use `delete_extra=true` or `--delete` when the user explicitly wants remote files absent locally to be removed.
 - If the user provides only a host or IP, map it to a configured server first with `server_list` or `vshell servers`.
 - Credentials come from saved VibeShell configuration; do not invent ad-hoc SSH passwords or keys on the command line unless the environment already requires it.
 "#;
@@ -494,6 +572,17 @@ mod tests {
         assert!(SKILL_MD_CONTENT.contains("ssh"));
         assert!(SKILL_MD_CONTENT.contains("sessions"));
         assert!(SKILL_MD_CONTENT.contains("kill"));
+        assert!(SKILL_MD_CONTENT.contains("PowerShell-safe command input"));
+        assert!(SKILL_MD_CONTENT.contains("--command-file"));
+        assert!(SKILL_MD_CONTENT.contains("--command-stdin"));
+        assert!(SKILL_MD_CONTENT.contains("get_content"));
+        assert!(SKILL_MD_CONTENT.contains("edit_file"));
+        assert!(SKILL_MD_CONTENT.contains("add_file"));
+        assert!(SKILL_MD_CONTENT.contains("sftp_upload_directory"));
+        assert!(SKILL_MD_CONTENT.contains("sftp_sync_directory"));
+        assert!(SKILL_MD_CONTENT.contains("vshell sftp my-server sync"));
+        assert!(SKILL_MD_CONTENT.contains("--delete"));
+        assert!(SKILL_MD_CONTENT.contains("vshell rg"));
     }
 
     #[test]

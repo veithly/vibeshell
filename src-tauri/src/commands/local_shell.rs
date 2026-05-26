@@ -1,11 +1,11 @@
 //! Tauri commands for local shell management.
 
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
-use tauri::{State, AppHandle, Emitter};
 use std::sync::Arc;
-use log::{info, debug};
+use tauri::{AppHandle, Emitter, State};
 
-use crate::local_shell::{LocalShellManager, LocalShellInfo, ShellInfo};
+use crate::local_shell::{LocalShellInfo, LocalShellManager, ShellInfo};
 
 /// Output event for local shell sessions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,18 +61,14 @@ pub struct LocalShellSessionRequest {
 
 /// List all available shells on the system
 #[tauri::command]
-pub fn local_shell_list_shells(
-    manager: State<'_, Arc<LocalShellManager>>,
-) -> Vec<ShellInfo> {
+pub fn local_shell_list_shells(manager: State<'_, Arc<LocalShellManager>>) -> Vec<ShellInfo> {
     info!("[LocalShell Command] Listing available shells");
     manager.list_shells()
 }
 
 /// Get the default shell
 #[tauri::command]
-pub fn local_shell_get_default(
-    manager: State<'_, Arc<LocalShellManager>>,
-) -> Option<ShellInfo> {
+pub fn local_shell_get_default(manager: State<'_, Arc<LocalShellManager>>) -> Option<ShellInfo> {
     info!("[LocalShell Command] Getting default shell");
     manager.get_default_shell()
 }
@@ -96,15 +92,18 @@ pub async fn local_shell_create(
     let cols = request.cols.unwrap_or(80) as u16;
     let rows = request.rows.unwrap_or(24) as u16;
 
-    info!("[LocalShell Command] Creating session with shell: {:?}, size: {}x{}",
-          request.shell_id, cols, rows);
+    info!(
+        "[LocalShell Command] Creating session with shell: {:?}, size: {}x{}",
+        request.shell_id, cols, rows
+    );
 
     // Create the session
     let session = if let Some(shell_id) = request.shell_id {
         manager.create_session(&shell_id, cols, rows).await
     } else {
         manager.create_default_session(cols, rows).await
-    }.map_err(|e| e.to_string())?;
+    }
+    .map_err(|e| e.to_string())?;
 
     let session_id = session.id.clone();
     let info = session.get_info().await;
@@ -112,7 +111,10 @@ pub async fn local_shell_create(
     // Subscribe to session output and emit events
     let mut receiver = session.subscribe();
     tokio::spawn(async move {
-        debug!("[LocalShell Command] Output bridge started for session {}", session_id);
+        debug!(
+            "[LocalShell Command] Output bridge started for session {}",
+            session_id
+        );
         while let Ok(data) = receiver.recv().await {
             let event = LocalShellOutputEvent {
                 session_id: session_id.clone(),
@@ -121,7 +123,10 @@ pub async fn local_shell_create(
             // Emit to frontend using the same event name as SSH sessions
             let _ = app.emit("session-output", event);
         }
-        debug!("[LocalShell Command] Output bridge ended for session {}", session_id);
+        debug!(
+            "[LocalShell Command] Output bridge ended for session {}",
+            session_id
+        );
     });
 
     info!("[LocalShell Command] Session created: {}", info.id);
@@ -228,7 +233,10 @@ pub async fn local_shell_kill(
     manager: State<'_, Arc<LocalShellManager>>,
     request: LocalShellSessionRequest,
 ) -> Result<(), String> {
-    info!("[LocalShell Command] Killing session: {}", request.session_id);
+    info!(
+        "[LocalShell Command] Killing session: {}",
+        request.session_id
+    );
     manager
         .kill_session(&request.session_id)
         .await
@@ -241,8 +249,5 @@ pub async fn local_shell_kill_all(
     manager: State<'_, Arc<LocalShellManager>>,
 ) -> Result<(), String> {
     info!("[LocalShell Command] Killing all sessions");
-    manager
-        .kill_all()
-        .await
-        .map_err(|e| e.to_string())
+    manager.kill_all().await.map_err(|e| e.to_string())
 }

@@ -1,9 +1,9 @@
+use serde::Deserialize;
 use std::sync::Arc;
 use tauri::State;
-use serde::Deserialize;
 
 use crate::session::SessionManager;
-use crate::storage::{Database, TunnelConfig, TunnelType, TunnelInfo};
+use crate::storage::{Database, TunnelConfig, TunnelInfo, TunnelType};
 use crate::tunnel::TunnelManager;
 
 #[derive(Debug, Deserialize)]
@@ -21,7 +21,9 @@ pub struct TunnelConfigInput {
     pub enabled: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 fn parse_tunnel_type(s: &str) -> TunnelType {
     match s {
@@ -93,10 +95,7 @@ pub fn tunnel_config_update(
 
 /// Delete a tunnel config
 #[tauri::command]
-pub fn tunnel_config_delete(
-    db: State<'_, Arc<Database>>,
-    id: String,
-) -> Result<(), String> {
+pub fn tunnel_config_delete(db: State<'_, Arc<Database>>, id: String) -> Result<(), String> {
     db.tunnel_config_delete(&id)
         .map_err(|e| format!("Failed to delete tunnel config: {}", e))
 }
@@ -112,11 +111,15 @@ pub async fn tunnel_start(
     config: TunnelConfigInput,
 ) -> Result<TunnelInfo, String> {
     // Get the session to access SSH handle
-    let session = session_mgr.get(&session_id).await
+    let session = session_mgr
+        .get(&session_id)
+        .await
         .ok_or_else(|| format!("Session {} not found", session_id))?;
 
     // Get SSH session handle Arc from the session's SSH client
-    let ssh_handle = session.get_ssh_handle_arc().await
+    let ssh_handle = session
+        .get_ssh_handle_arc()
+        .await
         .ok_or_else(|| "SSH session not connected".to_string())?;
 
     let tunnel_config = TunnelConfig {
@@ -131,7 +134,9 @@ pub async fn tunnel_start(
         enabled: config.enabled,
     };
 
-    tunnel_mgr.create_tunnel(&session_id, ssh_handle, tunnel_config).await
+    tunnel_mgr
+        .create_tunnel(&session_id, ssh_handle, tunnel_config)
+        .await
         .map_err(|e| format!("Failed to start tunnel: {}", e))
 }
 
@@ -141,7 +146,9 @@ pub async fn tunnel_stop(
     tunnel_mgr: State<'_, Arc<TunnelManager>>,
     tunnel_id: String,
 ) -> Result<(), String> {
-    tunnel_mgr.stop_tunnel(&tunnel_id).await
+    tunnel_mgr
+        .stop_tunnel(&tunnel_id)
+        .await
         .map_err(|e| format!("Failed to stop tunnel: {}", e))
 }
 

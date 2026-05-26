@@ -18,10 +18,10 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools"] }
+tauri = { version = "2", default-features = false, features = ["wry", "compression", "dynamic-acl", "x11", "devtools"] }
 tauri-plugin-shell = "2"
-tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+rfd = { version = "0.16", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -39,6 +39,7 @@ chrono = "0.4"
 russh = "0.44"
 russh-keys = "0.44"
 russh-sftp = "2"
+ignore = "0.4"
 async-trait = "0.1"
 tokio = { version = "1", features = ["sync", "io-std", "io-util", "rt-multi-thread"] }
 interprocess = "2"

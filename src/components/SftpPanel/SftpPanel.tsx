@@ -23,10 +23,12 @@ import {
   Eye,
   Check,
   Minus,
+  Copy,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { safeInvoke } from '../../lib/tauri';
 import { useNotificationStore } from '../../stores/notificationStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import { FileIcon, isTextPreviewable, isImagePreviewable } from './FileIcon';
 import { PreviewModal } from './PreviewModal';
 
@@ -45,6 +47,19 @@ export interface SftpEntry {
   size: number;
   modifiedAt: number;
   permissions: string;
+}
+
+interface DirectoryTransferSummary {
+  mode: 'upload' | 'sync';
+  localRoot: string;
+  remoteRoot: string;
+  directoriesTotal: number;
+  filesTotal: number;
+  createdDirectories: number;
+  uploadedFiles: number;
+  skippedFiles: number;
+  deletedEntries: number;
+  transferredBytes: number;
 }
 
 /**
@@ -135,6 +150,15 @@ function canPreviewFile(name: string): boolean {
   return isTextPreviewable(name) || isImagePreviewable(name);
 }
 
+function basename(path: string): string {
+  return path.split(/[/\\]/).filter(Boolean).pop() || 'folder';
+}
+
+function joinRemotePath(parent: string, child: string): string {
+  if (!parent || parent === '/') return `/${child}`;
+  return `${parent.replace(/\/+$/, '')}/${child}`;
+}
+
 /**
  * Collapsible SFTP file browser panel with full functionality
  */
@@ -161,6 +185,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
+  const uploadIgnoreConfig = useSettingsStore((state) => state.uploadIgnoreConfig);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0 });
@@ -430,6 +455,58 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     }
   }, [sessionId, currentPath, loadDirectory, notifySuccess, notifyError]);
 
+  const uploadDirectory = useCallback(async (
+    localPath: string,
+    remotePath: string,
+    mode: 'upload' | 'sync'
+  ): Promise<DirectoryTransferSummary> => {
+    const result = await safeInvoke<DirectoryTransferSummary>('sftp_upload_directory', {
+      request: {
+        sessionId,
+        localPath,
+        remotePath,
+        mode,
+        deleteExtra: false,
+        respectGitignore: uploadIgnoreConfig.respectGitignore,
+        excludedPaths: uploadIgnoreConfig.excludedPaths,
+      },
+    });
+
+    if (!result.success) {
+      throw new Error(result.error.message);
+    }
+    return result.data;
+  }, [sessionId, uploadIgnoreConfig]);
+
+  const handleUploadDirectory = useCallback(async (mode: 'upload' | 'sync') => {
+    if (!sessionId) return;
+
+    try {
+      const pickResult = await safeInvoke<string | null>('pick_directory_for_upload');
+      if (!pickResult.success || !pickResult.data) return;
+
+      const localPath = pickResult.data;
+      const folderName = basename(localPath);
+      const remotePath = mode === 'sync' ? currentPath : joinRemotePath(currentPath, folderName);
+
+      setIsLoading(true);
+      const summary = await uploadDirectory(localPath, remotePath, mode);
+      notifySuccess(
+        mode === 'sync' ? 'Sync Complete' : 'Upload Complete',
+        `${summary.uploadedFiles} uploaded, ${summary.skippedFiles} skipped`
+      );
+      await loadDirectory(currentPath);
+    } catch (err) {
+      console.error('[SftpPanel] Directory transfer failed:', err);
+      notifyError(
+        'Directory Transfer Failed',
+        err instanceof Error ? err.message : 'Failed to transfer directory'
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }, [sessionId, currentPath, uploadDirectory, loadDirectory, notifySuccess, notifyError]);
+
   // Handle files dropped via drag-and-drop
   const handleDropFiles = useCallback(async (paths: string[]) => {
     if (!sessionId || paths.length === 0) return;
@@ -440,7 +517,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
     for (const localPath of paths) {
       const fileName = localPath.split(/[/\\]/).pop() || 'file';
-      const remotePath = `${currentPath}/${fileName}`;
+      const remotePath = joinRemotePath(currentPath, fileName);
 
       try {
         const result = await safeInvoke('sftp_upload_file', {
@@ -454,12 +531,26 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
         if (result.success) {
           successCount++;
         } else {
-          failCount++;
-          console.error(`[SftpPanel] Upload failed for ${fileName}:`, result.error.message);
+          try {
+            await uploadDirectory(localPath, remotePath, 'upload');
+            successCount++;
+          } catch (directoryErr) {
+            failCount++;
+            console.error(
+              `[SftpPanel] Upload failed for ${fileName}:`,
+              result.error.message,
+              directoryErr
+            );
+          }
         }
       } catch (err) {
-        failCount++;
-        console.error(`[SftpPanel] Upload failed for ${fileName}:`, err);
+        try {
+          await uploadDirectory(localPath, remotePath, 'upload');
+          successCount++;
+        } catch (directoryErr) {
+          failCount++;
+          console.error(`[SftpPanel] Upload failed for ${fileName}:`, err, directoryErr);
+        }
       }
     }
 
@@ -472,7 +563,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
     await loadDirectory(currentPath);
     setIsLoading(false);
-  }, [sessionId, currentPath, loadDirectory, notifySuccess, notifyError]);
+  }, [sessionId, currentPath, loadDirectory, notifySuccess, notifyError, uploadDirectory]);
 
   // Drag-and-drop event listener (Tauri native)
   useEffect(() => {
@@ -737,6 +828,26 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     setLastSelectedIndex(null);
     setContextMenu({ visible: false, x: 0, y: 0 });
   }, []);
+
+  // Copy selected file paths, or the current directory path when nothing is selected.
+  const handleCopyPaths = useCallback(async () => {
+    const pathsToCopy = selectedEntriesArray.length > 0
+      ? selectedEntriesArray.map(entry => entry.path)
+      : [currentPath];
+
+    try {
+      await navigator.clipboard.writeText(pathsToCopy.join('\n'));
+      notifySuccess(
+        pathsToCopy.length === 1 ? 'Path Copied' : 'Paths Copied',
+        pathsToCopy.length === 1 ? pathsToCopy[0] : `${pathsToCopy.length} paths copied`
+      );
+    } catch (err) {
+      console.error('[SftpPanel] Failed to copy path:', err);
+      notifyError('Copy Failed', err instanceof Error ? err.message : 'Failed to copy path');
+    } finally {
+      setContextMenu({ visible: false, x: 0, y: 0 });
+    }
+  }, [selectedEntriesArray, currentPath, notifySuccess, notifyError]);
 
   // Open compress dialog
   const handleOpenCompressDialog = useCallback(() => {
@@ -1061,6 +1172,14 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
             >
               <RefreshCw className={cn('w-4 h-4 text-tokyo-comment', isLoading && 'animate-spin')} />
             </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleCopyPaths(); }}
+              disabled={isLoading}
+              className="p-1.5 rounded hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
+              title={selectedEntries.size > 0 ? 'Copy selected path(s)' : 'Copy current path'}
+            >
+              <Copy className="w-4 h-4 text-tokyo-comment" />
+            </button>
 
             <div className="w-px h-4 bg-tokyo-bg-hl mx-1" />
 
@@ -1076,9 +1195,25 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
               onClick={(e) => { e.stopPropagation(); handleUpload(); }}
               disabled={isLoading}
               className="p-1.5 rounded hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
-              title="Upload"
+              title="Upload file"
             >
               <Upload className="w-4 h-4 text-tokyo-comment" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleUploadDirectory('upload'); }}
+              disabled={isLoading}
+              className="p-1.5 rounded hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
+              title="Upload folder"
+            >
+              <FolderOpen className="w-4 h-4 text-tokyo-comment" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleUploadDirectory('sync'); }}
+              disabled={isLoading}
+              className="p-1.5 rounded hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
+              title="Sync folder into current path"
+            >
+              <RefreshCw className="w-4 h-4 text-tokyo-comment" />
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); handleDownload(); }}
@@ -1497,6 +1632,15 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
             >
               {selectedEntries.size > 0 && (
                 <>
+                  {/* Copy path(s) */}
+                  <button
+                    onClick={handleCopyPaths}
+                    className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
+                  >
+                    <Copy className="w-4 h-4" />
+                    {selectedEntries.size === 1 ? 'Copy Path' : `Copy ${selectedEntries.size} Paths`}
+                  </button>
+
                   {/* Preview (single file only, previewable types) */}
                   {selectedEntries.size === 1 && selectedEntry && !selectedEntry.isDirectory && canPreviewFile(selectedEntry.name) && (
                     <button
@@ -1573,6 +1717,16 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
                   <div className="h-px bg-tokyo-bg-hl my-1" />
                 </>
+              )}
+
+              {selectedEntries.size === 0 && (
+                <button
+                  onClick={handleCopyPaths}
+                  className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
+                >
+                  <Copy className="w-4 h-4" />
+                  Copy Current Path
+                </button>
               )}
 
               {/* Select All */}

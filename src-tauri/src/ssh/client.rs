@@ -193,17 +193,20 @@ impl SshClient {
             port,
             tcp_timeout.as_secs()
         );
-        let mut session = tokio::time::timeout(tcp_timeout, client::connect(config, (host, port), handler))
-            .await
-            .map_err(|_| {
-                anyhow!(
-                    "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
-                    host,
-                    port,
-                    tcp_timeout.as_secs()
-                )
-            })?
-            .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
+        let mut session = tokio::time::timeout(
+            tcp_timeout,
+            client::connect(config, (host, port), handler),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
+                host,
+                port,
+                tcp_timeout.as_secs()
+            )
+        })?
+        .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
 
         info!("[SSH] TCP connection established, starting password authentication...");
         let auth_result = session
@@ -275,17 +278,20 @@ impl SshClient {
             port,
             tcp_timeout.as_secs()
         );
-        let mut session = tokio::time::timeout(tcp_timeout, client::connect(config, (host, port), handler))
-            .await
-            .map_err(|_| {
-                anyhow!(
-                    "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
-                    host,
-                    port,
-                    tcp_timeout.as_secs()
-                )
-            })?
-            .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
+        let mut session = tokio::time::timeout(
+            tcp_timeout,
+            client::connect(config, (host, port), handler),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
+                host,
+                port,
+                tcp_timeout.as_secs()
+            )
+        })?
+        .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
 
         info!("[SSH] TCP connection established, parsing private key...");
         let key_pair = if let Some(pass) = passphrase {

@@ -1,8 +1,8 @@
+use serde::Deserialize;
 use std::sync::Arc;
 use tauri::State;
-use serde::Deserialize;
 
-use crate::storage::{Database, CommandSnippet};
+use crate::storage::{CommandSnippet, Database};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,10 +73,12 @@ pub fn snippet_update(
     input: SnippetUpdateInput,
 ) -> Result<(), String> {
     // Get existing snippet to merge with updates
-    let snippets = db.snippet_list(None)
+    let snippets = db
+        .snippet_list(None)
         .map_err(|e| format!("Failed to get snippets: {}", e))?;
 
-    let existing = snippets.iter()
+    let existing = snippets
+        .iter()
         .find(|s| s.id == input.id)
         .ok_or_else(|| "Snippet not found".to_string())?;
 
@@ -85,7 +87,9 @@ pub fn snippet_update(
         name: input.name.unwrap_or_else(|| existing.name.clone()),
         command: input.command.unwrap_or_else(|| existing.command.clone()),
         category: input.category.unwrap_or_else(|| existing.category.clone()),
-        description: input.description.unwrap_or_else(|| existing.description.clone()),
+        description: input
+            .description
+            .unwrap_or_else(|| existing.description.clone()),
         tags: input.tags.unwrap_or_else(|| existing.tags.clone()),
         created_at: existing.created_at,
         updated_at: 0, // will be set by db
@@ -97,10 +101,7 @@ pub fn snippet_update(
 
 /// Delete a command snippet
 #[tauri::command]
-pub fn snippet_delete(
-    db: State<'_, Arc<Database>>,
-    id: String,
-) -> Result<(), String> {
+pub fn snippet_delete(db: State<'_, Arc<Database>>, id: String) -> Result<(), String> {
     db.snippet_delete(&id)
         .map_err(|e| format!("Failed to delete snippet: {}", e))
 }

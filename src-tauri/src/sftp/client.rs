@@ -3,7 +3,7 @@
 //! Provides the core SFTP session management including connection lifecycle
 //! and subsystem initialization over an established SSH channel.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use russh_sftp::client::SftpSession;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -19,9 +19,7 @@ pub struct SftpClient {
 impl SftpClient {
     /// Creates a new disconnected SFTP client.
     pub fn new() -> Self {
-        Self {
-            session: None,
-        }
+        Self { session: None }
     }
 
     /// Connects to the SFTP subsystem using the provided stream.

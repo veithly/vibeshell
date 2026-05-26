@@ -3,6 +3,9 @@
 //! This module contains subcommands for session management and SSH connections.
 //! Commands communicate with the VibeShell GUI via IPC.
 
-pub mod session;
-pub mod ssh;
+pub mod file_tools;
 pub mod install;
+pub mod server;
+pub mod session;
+pub mod sftp;
+pub mod ssh;

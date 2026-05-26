@@ -1,9 +1,9 @@
+use serde::Deserialize;
 use std::sync::Arc;
 use tauri::State;
-use serde::Deserialize;
 
-use crate::storage::{Database, Server, AuthType};
 use crate::storage::database::Group;
+use crate::storage::{AuthType, Database, Server};
 
 /// Server input from frontend (without auto-generated fields)
 /// Frontend sends snake_case field names (auth_type, credential_id, etc.)
@@ -13,16 +13,22 @@ pub struct ServerInput {
     pub host: String,
     pub port: u16,
     pub username: String,
+    #[serde(alias = "authType")]
     pub auth_type: String,
+    #[serde(alias = "credentialId")]
     pub credential_id: Option<String>,
+    #[serde(alias = "groupId")]
     pub group_id: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
+    #[serde(alias = "jumpHostId")]
     pub jump_host_id: Option<String>,
     #[serde(default)]
+    #[serde(alias = "postLoginCommand")]
     pub post_login_command: Option<String>,
     #[serde(default)]
+    #[serde(alias = "agentForwarding")]
     pub agent_forwarding: bool,
 }
 
@@ -83,12 +89,18 @@ pub struct ServerUpdateInput {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub username: Option<String>,
+    #[serde(alias = "authType")]
     pub auth_type: Option<String>,
+    #[serde(alias = "credentialId")]
     pub credential_id: Option<String>,
+    #[serde(alias = "groupId")]
     pub group_id: Option<String>,
     pub tags: Option<Vec<String>>,
+    #[serde(alias = "jumpHostId")]
     pub jump_host_id: Option<String>,
+    #[serde(alias = "postLoginCommand")]
     pub post_login_command: Option<String>,
+    #[serde(alias = "agentForwarding")]
     pub agent_forwarding: Option<bool>,
 }
 
@@ -99,7 +111,8 @@ pub fn update_server(
     id: String,
     updates: ServerUpdateInput,
 ) -> Result<(), String> {
-    let existing = db.server_get(&id)
+    let existing = db
+        .server_get(&id)
         .map_err(|e| format!("Failed to get server: {}", e))?
         .ok_or_else(|| "Server not found".to_string())?;
 
@@ -109,15 +122,36 @@ pub fn update_server(
         host: updates.host.unwrap_or(existing.host),
         port: updates.port.unwrap_or(existing.port),
         username: updates.username.unwrap_or(existing.username),
-        auth_type: updates.auth_type.map(|a| string_to_auth_type(&a)).unwrap_or(existing.auth_type),
-        credential_id: if updates.credential_id.is_some() { updates.credential_id } else { existing.credential_id },
-        group_id: if updates.group_id.is_some() { updates.group_id } else { existing.group_id },
+        auth_type: updates
+            .auth_type
+            .map(|a| string_to_auth_type(&a))
+            .unwrap_or(existing.auth_type),
+        credential_id: if updates.credential_id.is_some() {
+            updates.credential_id
+        } else {
+            existing.credential_id
+        },
+        group_id: if updates.group_id.is_some() {
+            updates.group_id
+        } else {
+            existing.group_id
+        },
         tags: updates.tags.unwrap_or(existing.tags),
         created_at: existing.created_at,
         updated_at: 0,
-        jump_host_id: if updates.jump_host_id.is_some() { updates.jump_host_id } else { existing.jump_host_id },
-        post_login_command: if updates.post_login_command.is_some() { updates.post_login_command } else { existing.post_login_command },
-        agent_forwarding: updates.agent_forwarding.unwrap_or(existing.agent_forwarding),
+        jump_host_id: if updates.jump_host_id.is_some() {
+            updates.jump_host_id
+        } else {
+            existing.jump_host_id
+        },
+        post_login_command: if updates.post_login_command.is_some() {
+            updates.post_login_command
+        } else {
+            existing.post_login_command
+        },
+        agent_forwarding: updates
+            .agent_forwarding
+            .unwrap_or(existing.agent_forwarding),
     };
 
     db.server_update(&updated_server)
@@ -213,4 +247,40 @@ pub fn delete_credential(
 ) -> Result<(), String> {
     db.credential_delete(&request.server_name)
         .map_err(|e| format!("Failed to delete credentials: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ServerInput;
+    use serde_json::json;
+
+    #[test]
+    fn server_input_deserializes_snake_case_auth_type() {
+        let value = json!({
+            "name": "prod-1",
+            "host": "10.0.0.1",
+            "port": 22,
+            "username": "root",
+            "auth_type": "password"
+        });
+
+        let parsed: ServerInput =
+            serde_json::from_value(value).expect("snake_case should deserialize");
+        assert_eq!(parsed.auth_type, "password");
+    }
+
+    #[test]
+    fn server_input_deserializes_camel_case_auth_type() {
+        let value = json!({
+            "name": "prod-1",
+            "host": "10.0.0.1",
+            "port": 22,
+            "username": "root",
+            "authType": "password"
+        });
+
+        let parsed: ServerInput =
+            serde_json::from_value(value).expect("camelCase should deserialize");
+        assert_eq!(parsed.auth_type, "password");
+    }
 }

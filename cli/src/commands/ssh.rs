@@ -79,6 +79,10 @@ pub fn connect(server_name: &str, command: &[String], wait: bool, force_new: boo
         alias
     );
     eprintln!(
+        "    vshell ssh-session {} --command-file ./remote-command.sh",
+        alias
+    );
+    eprintln!(
         "    vshell sftp --session {}            # Open SFTP file browser",
         session_id
     );
@@ -177,7 +181,10 @@ fn run_isolated_command(
     if output_looks_interactive(&output) {
         eprintln!();
         eprintln!("Interactive input may be required. Send a response:");
-        eprintln!("  vshell send-key {} y enter   # send 'y' then Enter", alias);
+        eprintln!(
+            "  vshell send-key {} y enter   # send 'y' then Enter",
+            alias
+        );
         eprintln!("  vshell send-key {} enter      # press Enter", alias);
         eprintln!(
             "  vshell ssh-session {}          # attach interactively",
@@ -193,6 +200,10 @@ fn run_isolated_command(
         let _ = session_alias::remove_by_session_id(session_id);
     } else {
         eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
+        eprintln!(
+            "If your local shell mangles quotes, use: vshell ssh-session {} --command-file ./remote-command.sh",
+            alias
+        );
     }
 
     Ok(())
@@ -225,12 +236,7 @@ mod tests {
     use super::pick_reusable_session;
     use vibeshell_core::ipc::IpcSessionInfo;
 
-    fn session(
-        id: &str,
-        server_name: &str,
-        state: &str,
-        created_at: i64,
-    ) -> IpcSessionInfo {
+    fn session(id: &str, server_name: &str, state: &str, created_at: i64) -> IpcSessionInfo {
         IpcSessionInfo {
             id: id.to_string(),
             server_id: format!("server-{server_name}"),
@@ -270,10 +276,14 @@ mod tests {
     fn output_looks_interactive_detects_common_prompts() {
         use super::output_looks_interactive;
         assert!(output_looks_interactive("Do you want to continue? [Y/n] "));
-        assert!(output_looks_interactive("Are you sure you want to proceed?"));
+        assert!(output_looks_interactive(
+            "Are you sure you want to proceed?"
+        ));
         assert!(output_looks_interactive("Enter password: "));
         assert!(output_looks_interactive("Press ENTER to continue"));
-        assert!(!output_looks_interactive("total 42\ndrwxr-xr-x 2 root root"));
+        assert!(!output_looks_interactive(
+            "total 42\ndrwxr-xr-x 2 root root"
+        ));
         assert!(!output_looks_interactive("Linux hostname 5.15.0"));
     }
 }

@@ -85,10 +85,19 @@ tarpaulin-report.html
 # Local scripts & temp files
 # ============================================
 *.bat
+*.cmd
 *.tmp
 *.temp
 *.bak
 *.orig
+
+# Local installer artifacts
+*.msi
+*.dmg
+*.deb
+*.rpm
+*.AppImage
+*-setup.exe
 
 # ============================================
 # Package manager caches

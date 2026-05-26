@@ -4,6 +4,7 @@
 //! sessions and SFTP workflows. The service can run inside the UI or
 //! as a headless daemon started by the CLI.
 
+mod command_input;
 mod commands;
 mod daemon;
 mod ipc_support;
@@ -14,6 +15,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
+use command_input::CommandInputArgs;
+use commands::file_tools::ContentInputArgs;
 
 #[derive(Parser)]
 #[command(name = "vshell")]
@@ -27,11 +30,14 @@ use clap::{Args, Parser, Subcommand};
     Commands talk to a local VibeShell IPC service. If the UI is not open,\n\
     `vshell` can start a headless daemon automatically for SSH/SFTP/session commands.\n\
     By default, `vshell ssh <server>` reuses the earliest active session for that server.\n\
-    Pass `--new` only when you explicitly need a fresh SSH session.\n\n\
+    Pass `--new` only when you explicitly need a fresh SSH session.\n\
+    If your local shell mangles nested quotes, prefer `--command-file` or `--command-stdin`\n\
+    instead of stacking more escaping.\n\n\
     Examples:\n\
       vshell ssh prod-web\n\
       vshell ssh prod-web --new\n\
       vshell ssh prod-web -- uname -a\n\
+      vshell ssh prod-web --command-file .\\remote-command.sh\n\
       vshell ssh-session 001 -- journalctl -u nginx -n 200\n\
       vshell sftp prod-web ls /var/www\n\
       vshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
@@ -56,11 +62,14 @@ enum Commands {
         If no IPC service is running, VibeShell starts a headless daemon automatically.\n\
         By default, this command reuses the earliest active session for the same server.\n\
         Pass `--new` to force creation of a fresh session.\n\
+        For heavily quoted commands, use `--command-file <path>` or pipe the command into\n\
+        `--command-stdin` to bypass local shell parsing.\n\
         The target server must already exist in the VibeShell database.\n\n\
         Examples:\n\
           vshell ssh prod-web\n\
           vshell ssh prod-web --new\n\
           vshell ssh prod-web -- hostname\n\
+          vshell ssh prod-web --command-file .\\remote-command.sh\n\
           vshell ssh prod-web -- systemctl status nginx"
     )]
     Ssh(SshArgs),
@@ -73,10 +82,12 @@ enum Commands {
         and a 3-digit alias (e.g. 001) is assigned automatically. Use `--new` on the original\n\
         `vshell ssh` command only when you need another parallel session.\n\
         Use this command to reattach or run commands on that\n\
-        session without needing the full UUID.\n\n\
+        session without needing the full UUID. When nested quoting gets messy,\n\
+        prefer `--command-file` or `--command-stdin`.\n\n\
         Examples:\n\
           vshell ssh-session 001                    # Reattach interactively\n\
           vshell ssh-session 001 -- uname -a        # Execute a single command\n\
+          vshell ssh-session 001 --command-file .\\remote-command.sh\n\
           vshell ssh-session 001 -- tail -f app.log # Stream remote output"
     )]
     SshSession(SshSessionArgs),
@@ -87,14 +98,68 @@ enum Commands {
         You can either run a single SFTP command directly:\n\
           vshell sftp prod-web ls /var/www\n\
           vshell sftp prod-web get /remote/file ./local-file\n\
-          vshell sftp prod-web put ./local-file /remote/file\n\n\
+          vshell sftp prod-web put ./local-file /remote/file\n\
+          vshell sftp prod-web put ./local-folder /remote/parent\n\
+          vshell sftp prod-web sync ./dist /var/www --delete\n\n\
         Or start the interactive prompt:\n\
           vshell sftp prod-web\n\n\
         Supported commands inside the prompt or direct mode:\n\
           pwd, ls [path], cd <path>, get <remote> [local], put <local> [remote],\n\
+          sync <local-dir> [remote-dir] [--delete] [--exclude <pattern>] [--no-gitignore],\n\
           cat <path>, mkdir <path>, rm <path>, mv <old> <new>, help, quit"
     )]
     Sftp(SftpArgs),
+
+    /// Search remote files with rg-style output
+    #[command(
+        alias = "search",
+        long_about = "Search remote files using ripgrep when available, with grep fallback.\n\n\
+        The target is a configured server name by default. Add --session when the target is\n\
+        an existing session alias or UUID.\n\n\
+        Examples:\n\
+          vshell rg prod-web TODO /srv/app\n\
+          vshell rg prod-web \"listen 80\" /etc/nginx -i\n\
+          vshell rg --session 001 TODO /srv/app --glob \"*.rs\""
+    )]
+    Rg(RgArgs),
+
+    /// Read a remote text file
+    #[command(
+        alias = "read-file",
+        alias = "cat-file",
+        long_about = "Read a remote text file through SFTP.\n\n\
+        The target is a configured server name by default. Add --session when the target is\n\
+        an existing session alias or UUID.\n\n\
+        Examples:\n\
+          vshell get-content prod-web /etc/nginx/nginx.conf\n\
+          vshell get-content --session 001 /var/log/app.log --max-bytes 200000"
+    )]
+    GetContent(GetContentArgs),
+
+    /// Create a remote text file
+    #[command(
+        alias = "new-file",
+        long_about = "Create a remote text file through SFTP. Fails if the file exists unless\n\
+        --overwrite is passed.\n\n\
+        Examples:\n\
+          vshell add-file prod-web /tmp/hello.txt --content \"hello\\n\"\n\
+          Get-Content .\\config.yml | vshell add-file prod-web /tmp/config.yml --content-stdin\n\
+          vshell add-file --session 001 /opt/app/.env --content-file .\\.env --parents"
+    )]
+    AddFile(AddFileArgs),
+
+    /// Edit a remote text file
+    #[command(
+        alias = "write-file",
+        alias = "set-content",
+        long_about = "Edit an existing remote text file through SFTP. Use a content source for a\n\
+        full-file replacement, or use --replace/--with for exact text replacement.\n\n\
+        Examples:\n\
+          vshell edit-file prod-web /tmp/config.yml --content-file .\\config.yml\n\
+          vshell edit-file --session 001 /etc/app.conf --replace \"debug=false\" --with \"debug=true\"\n\
+          Get-Content .\\app.conf | vshell edit-file prod-web /etc/app.conf --content-stdin"
+    )]
+    EditFile(EditFileArgs),
 
     /// List all configured servers
     #[command(alias = "server-list")]
@@ -161,9 +226,8 @@ struct SshArgs {
     #[arg(long)]
     new: bool,
 
-    /// Run a single remote command instead of opening an interactive shell
-    #[arg(last = true)]
-    command: Vec<String>,
+    #[command(flatten)]
+    command_input: CommandInputArgs,
 }
 
 #[derive(Args)]
@@ -171,9 +235,8 @@ struct SshSessionArgs {
     /// Session alias ID (e.g. 001, 002)
     alias: String,
 
-    /// Command to execute on the session (omit for interactive mode)
-    #[arg(last = true)]
-    command: Vec<String>,
+    #[command(flatten)]
+    command_input: CommandInputArgs,
 }
 
 #[derive(Args)]
@@ -187,9 +250,8 @@ struct ExecArgs {
     /// Session ID to execute the command on
     session_id: String,
 
-    /// Command to execute
-    #[arg(last = true)]
-    command: Vec<String>,
+    #[command(flatten)]
+    command_input: CommandInputArgs,
 }
 
 #[derive(Args)]
@@ -208,13 +270,110 @@ struct SftpArgs {
     #[arg(required_unless_present = "session")]
     server: Option<String>,
 
-    /// Attach to an existing session by ID instead of creating a new one
+    /// Attach to an existing session by alias or ID instead of creating a new one
     #[arg(long)]
     session: Option<String>,
 
     /// Run a single SFTP operation directly instead of entering the interactive prompt
     #[arg(trailing_var_arg = true)]
     args: Vec<String>,
+}
+
+#[derive(Args)]
+struct RemotePathArgs {
+    /// Treat target as an existing session alias/UUID instead of a server name
+    #[arg(long)]
+    session: bool,
+
+    /// Server name, or session alias/UUID when --session is set
+    target: String,
+
+    /// Remote file path
+    path: String,
+}
+
+#[derive(Args)]
+struct GetContentArgs {
+    #[command(flatten)]
+    remote: RemotePathArgs,
+
+    /// Maximum bytes to read before truncating output
+    #[arg(long = "max-bytes", default_value_t = 1_048_576)]
+    max_bytes: u64,
+}
+
+#[derive(Args)]
+struct AddFileArgs {
+    #[command(flatten)]
+    remote: RemotePathArgs,
+
+    #[command(flatten)]
+    content: ContentInputArgs,
+
+    /// Replace the file if it already exists
+    #[arg(long)]
+    overwrite: bool,
+
+    /// Create parent directories if needed
+    #[arg(long)]
+    parents: bool,
+}
+
+#[derive(Args)]
+struct EditFileArgs {
+    #[command(flatten)]
+    remote: RemotePathArgs,
+
+    #[command(flatten)]
+    content: ContentInputArgs,
+
+    /// Exact text to replace in the remote file
+    #[arg(long = "replace")]
+    replace: Option<String>,
+
+    /// Replacement text used with --replace
+    #[arg(long = "with")]
+    with_text: Option<String>,
+
+    /// Replace every occurrence instead of only the first
+    #[arg(long)]
+    all: bool,
+}
+
+#[derive(Args)]
+struct RgArgs {
+    /// Treat target as an existing session alias/UUID instead of a server name
+    #[arg(long)]
+    session: bool,
+
+    /// Server name, or session alias/UUID when --session is set
+    target: String,
+
+    /// Pattern to search for
+    pattern: String,
+
+    /// Remote directory or file to search
+    path: Option<String>,
+
+    /// Case-insensitive search
+    #[arg(short = 'i', long = "ignore-case")]
+    ignore_case: bool,
+
+    /// Treat the pattern as a literal string
+    #[arg(short = 'F', long = "fixed-strings")]
+    fixed_strings: bool,
+
+    /// Include hidden files when ripgrep is available
+    #[arg(long)]
+    hidden: bool,
+
+    /// Include/exclude paths with rg-style glob patterns
+    #[arg(short = 'g', long = "glob")]
+    globs: Vec<String>,
+
+    /// Maximum output lines to print
+    #[arg(long = "max-results", default_value_t = 200)]
+    max_results: usize,
 }
 
 #[derive(Args)]
@@ -275,14 +434,58 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Ssh(args)) => {
-            commands::ssh::connect(&args.server, &args.command, args.wait, args.new)
+            let command = args.command_input.resolve()?;
+            commands::ssh::connect(&args.server, &command, args.wait, args.new)
         }
         Some(Commands::SshSession(args)) => {
-            commands::session::ssh_session(&args.alias, &args.command)
+            let command = args.command_input.resolve()?;
+            commands::session::ssh_session(&args.alias, &command)
         }
         Some(Commands::Sftp(args)) => {
-            commands::sftp::connect(args.server.as_deref(), args.session.as_deref(), &args.args)
+            let resolved_session = args
+                .session
+                .as_ref()
+                .map(|id| session_alias::resolve(id).unwrap_or_else(|| id.clone()));
+            commands::sftp::connect(
+                args.server.as_deref(),
+                resolved_session.as_deref(),
+                &args.args,
+            )
         }
+        Some(Commands::Rg(args)) => commands::file_tools::rg(
+            &args.target,
+            args.session,
+            &args.pattern,
+            args.path.as_deref(),
+            args.ignore_case,
+            args.fixed_strings,
+            args.hidden,
+            args.globs,
+            args.max_results,
+        ),
+        Some(Commands::GetContent(args)) => commands::file_tools::get_content(
+            &args.remote.target,
+            args.remote.session,
+            &args.remote.path,
+            args.max_bytes,
+        ),
+        Some(Commands::AddFile(args)) => commands::file_tools::add_file(
+            &args.remote.target,
+            args.remote.session,
+            &args.remote.path,
+            &args.content,
+            args.overwrite,
+            args.parents,
+        ),
+        Some(Commands::EditFile(args)) => commands::file_tools::edit_file(
+            &args.remote.target,
+            args.remote.session,
+            &args.remote.path,
+            &args.content,
+            args.replace.as_deref(),
+            args.with_text.as_deref(),
+            args.all,
+        ),
         Some(Commands::Servers) => commands::server::list(),
         Some(Commands::Sessions) => commands::session::list(),
         Some(Commands::Attach(args)) => {
@@ -291,18 +494,21 @@ fn main() -> Result<()> {
             commands::session::attach(&resolved)
         }
         Some(Commands::Exec(args)) => {
-            if args.command.is_empty() {
+            let command = args.command_input.resolve()?;
+            if command.is_empty() {
                 eprintln!("Error: Please specify a command to execute.");
                 eprintln!("Usage: vshell exec <session-id> -- <command>");
+                eprintln!("   or: vshell exec <session-id> --command-file <path>");
+                eprintln!("   or: <command> | vshell exec <session-id> --command-stdin");
                 std::process::exit(1);
             }
             let resolved =
                 session_alias::resolve(&args.session_id).unwrap_or_else(|| args.session_id.clone());
-            commands::session::exec(&resolved, &args.command)
+            commands::session::exec(&resolved, &command)
         }
         Some(Commands::SendKey(args)) => {
-            let resolved = session_alias::resolve(&args.session_id)
-                .unwrap_or_else(|| args.session_id.clone());
+            let resolved =
+                session_alias::resolve(&args.session_id).unwrap_or_else(|| args.session_id.clone());
             commands::session::send_key(&resolved, &args.keys)
         }
         Some(Commands::Kill(args)) => {
@@ -415,6 +621,30 @@ mod tests {
     }
 
     #[test]
+    fn parses_ssh_command_file() {
+        let parsed = Cli::try_parse_from([
+            "vshell",
+            "ssh",
+            "example",
+            "--command-file",
+            ".\\remote-command.sh",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "vshell ssh <server> --command-file <path> should parse"
+        );
+    }
+
+    #[test]
+    fn parses_ssh_command_stdin() {
+        let parsed = Cli::try_parse_from(["vshell", "ssh", "example", "--command-stdin"]);
+        assert!(
+            parsed.is_ok(),
+            "vshell ssh <server> --command-stdin should parse"
+        );
+    }
+
+    #[test]
     fn parses_ssh_with_new_flag() {
         let parsed = Cli::try_parse_from(["vshell", "ssh", "example", "--new"]);
         assert!(parsed.is_ok(), "vshell ssh <server> --new should parse");
@@ -436,11 +666,96 @@ mod tests {
     }
 
     #[test]
+    fn parses_rg_command() {
+        let parsed = Cli::try_parse_from([
+            "vshell",
+            "rg",
+            "example",
+            "TODO",
+            "/srv/app",
+            "--glob",
+            "*.rs",
+            "--max-results",
+            "50",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "vshell rg <server> <pattern> [path] should parse"
+        );
+    }
+
+    #[test]
+    fn parses_get_content_command() {
+        let parsed = Cli::try_parse_from([
+            "vshell",
+            "get-content",
+            "--session",
+            "001",
+            "/etc/nginx/nginx.conf",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "vshell get-content --session <id> <path> should parse"
+        );
+    }
+
+    #[test]
+    fn parses_add_file_command() {
+        let parsed = Cli::try_parse_from([
+            "vshell",
+            "add-file",
+            "example",
+            "/tmp/payload.txt",
+            "--content",
+            "payload",
+            "--parents",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "vshell add-file <server> <path> --content <text> should parse"
+        );
+    }
+
+    #[test]
+    fn parses_edit_file_replace_command() {
+        let parsed = Cli::try_parse_from([
+            "vshell",
+            "edit-file",
+            "example",
+            "/tmp/payload.txt",
+            "--replace",
+            "old",
+            "--with",
+            "new",
+            "--all",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "vshell edit-file <server> <path> --replace <old> --with <new> should parse"
+        );
+    }
+
+    #[test]
     fn parses_exec_command() {
         let parsed = Cli::try_parse_from(["vshell", "exec", "abc-123", "--", "hostname"]);
         assert!(
             parsed.is_ok(),
             "vshell exec <session-id> -- <command> should parse"
+        );
+    }
+
+    #[test]
+    fn parses_exec_command_file() {
+        let parsed = Cli::try_parse_from([
+            "vshell",
+            "exec",
+            "abc-123",
+            "--command-file",
+            ".\\remote-command.sh",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "vshell exec <session-id> --command-file <path> should parse"
         );
     }
 
@@ -456,6 +771,15 @@ mod tests {
         assert!(
             parsed.is_ok(),
             "vshell ssh-session <alias> -- <cmd> should parse"
+        );
+    }
+
+    #[test]
+    fn parses_ssh_session_command_stdin() {
+        let parsed = Cli::try_parse_from(["vshell", "ssh-session", "001", "--command-stdin"]);
+        assert!(
+            parsed.is_ok(),
+            "vshell ssh-session <alias> --command-stdin should parse"
         );
     }
 

@@ -1,10 +1,8 @@
 pub mod client;
 pub mod fingerprint;
 
-pub use client::{SshClient, PtyConfig, ServerKeyInfo, ClientHandler};
+pub use client::{ClientHandler, PtyConfig, ServerKeyInfo, SshClient};
 pub use fingerprint::{
-    FingerprintStore,
+    extract_fingerprint_from_key, FingerprintStore, FingerprintVerificationResult,
     StoredFingerprint,
-    FingerprintVerificationResult,
-    extract_fingerprint_from_key,
 };

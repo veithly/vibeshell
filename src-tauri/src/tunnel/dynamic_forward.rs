@@ -1,8 +1,8 @@
 use anyhow::Result;
-use log::{info, warn, error, debug};
+use log::{debug, error, info, warn};
 use russh::*;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -103,7 +103,10 @@ async fn handle_socks5_connection(
     stream.read_exact(&mut header).await?;
 
     if header[0] != SOCKS5_VERSION {
-        return Err(anyhow::anyhow!("Not a SOCKS5 request (version: {})", header[0]));
+        return Err(anyhow::anyhow!(
+            "Not a SOCKS5 request (version: {})",
+            header[0]
+        ));
     }
 
     let nmethods = header[1] as usize;
@@ -118,7 +121,9 @@ async fn handle_socks5_connection(
     }
 
     // Send auth response: no auth required
-    stream.write_all(&[SOCKS5_VERSION, SOCKS5_AUTH_NONE]).await?;
+    stream
+        .write_all(&[SOCKS5_VERSION, SOCKS5_AUTH_NONE])
+        .await?;
 
     // === SOCKS5 Request Phase ===
     // Read: version, cmd, reserved, addr_type
@@ -172,12 +177,16 @@ async fn handle_socks5_connection(
     stream.read_exact(&mut port_bytes).await?;
     let dest_port = u16::from_be_bytes(port_bytes);
 
-    debug!("[Tunnel:SOCKS5] CONNECT {}:{} from {}", dest_host, dest_port, peer_addr);
+    debug!(
+        "[Tunnel:SOCKS5] CONNECT {}:{} from {}",
+        dest_host, dest_port, peer_addr
+    );
 
     // Open direct-tcpip channel to the target
     let channel_result = {
         let handle_guard = ssh_handle.lock().await;
-        let handle = handle_guard.as_ref()
+        let handle = handle_guard
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SSH session not available"))?;
         handle
             .channel_open_direct_tcpip(&dest_host, dest_port as u32, peer_addr, 0)
@@ -193,7 +202,10 @@ async fn handle_socks5_connection(
             bridge_socks5(stream, channel, stats).await?;
         }
         Err(e) => {
-            warn!("[Tunnel:SOCKS5] Failed to open channel to {}:{}: {}", dest_host, dest_port, e);
+            warn!(
+                "[Tunnel:SOCKS5] Failed to open channel to {}:{}: {}",
+                dest_host, dest_port, e
+            );
             send_socks5_reply(&mut stream, SOCKS5_REPLY_GENERAL_FAILURE).await?;
         }
     }
@@ -201,18 +213,19 @@ async fn handle_socks5_connection(
     Ok(())
 }
 
-async fn send_socks5_reply(
-    stream: &mut tokio::net::TcpStream,
-    reply: u8,
-) -> Result<()> {
+async fn send_socks5_reply(stream: &mut tokio::net::TcpStream, reply: u8) -> Result<()> {
     // Send reply: version, reply, reserved, addr_type=IPv4, bind_addr=0.0.0.0, bind_port=0
     let response = [
         SOCKS5_VERSION,
         reply,
         0x00, // reserved
         SOCKS5_ADDR_IPV4,
-        0, 0, 0, 0, // bind address
-        0, 0, // bind port
+        0,
+        0,
+        0,
+        0, // bind address
+        0,
+        0, // bind port
     ];
     stream.write_all(&response).await?;
     Ok(())
@@ -280,8 +293,12 @@ async fn bridge_socks5(
     done_rx.recv().await;
 
     // Update aggregate stats
-    stats.bytes_in.fetch_add(bytes_in.load(Ordering::Relaxed), Ordering::Relaxed);
-    stats.bytes_out.fetch_add(bytes_out.load(Ordering::Relaxed), Ordering::Relaxed);
+    stats
+        .bytes_in
+        .fetch_add(bytes_in.load(Ordering::Relaxed), Ordering::Relaxed);
+    stats
+        .bytes_out
+        .fetch_add(bytes_out.load(Ordering::Relaxed), Ordering::Relaxed);
 
     tcp_to_ssh.abort();
     ssh_to_tcp.abort();

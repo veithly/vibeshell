@@ -10,8 +10,14 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::po
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::remote_tools::{build_remote_rg_command, RemoteSearchOptions};
 use crate::session::SessionManager;
-use crate::sftp::helpers::{resolve_remote_path, sftp_mkdir_recursive, sftp_remove_recursive};
+use crate::sftp::helpers::{
+    resolve_remote_path, resolve_remote_upload_path, sftp_mkdir_recursive, sftp_remove_recursive,
+};
+use crate::sftp::{
+    effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
+};
 use crate::storage::models::{AuthType, Server};
 use crate::storage::Database;
 
@@ -263,16 +269,26 @@ async fn execute_tool(state: &McpState, name: &str, args: &Value) -> Result<Stri
 
         // Command Execution
         "exec" => tool_exec(state, args).await,
+        "rg" => tool_remote_rg(state, args).await,
 
         // SFTP Operations
         "sftp_ls" => tool_sftp_ls(state, args).await,
         "sftp_upload" => tool_sftp_upload(state, args).await,
+        "sftp_upload_directory" => {
+            tool_sftp_upload_directory(state, args, DirectoryTransferMode::Upload).await
+        }
+        "sftp_sync_directory" => {
+            tool_sftp_upload_directory(state, args, DirectoryTransferMode::Sync).await
+        }
         "sftp_download" => tool_sftp_download(state, args).await,
         "sftp_mkdir" => tool_sftp_mkdir(state, args).await,
         "sftp_rm" => tool_sftp_rm(state, args).await,
         "sftp_mv" => tool_sftp_mv(state, args).await,
         "sftp_read" => tool_sftp_read(state, args).await,
         "sftp_write" => tool_sftp_write(state, args).await,
+        "get_content" => tool_sftp_read(state, args).await,
+        "edit_file" => tool_edit_file(state, args).await,
+        "add_file" => tool_add_file(state, args).await,
 
         _ => Err(format!("Unknown tool: {}", name)),
     }
@@ -600,6 +616,68 @@ async fn tool_exec(state: &McpState, args: &Value) -> Result<String, String> {
     Ok(result)
 }
 
+async fn tool_remote_rg(state: &McpState, args: &Value) -> Result<String, String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: session_id")?;
+
+    let pattern = args
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: pattern")?;
+
+    let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+    let timeout_ms = args
+        .get("timeout_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(30000);
+    let max_results = args
+        .get("max_results")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(200) as usize;
+
+    let globs = args
+        .get("globs")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut options = RemoteSearchOptions::new(pattern, path);
+    options.ignore_case = args
+        .get("ignore_case")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    options.fixed_strings = args
+        .get("fixed_strings")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    options.hidden = args
+        .get("hidden")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    options.globs = globs;
+    options.max_results = max_results;
+
+    let command = build_remote_rg_command(&options);
+    let session = state
+        .session_manager
+        .get(session_id)
+        .await
+        .ok_or("Session not found")?;
+
+    let timeout_duration = tokio::time::Duration::from_millis(timeout_ms);
+    tokio::time::timeout(timeout_duration, session.exec_command(&command))
+        .await
+        .map_err(|_| format!("Command timed out after {}ms", timeout_ms))?
+        .map_err(|e| format!("Command execution failed: {}", e))
+}
+
 // === SFTP Tool Implementations ===
 
 /// Open a fresh SFTP session for the given session_id.
@@ -748,6 +826,12 @@ async fn tool_sftp_upload(state: &McpState, args: &Value) -> Result<String, Stri
 
     let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
     let resolved_remote = resolve_remote_path(remote_path, &home_dir, &home_dir);
+    let filename = std::path::Path::new(local_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let resolved_remote = resolve_remote_upload_path(&sftp, &resolved_remote, &filename).await;
 
     sftp.write(&resolved_remote, &content)
         .await
@@ -756,6 +840,69 @@ async fn tool_sftp_upload(state: &McpState, args: &Value) -> Result<String, Stri
     Ok(format!(
         "Uploaded '{}' -> '{}' ({} bytes)",
         local_path, resolved_remote, file_size
+    ))
+}
+
+async fn tool_sftp_upload_directory(
+    state: &McpState,
+    args: &Value,
+    mode: DirectoryTransferMode,
+) -> Result<String, String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: session_id")?;
+
+    let local_path = args
+        .get("local_path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: local_path")?;
+
+    let remote_path = args
+        .get("remote_path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: remote_path")?;
+
+    let delete_extra = args
+        .get("delete_extra")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let respect_gitignore = args.get("respect_gitignore").and_then(|v| v.as_bool());
+    let excluded_paths = args.get("excluded_paths").and_then(|value| {
+        value.as_array().map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(|text| text.to_string()))
+                .collect::<Vec<_>>()
+        })
+    });
+
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_remote = resolve_remote_path(remote_path, &home_dir, &home_dir);
+    let options =
+        effective_directory_transfer_options(excluded_paths, respect_gitignore, delete_extra);
+    let summary = transfer_directory_to_sftp(
+        &sftp,
+        std::path::Path::new(local_path),
+        &resolved_remote,
+        mode,
+        &options,
+    )
+    .await?;
+
+    Ok(format!(
+        "{} '{}' -> '{}' ({} uploaded, {} skipped, {} deleted, {} bytes)",
+        if summary.mode == "sync" {
+            "Synced"
+        } else {
+            "Uploaded"
+        },
+        summary.local_root,
+        summary.remote_root,
+        summary.uploaded_files,
+        summary.skipped_files,
+        summary.deleted_entries,
+        summary.transferred_bytes
     ))
 }
 
@@ -987,6 +1134,185 @@ async fn tool_sftp_write(state: &McpState, args: &Value) -> Result<String, Strin
         content.len(),
         resolved_path
     ))
+}
+
+async fn tool_add_file(state: &McpState, args: &Value) -> Result<String, String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: session_id")?;
+
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: path")?;
+
+    let content = args
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: content")?;
+
+    let overwrite = args
+        .get("overwrite")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let parents = args
+        .get("parents")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
+
+    if !overwrite && sftp.metadata(&resolved_path).await.is_ok() {
+        return Err(format!(
+            "Remote path already exists: {}. Set overwrite=true to replace it.",
+            resolved_path
+        ));
+    }
+
+    if parents {
+        if let Some(parent) = remote_parent_path(&resolved_path) {
+            sftp_mkdir_recursive(&sftp, &parent).await?;
+        }
+    }
+
+    sftp.write(&resolved_path, content.as_bytes())
+        .await
+        .map_err(|e| format!("Failed to write '{}': {}", resolved_path, e))?;
+
+    Ok(format!(
+        "Added {} bytes to '{}'",
+        content.len(),
+        resolved_path
+    ))
+}
+
+async fn tool_edit_file(state: &McpState, args: &Value) -> Result<String, String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: session_id")?;
+
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required field: path")?;
+
+    let content = args.get("content").and_then(|v| v.as_str());
+    let old_text = args.get("old_text").and_then(|v| v.as_str());
+    let new_text = args.get("new_text").and_then(|v| v.as_str());
+    let replace_all = args
+        .get("replace_all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let replace_mode = old_text.is_some() || new_text.is_some();
+    if content.is_some() && replace_mode {
+        return Err("Use either content or old_text/new_text, not both".to_string());
+    }
+
+    let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
+    let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
+
+    let metadata = sftp
+        .metadata(&resolved_path)
+        .await
+        .map_err(|e| format!("Remote file does not exist '{}': {}", resolved_path, e))?;
+    if metadata.is_dir() {
+        return Err(format!(
+            "Remote path is a directory, not a file: {}",
+            resolved_path
+        ));
+    }
+
+    if let Some(content) = content {
+        sftp.write(&resolved_path, content.as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write '{}': {}", resolved_path, e))?;
+        return Ok(format!(
+            "Edited '{}' ({} bytes)",
+            resolved_path,
+            content.len()
+        ));
+    }
+
+    let old_text = old_text.ok_or("Missing content or old_text/new_text")?;
+    let new_text = new_text.ok_or("Missing required field: new_text")?;
+
+    const MAX_EDIT_BYTES: u64 = 10 * 1024 * 1024;
+    if metadata.len() > MAX_EDIT_BYTES {
+        return Err(format!(
+            "Refusing to edit '{}' because it is {} bytes (max: {} bytes)",
+            resolved_path,
+            metadata.len(),
+            MAX_EDIT_BYTES
+        ));
+    }
+
+    let bytes = sftp
+        .read(&resolved_path)
+        .await
+        .map_err(|e| format!("Failed to read '{}': {}", resolved_path, e))?;
+    let current = String::from_utf8(bytes).map_err(|_| {
+        format!(
+            "File '{}' contains non-UTF-8 binary content. Use sftp_download/upload instead.",
+            resolved_path
+        )
+    })?;
+
+    let (updated, replacements) = replace_text(&current, old_text, new_text, replace_all)?;
+    sftp.write(&resolved_path, updated.as_bytes())
+        .await
+        .map_err(|e| format!("Failed to write '{}': {}", resolved_path, e))?;
+
+    Ok(format!(
+        "Edited '{}' ({} replacement(s))",
+        resolved_path, replacements
+    ))
+}
+
+fn replace_text(
+    content: &str,
+    old_text: &str,
+    new_text: &str,
+    replace_all: bool,
+) -> Result<(String, usize), String> {
+    if old_text.is_empty() {
+        return Err("old_text cannot be empty".to_string());
+    }
+
+    if replace_all {
+        let replacements = content.matches(old_text).count();
+        if replacements == 0 {
+            return Err("old_text was not found".to_string());
+        }
+        return Ok((content.replace(old_text, new_text), replacements));
+    }
+
+    let Some(index) = content.find(old_text) else {
+        return Err("old_text was not found".to_string());
+    };
+
+    let mut updated = String::with_capacity(content.len() - old_text.len() + new_text.len());
+    updated.push_str(&content[..index]);
+    updated.push_str(new_text);
+    updated.push_str(&content[index + old_text.len()..]);
+    Ok((updated, 1))
+}
+
+fn remote_parent_path(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "/" {
+        return None;
+    }
+
+    let index = trimmed.rfind('/')?;
+    if index == 0 {
+        Some("/".to_string())
+    } else {
+        Some(trimmed[..index].to_string())
+    }
 }
 
 #[cfg(test)]

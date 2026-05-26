@@ -153,6 +153,13 @@
     "showNetworkRates": "显示网络速率",
     "showNetworkRatesDesc": "显示网络传输速率而非总字节数",
 
+    "fileTransfer": "文件传输",
+    "fileTransferDesc": "配置递归 SFTP 上传和同步行为。",
+    "respectGitignore": "遵循 .gitignore",
+    "respectGitignoreDesc": "应用上传目录及其子目录中的 .gitignore 规则。",
+    "uploadExcludePatterns": "上传排除规则",
+    "uploadExcludePatternsDesc": "每行一个规则。VibeShell 和 vshell 的目录上传/同步都会使用。",
+
     "security": "安全",
     "securityDesc": "管理 SSH 主机密钥验证和安全设置。",
     "hostKeyFingerprints": "SSH 主机密钥指纹",

@@ -136,7 +136,8 @@ fn add_to_windows_path(dir: &std::path::Path) -> Result<String, String> {
     // Read current user PATH
     let output = Command::new("powershell")
         .args([
-            "-NoProfile", "-Command",
+            "-NoProfile",
+            "-Command",
             "[Environment]::GetEnvironmentVariable('PATH', 'User')",
         ])
         .output()
@@ -160,7 +161,8 @@ fn add_to_windows_path(dir: &std::path::Path) -> Result<String, String> {
 
     let status = Command::new("powershell")
         .args([
-            "-NoProfile", "-Command",
+            "-NoProfile",
+            "-Command",
             &format!(
                 "[Environment]::SetEnvironmentVariable('PATH', '{}', 'User')",
                 new_path.replace('\'', "''")

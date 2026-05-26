@@ -1,8 +1,8 @@
 use anyhow::Result;
-use log::{info, warn, error, debug};
+use log::{debug, error, info, warn};
 use russh::*;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -44,7 +44,10 @@ pub async fn run_local_forward(
 ) -> Result<()> {
     let bind_addr = format!("{}:{}", local_host, local_port);
     let listener = TcpListener::bind(&bind_addr).await?;
-    info!("[Tunnel:Local] Listening on {} -> {}:{}", bind_addr, remote_host, remote_port);
+    info!(
+        "[Tunnel:Local] Listening on {} -> {}:{}",
+        bind_addr, remote_host, remote_port
+    );
 
     loop {
         tokio::select! {
@@ -98,7 +101,8 @@ async fn handle_local_forward_connection(
     // Open a direct-tcpip channel to the remote host
     let channel = {
         let handle_guard = ssh_handle.lock().await;
-        let handle = handle_guard.as_ref()
+        let handle = handle_guard
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SSH session not available"))?;
         handle
             .channel_open_direct_tcpip(remote_host, remote_port as u32, peer_addr, 0)
@@ -106,7 +110,10 @@ async fn handle_local_forward_connection(
             .map_err(|e| anyhow::anyhow!("Failed to open direct-tcpip channel: {}", e))?
     };
 
-    debug!("[Tunnel:Local] Opened direct-tcpip channel to {}:{}", remote_host, remote_port);
+    debug!(
+        "[Tunnel:Local] Opened direct-tcpip channel to {}:{}",
+        remote_host, remote_port
+    );
 
     // Use into_stream() to get a bidirectional AsyncRead + AsyncWrite stream
     let channel_stream = channel.into_stream();
@@ -176,8 +183,12 @@ async fn handle_local_forward_connection(
     done_rx.recv().await;
 
     // Update aggregate stats
-    stats.bytes_in.fetch_add(bytes_in_counter.load(Ordering::Relaxed), Ordering::Relaxed);
-    stats.bytes_out.fetch_add(bytes_out_counter.load(Ordering::Relaxed), Ordering::Relaxed);
+    stats
+        .bytes_in
+        .fetch_add(bytes_in_counter.load(Ordering::Relaxed), Ordering::Relaxed);
+    stats
+        .bytes_out
+        .fetch_add(bytes_out_counter.load(Ordering::Relaxed), Ordering::Relaxed);
 
     // Clean up
     tcp_to_ssh.abort();

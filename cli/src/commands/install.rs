@@ -16,18 +16,11 @@ pub fn list_tools() -> Result<()> {
 
     println!("Detected AI Tools:");
     println!("{:-<60}", "");
-    println!(
-        "{:<15} {:<15} {:<20} VIBESHELL",
-        "ID", "NAME", "INSTALLED"
-    );
+    println!("{:<15} {:<15} {:<20} VIBESHELL", "ID", "NAME", "INSTALLED");
     println!("{:-<60}", "");
 
     for tool in &tools {
-        let installed_status = if tool.installed {
-            "Yes"
-        } else {
-            "No"
-        };
+        let installed_status = if tool.installed { "Yes" } else { "No" };
 
         let vibeshell_status = if tool.vibeshell_installed {
             "Configured"
@@ -77,7 +70,10 @@ pub fn install(tool: &str) -> Result<()> {
         for result in results {
             if result.success {
                 success_count += 1;
-                println!("[OK] {} - VibeShell skill installed successfully", result.tool.name);
+                println!(
+                    "[OK] {} - VibeShell skill installed successfully",
+                    result.tool.name
+                );
                 if let Some(backup) = result.backup_path {
                     println!("     Backup: {:?}", backup);
                 }
@@ -102,14 +98,20 @@ pub fn install(tool: &str) -> Result<()> {
         let result = vibeshell_core::install::install_by_id(tool)?;
 
         if result.success {
-            println!("VibeShell skill installed successfully to {}.", result.tool.name);
+            println!(
+                "VibeShell skill installed successfully to {}.",
+                result.tool.name
+            );
             println!("Config file: {:?}", result.tool.config_path);
             if let Some(backup) = result.backup_path {
                 println!("Backup created: {:?}", backup);
             }
             println!();
             println!("VibeShell skill is now available in {}.", result.tool.name);
-            println!("Restart {} to load the new configuration.", result.tool.name);
+            println!(
+                "Restart {} to load the new configuration.",
+                result.tool.name
+            );
         } else {
             println!(
                 "Failed to install VibeShell skill to {}: {}",
@@ -142,7 +144,10 @@ pub fn uninstall(tool: &str) -> Result<()> {
         for result in results {
             if result.success {
                 success_count += 1;
-                println!("[OK] {} - VibeShell skill uninstalled successfully", result.tool.name);
+                println!(
+                    "[OK] {} - VibeShell skill uninstalled successfully",
+                    result.tool.name
+                );
                 if let Some(backup) = result.backup_path {
                     println!("     Backup: {:?}", backup);
                 }

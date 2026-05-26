@@ -3,15 +3,15 @@
 //! This module provides secure storage and verification of SSH server host key fingerprints.
 //! It stores fingerprints locally to detect potential MITM attacks when a server's key changes.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::Utc;
 use directories::ProjectDirs;
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use log::{info, warn, debug};
 
 /// Represents a stored SSH host key fingerprint
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +79,10 @@ impl FingerprintStore {
             let content = fs::read_to_string(&file_path)?;
             let fingerprints: HashMap<String, StoredFingerprint> =
                 serde_json::from_str(&content).unwrap_or_default();
-            info!("[FingerprintStore] Loaded {} stored fingerprints", fingerprints.len());
+            info!(
+                "[FingerprintStore] Loaded {} stored fingerprints",
+                fingerprints.len()
+            );
             fingerprints
         } else {
             info!("[FingerprintStore] No existing fingerprint store, starting fresh");
@@ -122,8 +125,10 @@ impl FingerprintStore {
                     debug!("[FingerprintStore] Fingerprint matches for {}", key);
                     FingerprintVerificationResult::Trusted
                 } else {
-                    warn!("[FingerprintStore] FINGERPRINT CHANGED for {}! Stored: {}, New: {}",
-                          key, stored.fingerprint, fingerprint);
+                    warn!(
+                        "[FingerprintStore] FINGERPRINT CHANGED for {}! Stored: {}, New: {}",
+                        key, stored.fingerprint, fingerprint
+                    );
                     FingerprintVerificationResult::Changed {
                         stored_fingerprint: stored.fingerprint.clone(),
                         new_fingerprint: fingerprint.to_string(),
@@ -134,7 +139,10 @@ impl FingerprintStore {
                 }
             }
             None => {
-                debug!("[FingerprintStore] Unknown host {}, fingerprint: {}", key, fingerprint);
+                debug!(
+                    "[FingerprintStore] Unknown host {}, fingerprint: {}",
+                    key, fingerprint
+                );
                 FingerprintVerificationResult::Unknown {
                     fingerprint: fingerprint.to_string(),
                     algorithm: algorithm.to_string(),
@@ -206,7 +214,10 @@ impl FingerprintStore {
             self.persist()?;
             info!("[FingerprintStore] Deleted fingerprint for {}", key);
         } else {
-            debug!("[FingerprintStore] No fingerprint found to delete for {}", key);
+            debug!(
+                "[FingerprintStore] No fingerprint found to delete for {}",
+                key
+            );
         }
 
         Ok(removed)
@@ -268,7 +279,10 @@ impl FingerprintStore {
         let fingerprints = self.fingerprints.lock().unwrap();
         let content = serde_json::to_string_pretty(&*fingerprints)?;
         fs::write(&self.file_path, content)?;
-        debug!("[FingerprintStore] Persisted {} fingerprints to disk", fingerprints.len());
+        debug!(
+            "[FingerprintStore] Persisted {} fingerprints to disk",
+            fingerprints.len()
+        );
         Ok(())
     }
 
@@ -287,8 +301,8 @@ impl FingerprintStore {
 /// Helper function to format a fingerprint for display
 /// Takes raw bytes and returns a human-readable SHA256 fingerprint
 pub fn format_fingerprint(bytes: &[u8]) -> String {
-    use sha2::{Sha256, Digest};
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
+    use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -300,9 +314,9 @@ pub fn format_fingerprint(bytes: &[u8]) -> String {
 
 /// Extract fingerprint from a public key
 pub fn extract_fingerprint_from_key(key: &russh_keys::key::PublicKey) -> (String, String) {
-    use sha2::{Sha256, Digest};
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::{engine::general_purpose, Engine as _};
     use russh_keys::PublicKeyBase64;
+    use sha2::{Digest, Sha256};
 
     // Get the algorithm name
     let algorithm = key.name().to_string();
@@ -343,13 +357,15 @@ mod tests {
     fn test_save_and_get() {
         let (_dir, store) = test_store();
 
-        store.save(
-            "example.com",
-            22,
-            "SHA256:abcdef123456",
-            "ssh-ed25519",
-            Some("My Server"),
-        ).unwrap();
+        store
+            .save(
+                "example.com",
+                22,
+                "SHA256:abcdef123456",
+                "ssh-ed25519",
+                Some("My Server"),
+            )
+            .unwrap();
 
         let fp = store.get("example.com", 22).unwrap();
         assert_eq!(fp.host, "example.com");
@@ -363,7 +379,9 @@ mod tests {
     fn test_verify_trusted() {
         let (_dir, store) = test_store();
 
-        store.save("example.com", 22, "SHA256:abc", "ssh-ed25519", None).unwrap();
+        store
+            .save("example.com", 22, "SHA256:abc", "ssh-ed25519", None)
+            .unwrap();
 
         let result = store.verify("example.com", 22, "SHA256:abc", "ssh-ed25519");
         assert!(matches!(result, FingerprintVerificationResult::Trusted));
@@ -374,24 +392,34 @@ mod tests {
         let (_dir, store) = test_store();
 
         let result = store.verify("unknown.com", 22, "SHA256:xyz", "ssh-rsa");
-        assert!(matches!(result, FingerprintVerificationResult::Unknown { .. }));
+        assert!(matches!(
+            result,
+            FingerprintVerificationResult::Unknown { .. }
+        ));
     }
 
     #[test]
     fn test_verify_changed() {
         let (_dir, store) = test_store();
 
-        store.save("example.com", 22, "SHA256:old", "ssh-ed25519", None).unwrap();
+        store
+            .save("example.com", 22, "SHA256:old", "ssh-ed25519", None)
+            .unwrap();
 
         let result = store.verify("example.com", 22, "SHA256:new", "ssh-ed25519");
-        assert!(matches!(result, FingerprintVerificationResult::Changed { .. }));
+        assert!(matches!(
+            result,
+            FingerprintVerificationResult::Changed { .. }
+        ));
     }
 
     #[test]
     fn test_delete() {
         let (_dir, store) = test_store();
 
-        store.save("example.com", 22, "SHA256:abc", "ssh-ed25519", None).unwrap();
+        store
+            .save("example.com", 22, "SHA256:abc", "ssh-ed25519", None)
+            .unwrap();
         assert!(store.get("example.com", 22).is_some());
 
         store.delete("example.com", 22).unwrap();
@@ -402,8 +430,12 @@ mod tests {
     fn test_list() {
         let (_dir, store) = test_store();
 
-        store.save("server1.com", 22, "SHA256:aaa", "ssh-ed25519", None).unwrap();
-        store.save("server2.com", 2222, "SHA256:bbb", "ssh-rsa", None).unwrap();
+        store
+            .save("server1.com", 22, "SHA256:aaa", "ssh-ed25519", None)
+            .unwrap();
+        store
+            .save("server2.com", 2222, "SHA256:bbb", "ssh-rsa", None)
+            .unwrap();
 
         let list = store.list();
         assert_eq!(list.len(), 2);
@@ -413,7 +445,9 @@ mod tests {
     fn test_case_insensitive_host() {
         let (_dir, store) = test_store();
 
-        store.save("Example.COM", 22, "SHA256:abc", "ssh-ed25519", None).unwrap();
+        store
+            .save("Example.COM", 22, "SHA256:abc", "ssh-ed25519", None)
+            .unwrap();
 
         // Should find with different case
         let fp = store.get("example.com", 22);
