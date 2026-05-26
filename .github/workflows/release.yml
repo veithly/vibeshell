@@ -91,7 +91,7 @@ jobs:
           # Update version in config files (only for non-tag pushes)
           if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
             jq --arg v "$NEW_VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
-            jq --arg v "$NEW_VERSION" '.version = $v' package.json > tmp.json && mv tmp.json package.json
+            npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version
             sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
           fi
 
@@ -103,7 +103,7 @@ jobs:
           if git diff --quiet; then
             echo "No version changes to commit"
           else
-            git add src-tauri/tauri.conf.json package.json Cargo.toml
+            git add src-tauri/tauri.conf.json package.json package-lock.json Cargo.toml
             git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
             git push origin HEAD:${{ github.ref_name }}
           fi
