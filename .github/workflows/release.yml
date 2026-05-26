@@ -58,7 +58,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: '22'
 
       - name: Bump version
         id: bump
@@ -96,7 +96,7 @@ jobs:
           fi
 
       - name: Commit version bump
-        if: github.ref != 'refs/tags/*'
+        if: "!startsWith(github.ref, 'refs/tags/')"
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -110,29 +110,43 @@ jobs:
 
       - name: Create release
         id: create_release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.bump.outputs.tag_name }}
-          name: VibeShell ${{ steps.bump.outputs.tag_name }}
-          body: |
-            ## VibeShell ${{ steps.bump.outputs.tag_name }}
-
-            ### Downloads
-            | Platform | Installer | CLI Only |
-            |----------|-----------|----------|
-            | Windows x64 | `.exe` / `.msi` | `vshell-windows-x64.exe` |
-            | macOS (Apple Silicon) | `.dmg` | `vshell-macos-arm64` |
-            | macOS (Intel) | `.dmg` | `vshell-macos-x64` |
-            | Linux x64 | `.deb` / `.AppImage` | `vshell-linux-x64` |
-
-            > **Note:** The desktop installer includes `vshell` CLI and adds it to your PATH automatically.
-
-            See [commit history](https://github.com/${{ github.repository }}/commits/${{ steps.bump.outputs.tag_name }}) for full changes.
-          draft: false
-          prerelease: false
-          generate_release_notes: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.bump.outputs.tag_name }}
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## VibeShell ${{ steps.bump.outputs.tag_name }}
+
+          ### Downloads
+          | Platform | Installer | CLI Only |
+          |----------|-----------|----------|
+          | Windows x64 | `.exe` / `.msi` | `vshell-windows-x64.exe` |
+          | macOS (Apple Silicon) | `.dmg` | `vshell-macos-arm64` |
+          | macOS (Intel) | `.dmg` | `vshell-macos-x64` |
+          | Linux x64 | `.deb` / `.AppImage` | `vshell-linux-x64` |
+
+          > **Note:** The desktop installer includes `vshell` CLI and adds it to your PATH automatically.
+
+          See [commit history](https://github.com/${{ github.repository }}/commits/${{ steps.bump.outputs.tag_name }}) for full changes.
+          EOF
+
+          if gh release view "$TAG_NAME" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "$TAG_NAME" \
+              --repo "${{ github.repository }}" \
+              --title "VibeShell $TAG_NAME" \
+              --notes-file release-notes.md \
+              --latest
+          else
+            gh release create "$TAG_NAME" \
+              --repo "${{ github.repository }}" \
+              --target "$(git rev-parse HEAD)" \
+              --title "VibeShell $TAG_NAME" \
+              --notes-file release-notes.md \
+              --latest
+          fi
+
+          RELEASE_ID="$(gh api "repos/${{ github.repository }}/releases/tags/$TAG_NAME" --jq .id)"
+          echo "id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
   build-tauri:
     name: Build (${{ matrix.name }})
@@ -184,18 +198,17 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: '22'
           cache: npm
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          fi
 
       - name: Install frontend dependencies
         run: npm ci
@@ -234,17 +247,17 @@ jobs:
           ls -la src-tauri/binaries/
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          releaseId: ${{ needs.bump-and-release.outputs.release_id }}
-          args: ${{ matrix.args }}
-
-      - name: Rename and upload vshell CLI binary
         shell: bash
         run: |
+          npx tauri build ${{ matrix.args }}
+
+      - name: Collect and upload release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           VERSION="${{ needs.bump-and-release.outputs.version }}"
+          TAG_NAME="${{ needs.bump-and-release.outputs.tag_name }}"
           TARGET="${{ matrix.target }}"
           EXT=""
 
@@ -257,6 +270,12 @@ jobs:
             BINARY="target/${TARGET}/release/vshell${EXT}"
           else
             BINARY="target/release/vshell${EXT}"
+          fi
+
+          if [[ "${{ matrix.args }}" == *"--target"* ]]; then
+            BUNDLE_DIR="target/${TARGET}/release/bundle"
+          else
+            BUNDLE_DIR="target/release/bundle"
           fi
 
           # Determine platform-friendly name
@@ -278,16 +297,32 @@ jobs:
 
           if [ -f "$BINARY" ]; then
             cp "$BINARY" "$DEST"
-            echo "VSHELL_BINARY=$DEST" >> $GITHUB_ENV
+            chmod +x "$DEST" 2>/dev/null || true
           else
-            echo "Warning: vshell binary not found at $BINARY"
+            echo "vshell binary not found at $BINARY"
+            exit 1
           fi
 
-      - name: Upload vshell CLI to release
-        if: env.VSHELL_BINARY != ''
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.bump-and-release.outputs.tag_name }}
-          files: ${{ env.VSHELL_BINARY }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          uploads=("$DEST")
+          if [ -d "$BUNDLE_DIR" ]; then
+            while IFS= read -r -d '' file; do
+              uploads+=("$file")
+            done < <(find "$BUNDLE_DIR" -type f \( \
+              -name "*.AppImage" -o \
+              -name "*.deb" -o \
+              -name "*.dmg" -o \
+              -name "*.exe" -o \
+              -name "*.msi" -o \
+              -name "*.rpm" \
+            \) -print0)
+          fi
+
+          if [ "${#uploads[@]}" -lt 2 ]; then
+            echo "No desktop installer artifacts found under $BUNDLE_DIR"
+            find target -maxdepth 5 -type f 2>/dev/null | sort || true
+            exit 1
+          fi
+
+          printf 'Uploading release assets:\n'
+          printf '  %s\n' "${uploads[@]}"
+          gh release upload "$TAG_NAME" "${uploads[@]}" --repo "${{ github.repository }}" --clobber

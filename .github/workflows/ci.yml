@@ -31,7 +31,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: '22'
           cache: npm
 
       - name: Install dependencies
@@ -78,7 +78,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: '22'
           cache: npm
 
       - name: Install frontend dependencies
@@ -88,12 +88,10 @@ jobs:
         run: npm run build
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
       - name: Cargo check
         run: cargo check
@@ -125,7 +123,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: lts/*
+          node-version: '22'
           cache: npm
 
       - name: Install frontend dependencies
@@ -135,14 +133,11 @@ jobs:
         run: npm run build
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add clippy
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
