@@ -156,13 +156,11 @@ fn run_interactive_loop<R: BufRead + Send + 'static>(session_id: &str, reader: R
                         rows: rows as u32,
                     });
                 }
-                Event::Paste(text) => {
-                    if !text.is_empty() {
-                        let _ = ipc_support::send(&IpcMessage::SendInput {
-                            session_id: sid.clone(),
-                            data: text.into_bytes(),
-                        });
-                    }
+                Event::Paste(text) if !text.is_empty() => {
+                    let _ = ipc_support::send(&IpcMessage::SendInput {
+                        session_id: sid.clone(),
+                        data: text.into_bytes(),
+                    });
                 }
                 _ => {}
             }
