@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", default-features = false, features = ["wry", "compression", "dynamic-acl", "x11", "devtools"] }
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
-rfd = { version = "0.16", default-features = false }
+rfd = { version = "0.16", default-features = false, features = ["gtk3"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
