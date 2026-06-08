@@ -429,7 +429,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
       const localPath = pickResult.data;
       const fileName = localPath.split(/[/\\]/).pop() || 'file';
-      const remotePath = `${currentPath}/${fileName}`;
+      const remotePath = joinRemotePath(currentPath, fileName);
 
       setIsLoading(true);
 

@@ -61,6 +61,19 @@ pub fn install(tool: &str) -> Result<()> {
             println!("  - Open Code");
             println!("  - Gemini CLI");
             println!("  - OpenClaw");
+            println!("  - Windsurf");
+            println!("  - Roo Code");
+            println!("  - Augment Code");
+            println!("  - Continue");
+            println!("  - Kiro");
+            println!("  - Trae");
+            println!("  - OpenHands");
+            println!("  - Agents (Universal)");
+            println!("  - StepFun");
+            println!();
+            println!(
+                "You can still run 'vshell install <tool-id>' to create a known skill directory."
+            );
             return Ok(());
         }
 

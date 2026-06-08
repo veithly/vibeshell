@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use vibeshell_core::commands::sftp::{SftpEntry, SftpFileContent};
-use vibeshell_core::ipc::IpcMessage;
+use vibeshell_core::ipc::{IpcMessage, IpcSessionInfo};
 use vibeshell_core::sftp::{DirectoryTransferMode, DirectoryTransferSummary, TransferProgress};
 
 use crate::ipc_support;
@@ -15,7 +15,11 @@ pub fn connect(server_name: Option<&str>, session_id: Option<&str>, args: &[Stri
     } else {
         let name =
             server_name.ok_or_else(|| anyhow!("Either server name or --session is required"))?;
-        (create_session(name)?, true)
+        if let Some(info) = find_reusable_session(name)? {
+            (info.id, false)
+        } else {
+            (create_session(name)?, true)
+        }
     };
 
     let result = (|| -> Result<()> {
@@ -42,6 +46,18 @@ pub fn connect(server_name: Option<&str>, session_id: Option<&str>, args: &[Stri
     }
 
     result
+}
+
+fn find_reusable_session(server_name: &str) -> Result<Option<IpcSessionInfo>> {
+    match ipc_support::send(&IpcMessage::ListSessions)? {
+        IpcMessage::SessionList { sessions } => Ok(sessions
+            .into_iter()
+            .filter(|info| info.server_name == server_name)
+            .filter(|info| matches!(info.state.as_str(), "connected" | "connecting"))
+            .min_by_key(|info| info.created_at)),
+        IpcMessage::Error { message } => bail!("Error listing sessions: {}", message),
+        _ => bail!("Unexpected response from background service"),
+    }
 }
 
 fn create_session(server_name: &str) -> Result<String> {

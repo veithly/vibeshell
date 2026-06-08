@@ -13,6 +13,28 @@ function showError(title: string, error: TauriError): void {
   }
 }
 
+function mapSessionInfo(info: SessionInfo): Session {
+  return {
+    id: info.id,
+    serverId: info.server_id,
+    serverName: info.server_name,
+    state: info.state,
+    createdAt: info.created_at * 1000,
+    sessionType: 'ssh',
+  };
+}
+
+function upsertSession(sessions: Session[], session: Session): Session[] {
+  const index = sessions.findIndex((existing) => existing.id === session.id);
+  if (index === -1) {
+    return [...sessions, session];
+  }
+
+  return sessions.map((existing, existingIndex) =>
+    existingIndex === index ? { ...existing, ...session } : existing
+  );
+}
+
 /**
  * Session type: SSH or Local Shell
  */
@@ -107,7 +129,8 @@ interface SessionStore {
     credential: string,
     passphrase?: string,
     cols?: number,
-    rows?: number
+    rows?: number,
+    forceNew?: boolean
   ) => Promise<Session | null>;
   /** Attach to an existing session and start receiving output */
   attachSession: (sessionId: string) => Promise<boolean>;
@@ -230,18 +253,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     });
 
     if (result.success) {
-      // Convert backend SessionInfo to frontend Session
-      const session: Session = {
-        id: result.data.id,
-        serverId: result.data.server_id,
-        serverName: result.data.server_name,
-        state: result.data.state,
-        createdAt: result.data.created_at * 1000, // Convert seconds to ms
-        sessionType: 'ssh',
-      };
+      const session = mapSessionInfo(result.data);
 
       set((state) => ({
-        sessions: [...state.sessions, session],
+        sessions: upsertSession(state.sessions, session),
         activeSessionId: state.activeSessionId ?? session.id,
         loading: false,
       }));
@@ -263,7 +278,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     credential: string,
     passphrase?: string,
     cols?: number,
-    rows?: number
+    rows?: number,
+    forceNew = false
   ) => {
     console.log('[sessionStore] connectWithCredentials called:', {
       serverName,
@@ -285,25 +301,19 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         passphrase: passphrase ?? null,
         cols: cols ?? 80,
         rows: rows ?? 24,
+        forceNew,
       },
     });
 
     console.log('[sessionStore] session_connect result:', result);
 
     if (result.success) {
-      const session: Session = {
-        id: result.data.id,
-        serverId: result.data.server_id,
-        serverName: result.data.server_name,
-        state: result.data.state,
-        createdAt: result.data.created_at * 1000,
-        sessionType: 'ssh',
-      };
+      const session = mapSessionInfo(result.data);
 
       console.log('[sessionStore] Session created:', session);
 
       set((state) => ({
-        sessions: [...state.sessions, session],
+        sessions: upsertSession(state.sessions, session),
         activeSessionId: state.activeSessionId ?? session.id,
         loading: false,
       }));
@@ -430,14 +440,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const result = await safeInvoke<SessionInfo[]>('session_list');
 
     if (result.success) {
-      const sessions: Session[] = result.data.map((info) => ({
-        id: info.id,
-        serverId: info.server_id,
-        serverName: info.server_name,
-        state: info.state,
-        createdAt: info.created_at * 1000,
-        sessionType: 'ssh' as const,
-      }));
+      const sessions: Session[] = result.data.map(mapSessionInfo);
 
       set((state) => {
         const activeSessionStillExists = state.activeSessionId
@@ -480,14 +483,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     // Add sessions that exist in the backend but not in the local store
     const newSessions: Session[] = backendSessions
       .filter((info) => !localSshIds.has(info.id))
-      .map((info) => ({
-        id: info.id,
-        serverId: info.server_id,
-        serverName: info.server_name,
-        state: info.state,
-        createdAt: info.created_at * 1000,
-        sessionType: 'ssh' as const,
-      }));
+      .map(mapSessionInfo);
 
     if (newSessions.length === 0) {
       const updated = localSessions

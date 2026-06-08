@@ -29,7 +29,7 @@ function getStateIndicator(state: SessionState, sessionType: SessionType = 'ssh'
     case 'disconnected':
     default:
       if (sessionType === 'local') {
-        return <span className="w-2 h-2 rounded-full bg-tokyo-blue/50" />;
+        return <span className="w-2 h-2 rounded-full bg-tokyo-blue" />;
       }
       return <span className="w-2 h-2 rounded-full bg-tokyo-comment" />;
   }
@@ -63,12 +63,13 @@ const SessionTab = memo(function SessionTab({ session, isActive, isRecording, on
   return (
     <div
       className={cn(
-        'group flex items-center gap-2 px-3 py-2 rounded-t-lg cursor-pointer',
-        'transition-colors duration-150 border-b-2',
-        'min-w-[120px] max-w-[200px]',
+        'group flex h-8 items-center gap-2 px-2.5 rounded-lg cursor-pointer border',
+        'transition-all duration-150 ease-out',
+        'min-w-[120px] max-w-[220px]',
+        'focus:outline-none focus:ring-1 focus:ring-tokyo-blue',
         isActive
           ? 'bg-tokyo-bg border-tokyo-blue text-tokyo-fg'
-          : 'bg-tokyo-bg-dark border-transparent text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg/50'
+          : 'bg-transparent border-transparent text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl hover:border-tokyo-selection'
       )}
       onClick={onSelect}
       onContextMenu={onContextMenu}
@@ -97,9 +98,9 @@ const SessionTab = memo(function SessionTab({ session, isActive, isRecording, on
       {/* Close Button */}
       <button
         className={cn(
-          'flex-shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100',
+          'flex-shrink-0 p-0.5 rounded-md opacity-0 group-hover:opacity-100',
           'transition-opacity duration-150',
-          'hover:bg-tokyo-bg-hl focus:opacity-100 focus:outline-none'
+          'hover:bg-tokyo-bg-hl focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
         )}
         onClick={handleClose}
         aria-label={`Close ${session.serverName} session`}
@@ -152,7 +153,7 @@ function TabContextMenu({ x, y, session, isRecording, onStartRecording, onStopRe
     <div
       ref={menuRef}
       role="menu"
-      className="fixed z-50 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-2xl py-1 min-w-[180px]"
+      className="fixed z-50 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg py-1 min-w-[180px]"
       style={{ left: clampedX, top: clampedY }}
     >
       <div className="px-3 py-1.5 text-xs text-tokyo-comment border-b border-tokyo-bg-hl mb-1 font-medium">
@@ -162,7 +163,7 @@ function TabContextMenu({ x, y, session, isRecording, onStartRecording, onStopRe
         isRecording ? (
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-2 text-sm text-tokyo-red hover:bg-tokyo-red/10 transition-colors
+            className="w-full text-left px-3 py-2 text-sm text-tokyo-red hover:bg-tokyo-bg-hl transition-colors
                        flex items-center gap-2.5 cursor-pointer"
             onClick={() => { onStopRecording(); onClose(); }}
           >
@@ -247,7 +248,16 @@ export function SessionTabs({ onNewSession }: SessionTabsProps) {
 
   return (
     <>
-      <div className="flex items-end gap-1 px-2 bg-tokyo-bg-dark overflow-x-auto">
+      <div className="session-tabbar flex h-11 items-center gap-1.5 px-2 bg-tokyo-bg-dark overflow-x-auto border-b border-tokyo-bg-hl">
+        <div className="session-rail" aria-hidden="true">
+          <span className="session-rail-bars">
+            <i />
+            <i />
+            <i />
+          </span>
+          <span className="session-rail-count">{sessions.length}</span>
+        </div>
+
         {/* Session Tabs */}
         {sessions.map((session) => (
           <SessionTab
@@ -264,16 +274,16 @@ export function SessionTabs({ onNewSession }: SessionTabsProps) {
         {/* New Session Button */}
         <button
           className={cn(
-            'flex items-center justify-center gap-1 px-3 py-2 rounded-t-lg',
-            'bg-transparent text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg/30',
-            'transition-colors duration-150 border-b-2 border-transparent',
+            'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-transparent',
+            'bg-transparent text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg',
+            'hover:border-tokyo-selection transition-colors duration-150',
             'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:ring-inset'
           )}
           onClick={onNewSession}
-          aria-label="New session"
+          aria-label={t('session.newSession')}
+          title={t('session.newSession')}
         >
           <Plus className="w-4 h-4" />
-          <span className="text-sm">New</span>
         </button>
       </div>
 

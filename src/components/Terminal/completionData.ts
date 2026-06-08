@@ -15,6 +15,8 @@ export interface CommandSuggestion {
   category: CommandCategory;
   /** Subcommands available for this command */
   subcommands?: string[];
+  /** Whether this suggestion completes the command itself or an argument/subcommand */
+  completionType?: 'command' | 'subcommand';
 }
 
 /**
@@ -247,6 +249,207 @@ export const commonCommands: CommandSuggestion[] = [
   { text: 'gpg', description: 'GNU Privacy Guard', category: 'misc' },
 ];
 
+export interface CommandCompletionContext {
+  /** The current shell segment after the last command separator (&&, ||, |, ;) */
+  segment: string;
+  /** Tokens parsed from the current segment, excluding shell quotes */
+  tokens: string[];
+  /** The command token used for subcommand/option lookup */
+  commandName: string;
+  /** The token currently being edited */
+  currentToken: string;
+  /** Whether the current token is the command executable position */
+  isCommandPosition: boolean;
+}
+
+const COMMAND_WRAPPERS = new Set([
+  'command',
+  'builtin',
+  'exec',
+  'env',
+  'nice',
+  'nohup',
+  'sudo',
+  'time',
+  'watch',
+]);
+
+function isWhitespace(char: string): boolean {
+  return /\s/.test(char);
+}
+
+function getActiveSegment(input: string): string {
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+  let start = 0;
+
+  for (let index = 0; index < input.length; index++) {
+    const char = input[index];
+
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+
+    if (char === '\\' && quote !== "'") {
+      escaping = true;
+      continue;
+    }
+
+    if ((char === '"' || char === "'") && quote === null) {
+      quote = char;
+      continue;
+    }
+
+    if (char === quote) {
+      quote = null;
+      continue;
+    }
+
+    if (quote !== null) {
+      continue;
+    }
+
+    if (char === ';' || char === '|') {
+      start = index + 1;
+      continue;
+    }
+
+    if (char === '&' && input[index + 1] === '&') {
+      start = index + 2;
+      index++;
+    }
+  }
+
+  return input.slice(start);
+}
+
+function tokenizeShellSegment(segment: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+
+  for (let index = 0; index < segment.length; index++) {
+    const char = segment[index];
+
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+
+    if (char === '\\' && quote !== "'") {
+      escaping = true;
+      continue;
+    }
+
+    if ((char === '"' || char === "'") && quote === null) {
+      quote = char;
+      continue;
+    }
+
+    if (char === quote) {
+      quote = null;
+      continue;
+    }
+
+    if (quote === null && isWhitespace(char)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+
+  return tokens;
+}
+
+function resolveCommandIndex(tokens: string[]): number {
+  let index = 0;
+
+  while (index < tokens.length && COMMAND_WRAPPERS.has(tokens[index])) {
+    index++;
+
+    while (index < tokens.length && tokens[index].startsWith('-')) {
+      const option = tokens[index];
+      index++;
+
+      if (['-u', '--user', '-g', '--group', '-n'].includes(option) && index < tokens.length) {
+        index++;
+      }
+    }
+
+    while (tokens[index]?.includes('=')) {
+      index++;
+    }
+  }
+
+  return index;
+}
+
+/**
+ * Parse a shell input line into the part relevant for command completion.
+ * This is intentionally lightweight: it respects common quoting/escaping and
+ * command separators without trying to become a full shell parser.
+ */
+export function getCommandCompletionContext(input: string): CommandCompletionContext {
+  const segment = getActiveSegment(input);
+  const tokens = tokenizeShellSegment(segment);
+  const hasTrailingWhitespace = /\s$/.test(segment);
+
+  if (tokens.length === 0) {
+    return {
+      segment,
+      tokens,
+      commandName: '',
+      currentToken: '',
+      isCommandPosition: true,
+    };
+  }
+
+  const commandIndex = resolveCommandIndex(tokens);
+  const commandName = tokens[commandIndex] ?? '';
+  const currentToken = hasTrailingWhitespace ? '' : tokens[tokens.length - 1] ?? '';
+  const isCommandPosition = commandIndex >= tokens.length || (!hasTrailingWhitespace && tokens.length - 1 <= commandIndex);
+
+  return {
+    segment,
+    tokens,
+    commandName,
+    currentToken,
+    isCommandPosition,
+  };
+}
+
+export function getCompletionQuery(input: string): string {
+  return getCommandCompletionContext(input).currentToken;
+}
+
+function sortByPrefixThenAlpha<T extends { text: string }>(items: T[], query: string): T[] {
+  const lowerQuery = query.toLowerCase();
+
+  return items.sort((a, b) => {
+    const aText = a.text.toLowerCase();
+    const bText = b.text.toLowerCase();
+    const aStarts = lowerQuery === '' || aText.startsWith(lowerQuery);
+    const bStarts = lowerQuery === '' || bText.startsWith(lowerQuery);
+
+    if (aStarts !== bStarts) {
+      return aStarts ? -1 : 1;
+    }
+
+    return a.text.localeCompare(b.text);
+  });
+}
+
 /**
  * Get command suggestions based on input prefix.
  * @param input - The current input text
@@ -254,49 +457,44 @@ export const commonCommands: CommandSuggestion[] = [
  * @returns Array of matching command suggestions
  */
 export function getCommandSuggestions(input: string, maxResults = 10): CommandSuggestion[] {
-  const trimmedInput = input.trim().toLowerCase();
+  const trimmedInput = input.trim();
 
   if (!trimmedInput) {
     return [];
   }
 
-  // Check if we're completing a subcommand (input has space)
-  const parts = trimmedInput.split(/\s+/);
+  const context = getCommandCompletionContext(input);
+  const query = context.currentToken.toLowerCase();
 
-  if (parts.length >= 2) {
-    // User is typing a subcommand or argument
-    const mainCommand = parts[0];
-    const subInput = parts[parts.length - 1];
-
-    // Find the main command
-    const cmd = commonCommands.find(c => c.text === mainCommand);
+  if (!context.isCommandPosition && context.commandName) {
+    const cmd = commonCommands.find(c => c.text === context.commandName.toLowerCase());
     if (cmd?.subcommands) {
-      // Filter subcommands that match
       const matchingSubcommands = cmd.subcommands
-        .filter(sub => sub.toLowerCase().startsWith(subInput))
+        .filter((sub) => query === '' || sub.toLowerCase().startsWith(query) || sub.toLowerCase().includes(query))
         .map(sub => ({
           text: sub,
-          description: `${mainCommand} ${sub}`,
+          description: `${context.commandName} ${sub}`,
           category: cmd.category,
+          completionType: 'subcommand' as const,
         }))
         .slice(0, maxResults);
 
       if (matchingSubcommands.length > 0) {
-        return matchingSubcommands;
+        return sortByPrefixThenAlpha(matchingSubcommands, query).slice(0, maxResults);
       }
     }
     return [];
   }
 
-  // Filter commands that start with the input
+  const commandInput = context.currentToken.toLowerCase();
+
   const exactStartMatches = commonCommands.filter(cmd =>
-    cmd.text.toLowerCase().startsWith(trimmedInput)
+    cmd.text.toLowerCase().startsWith(commandInput)
   );
 
-  // Also include fuzzy matches (contains the input)
   const containsMatches = commonCommands.filter(cmd =>
-    !cmd.text.toLowerCase().startsWith(trimmedInput) &&
-    cmd.text.toLowerCase().includes(trimmedInput)
+    !cmd.text.toLowerCase().startsWith(commandInput) &&
+    cmd.text.toLowerCase().includes(commandInput)
   );
 
   return [...exactStartMatches, ...containsMatches].slice(0, maxResults);

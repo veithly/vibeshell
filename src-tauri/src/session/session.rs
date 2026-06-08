@@ -163,6 +163,10 @@ impl Session {
         }
     }
 
+    pub fn created_at(&self) -> i64 {
+        self.created_at
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
         self.output_tx.subscribe()
     }

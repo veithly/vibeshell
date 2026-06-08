@@ -3803,6 +3803,9 @@ checksum = "a15ad77d9e70a92437d8f74c35d99b4e4691128df018833e99f90bcd36152672"
 dependencies = [
  "block2",
  "dispatch2",
+ "glib-sys",
+ "gobject-sys",
+ "gtk-sys",
  "js-sys",
  "log",
  "objc2",
@@ -5601,7 +5604,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vibeshell"
-version = "0.1.7"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "argon2",
@@ -5638,7 +5641,7 @@ dependencies = [
 
 [[package]]
 name = "vshell"
-version = "0.1.7"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "clap",

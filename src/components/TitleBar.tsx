@@ -1,5 +1,6 @@
 import { memo, useCallback, useState, useEffect } from 'react';
-import { useSettingsStore, themes } from '../stores/settingsStore';
+import { AlertCircle, Loader2, Maximize2, Minimize2, Minus, Monitor, SquareTerminal, Wifi, X } from 'lucide-react';
+import { cn } from '../lib/utils';
 
 /**
  * Custom window titlebar replacing native decorations.
@@ -15,10 +16,6 @@ export const TitleBar = memo(function TitleBar({
   activeSessionType?: string;
   activeSessionState?: string;
 }) {
-  const { settings } = useSettingsStore();
-  const currentTheme = themes.find(t => t.name === settings.appearance.theme);
-  const colors = currentTheme?.colors || themes[0].colors;
-
   const [isMaximized, setIsMaximized] = useState(false);
 
   // Check initial maximized state and listen for changes
@@ -70,24 +67,30 @@ export const TitleBar = memo(function TitleBar({
     } catch { /* ignore */ }
   }, []);
 
+  const sessionKind = activeSessionType === 'local' ? 'Local' : 'SSH';
+  const stateLabel = activeSessionState && activeSessionState !== 'connected' ? activeSessionState : null;
+  const StatusIcon = activeSessionState === 'connecting'
+    ? Loader2
+    : activeSessionState === 'error'
+      ? AlertCircle
+      : activeSessionType === 'local'
+        ? Monitor
+        : Wifi;
+
   return (
     <div
-      className="h-9 flex items-center justify-between select-none shrink-0"
-      style={{ backgroundColor: colors.bgDark, borderBottom: `1px solid ${colors.bgHl}` }}
+      className="titlebar-shell h-9 flex items-center justify-between select-none shrink-0"
     >
       {/* Left: App branding + drag region */}
       <div
-        className="flex items-center gap-2 pl-3 flex-1 h-full"
+        className="flex items-center gap-3 pl-3 flex-1 h-full min-w-0"
         data-tauri-drag-region
       >
-        {/* Logo */}
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
-          <path d="M2 4l4 4-4 4" stroke={colors.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M8 12h6" stroke={colors.accent} strokeWidth="2" strokeLinecap="round" />
-        </svg>
+        <span className="titlebar-brand" data-tauri-drag-region>
+          <SquareTerminal className="w-4 h-4" aria-hidden="true" />
+        </span>
         <span
-          className="text-xs font-semibold tracking-wide"
-          style={{ color: colors.accent }}
+          className="text-xs font-semibold text-tokyo-blue"
           data-tauri-drag-region
         >
           VibeShell
@@ -95,18 +98,25 @@ export const TitleBar = memo(function TitleBar({
 
         {/* Session info */}
         {activeSessionName && (
-          <span
-            className="text-xs ml-2 truncate"
-            style={{ color: colors.fgDark }}
+          <div
+            className="titlebar-session min-w-0"
             data-tauri-drag-region
           >
-            {activeSessionType === 'local' ? 'Local' : 'SSH'}
-            {' \u2022 '}
-            {activeSessionName}
-            {activeSessionState && activeSessionState !== 'connected' && (
-              <span style={{ color: colors.fgDark, opacity: 0.6 }}> ({activeSessionState})</span>
-            )}
-          </span>
+            <StatusIcon
+              className={cn(
+                'w-3.5 h-3.5 flex-shrink-0',
+                activeSessionState === 'connecting' && 'animate-spin text-tokyo-yellow',
+                activeSessionState === 'error' && 'text-tokyo-red',
+                activeSessionState === 'connected' && activeSessionType === 'local' && 'text-tokyo-blue',
+                activeSessionState === 'connected' && activeSessionType !== 'local' && 'text-tokyo-green',
+                (!activeSessionState || activeSessionState === 'disconnected') && 'text-tokyo-comment'
+              )}
+              aria-hidden="true"
+            />
+            <span className="flex-shrink-0 text-tokyo-comment">{sessionKind}</span>
+            <span className="truncate text-tokyo-fg">{activeSessionName}</span>
+            {stateLabel && <span className="flex-shrink-0 text-tokyo-comment">({stateLabel})</span>}
+          </div>
         )}
       </div>
 
@@ -114,53 +124,33 @@ export const TitleBar = memo(function TitleBar({
       <div className="flex items-center h-full">
         {/* Minimize */}
         <button
-          className="h-full w-11 flex items-center justify-center transition-colors duration-100"
-          style={{ color: colors.fgDark }}
-          onMouseEnter={e => { e.currentTarget.style.backgroundColor = colors.bgHl; e.currentTarget.style.color = colors.fg; }}
-          onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = colors.fgDark; }}
+          className="window-control"
           onClick={handleMinimize}
           aria-label="Minimize"
         >
-          <svg width="10" height="1" viewBox="0 0 10 1">
-            <rect width="10" height="1" fill="currentColor" />
-          </svg>
+          <Minus className="w-3.5 h-3.5" aria-hidden="true" />
         </button>
 
         {/* Maximize / Restore */}
         <button
-          className="h-full w-11 flex items-center justify-center transition-colors duration-100"
-          style={{ color: colors.fgDark }}
-          onMouseEnter={e => { e.currentTarget.style.backgroundColor = colors.bgHl; e.currentTarget.style.color = colors.fg; }}
-          onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = colors.fgDark; }}
+          className="window-control"
           onClick={handleMaximize}
           aria-label={isMaximized ? 'Restore' : 'Maximize'}
         >
           {isMaximized ? (
-            // Restore icon (two overlapping rectangles)
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <rect x="2" y="0" width="8" height="8" rx="0.5" stroke="currentColor" strokeWidth="1" fill="none" />
-              <rect x="0" y="2" width="8" height="8" rx="0.5" stroke="currentColor" strokeWidth="1" fill={colors.bgDark} />
-            </svg>
+            <Minimize2 className="w-3.5 h-3.5" aria-hidden="true" />
           ) : (
-            // Maximize icon (single rectangle)
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <rect x="0.5" y="0.5" width="9" height="9" rx="0.5" stroke="currentColor" strokeWidth="1" />
-            </svg>
+            <Maximize2 className="w-3.5 h-3.5" aria-hidden="true" />
           )}
         </button>
 
         {/* Close */}
         <button
-          className="h-full w-11 flex items-center justify-center transition-colors duration-100"
-          style={{ color: colors.fgDark }}
-          onMouseEnter={e => { e.currentTarget.style.backgroundColor = '#c42b1c'; e.currentTarget.style.color = '#ffffff'; }}
-          onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = colors.fgDark; }}
+          className="window-control window-control-danger"
           onClick={handleClose}
           aria-label="Close"
         >
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-            <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-          </svg>
+          <X className="w-3.5 h-3.5" aria-hidden="true" />
         </button>
       </div>
     </div>

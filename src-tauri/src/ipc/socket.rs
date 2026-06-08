@@ -25,6 +25,7 @@ use crate::commands::sftp::{SftpEntry, SftpFileContent};
 use crate::session::SessionManager;
 use crate::sftp::helpers::{
     resolve_remote_path, resolve_remote_upload_path, sftp_mkdir_recursive, sftp_remove_recursive,
+    write_remote_file,
 };
 use crate::sftp::{
     effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
@@ -303,6 +304,81 @@ fn is_recoverable_listener_error(_err: &io::Error) -> bool {
     false
 }
 
+#[cfg(not(windows))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StaleSocketCleanup {
+    Removed,
+    BecameReachable,
+    NotRemoved,
+}
+
+#[cfg(not(windows))]
+fn is_stale_socket_bind_error(bind_kind: io::ErrorKind, endpoint_exists: bool) -> bool {
+    endpoint_exists && matches!(bind_kind, io::ErrorKind::AddrInUse)
+}
+
+#[cfg(not(windows))]
+fn cleanup_stale_socket_file(
+    bind_kind: io::ErrorKind,
+    endpoint_display: &str,
+    endpoint_exists: bool,
+) -> StaleSocketCleanup {
+    if !is_stale_socket_bind_error(bind_kind, endpoint_exists) {
+        return StaleSocketCleanup::NotRemoved;
+    }
+
+    let socket_name = match get_socket_name() {
+        Ok(socket_name) => socket_name,
+        Err(err) => {
+            log::warn!(
+                "[IPC] Could not re-check stale endpoint {} before cleanup: {}",
+                endpoint_display,
+                err
+            );
+            return StaleSocketCleanup::NotRemoved;
+        }
+    };
+
+    match interprocess::local_socket::Stream::connect(socket_name) {
+        Ok(_) => StaleSocketCleanup::BecameReachable,
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+            ) =>
+        {
+            match fs::remove_file(endpoint_display) {
+                Ok(()) => {
+                    log::warn!(
+                        "[IPC] Removed stale IPC socket file at {} after failed reachability probe",
+                        endpoint_display
+                    );
+                    StaleSocketCleanup::Removed
+                }
+                Err(remove_err) if remove_err.kind() == io::ErrorKind::NotFound => {
+                    StaleSocketCleanup::Removed
+                }
+                Err(remove_err) => {
+                    log::warn!(
+                        "[IPC] Could not remove stale IPC socket file at {}: {}",
+                        endpoint_display,
+                        remove_err
+                    );
+                    StaleSocketCleanup::NotRemoved
+                }
+            }
+        }
+        Err(err) => {
+            log::debug!(
+                "[IPC] Stale endpoint re-check on {} failed with {:?}; leaving socket file in place",
+                endpoint_display,
+                err.kind()
+            );
+            StaleSocketCleanup::NotRemoved
+        }
+    }
+}
+
 fn listener_options(socket_name: SocketName) -> Result<ListenerOptions<'static>> {
     #[cfg(windows)]
     {
@@ -408,21 +484,61 @@ impl IpcServer {
     /// This should be run in a separate thread.
     pub fn run(&self) -> std::result::Result<(), IpcServerRunError> {
         let socket_name = get_socket_name().map_err(IpcServerRunError::ListenerSetup)?;
-        let listener_options =
-            listener_options(socket_name).map_err(IpcServerRunError::ListenerSetup)?;
+        let options = listener_options(socket_name).map_err(IpcServerRunError::ListenerSetup)?;
 
         log::debug!("[IPC] Creating listener on {}", Self::socket_name_display());
 
         // Create listener with options
-        let listener = match listener_options.create_sync() {
+        let listener = match options.create_sync() {
             Ok(l) => l,
             Err(e) => {
-                log::error!(
-                    "[IPC] Listener creation failed on {}: {:?}",
-                    Self::socket_name_display(),
-                    e
-                );
-                return Err(IpcServerRunError::ListenerBind(e));
+                #[cfg(not(windows))]
+                {
+                    let endpoint_display = Self::socket_name_display();
+                    match cleanup_stale_socket_file(
+                        e.kind(),
+                        &endpoint_display,
+                        Path::new(&endpoint_display).exists(),
+                    ) {
+                        StaleSocketCleanup::Removed => {
+                            let socket_name =
+                                get_socket_name().map_err(IpcServerRunError::ListenerSetup)?;
+                            let options = listener_options(socket_name)
+                                .map_err(IpcServerRunError::ListenerSetup)?;
+                            match options.create_sync() {
+                                Ok(listener) => listener,
+                                Err(retry_err) => {
+                                    log::error!(
+                                        "[IPC] Listener creation failed on {} after stale socket cleanup: {:?}",
+                                        Self::socket_name_display(),
+                                        retry_err
+                                    );
+                                    return Err(IpcServerRunError::ListenerBind(retry_err));
+                                }
+                            }
+                        }
+                        StaleSocketCleanup::BecameReachable => {
+                            return Err(IpcServerRunError::ListenerBind(e));
+                        }
+                        StaleSocketCleanup::NotRemoved => {
+                            log::error!(
+                                "[IPC] Listener creation failed on {}: {:?}",
+                                Self::socket_name_display(),
+                                e
+                            );
+                            return Err(IpcServerRunError::ListenerBind(e));
+                        }
+                    }
+                }
+                #[cfg(windows)]
+                {
+                    log::error!(
+                        "[IPC] Listener creation failed on {}: {:?}",
+                        Self::socket_name_display(),
+                        e
+                    );
+                    return Err(IpcServerRunError::ListenerBind(e));
+                }
             }
         };
 
@@ -1146,9 +1262,7 @@ impl IpcServer {
                         .open_sftp_session()
                         .await
                         .map_err(|e| format!("Failed to open SFTP subsystem: {}", e))?;
-                    sftp.write(&resolved, content.as_bytes())
-                        .await
-                        .map_err(|e| format!("Failed to write remote file {}: {}", resolved, e))
+                    write_remote_file(&sftp, &resolved, content.as_bytes()).await
                 }) {
                     std::result::Result::Ok(_) => IpcMessage::Ok,
                     Err(message) => IpcMessage::Error { message },
@@ -1234,9 +1348,7 @@ impl IpcServer {
                         .unwrap_or("unknown")
                         .to_string();
                     let resolved = resolve_remote_upload_path(&sftp, &resolved, &filename).await;
-                    sftp.write(&resolved, &content)
-                        .await
-                        .map_err(|e| format!("Failed to write remote file {}: {}", resolved, e))?;
+                    write_remote_file(&sftp, &resolved, &content).await?;
 
                     let mut progress = TransferProgress::new(filename, content.len() as u64);
                     progress.transferred_bytes = content.len() as u64;
@@ -1528,7 +1640,7 @@ impl IpcClient {
                     let endpoint_display = socket_name_display();
                     let endpoint_exists = Path::new(&endpoint_display).exists();
 
-                    let bind_outcome = match get_socket_name()
+                    let mut bind_outcome = match get_socket_name()
                         .context("Failed to create filesystem socket name for probe")
                         .and_then(|bind_check| {
                             ListenerOptions::new()
@@ -1546,6 +1658,22 @@ impl IpcClient {
                             .map(|err| err.kind())
                             .unwrap_or(io::ErrorKind::Other)),
                     };
+
+                    if let Err(bind_kind) = bind_outcome {
+                        match cleanup_stale_socket_file(
+                            bind_kind,
+                            &endpoint_display,
+                            endpoint_exists,
+                        ) {
+                            StaleSocketCleanup::Removed => {
+                                bind_outcome = Ok(());
+                            }
+                            StaleSocketCleanup::BecameReachable => {
+                                return Ok(IpcEndpointStatus::Reachable);
+                            }
+                            StaleSocketCleanup::NotRemoved => {}
+                        }
+                    }
 
                     let status = Self::classify_non_windows_probe(
                         connect_err.kind(),
@@ -1894,6 +2022,17 @@ mod tests {
             true,
         );
         assert_eq!(status, IpcEndpointStatus::Occupied);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_non_windows_stale_socket_cleanup_is_limited_to_addr_in_use_files() {
+        assert!(is_stale_socket_bind_error(io::ErrorKind::AddrInUse, true));
+        assert!(!is_stale_socket_bind_error(
+            io::ErrorKind::PermissionDenied,
+            true
+        ));
+        assert!(!is_stale_socket_bind_error(io::ErrorKind::AddrInUse, false));
     }
 
     #[cfg(windows)]

@@ -38,24 +38,37 @@ interface SidebarActionProps {
   icon: React.ReactNode;
   label: string;
   shortcut?: string;
+  variant?: 'default' | 'primary';
   onClick?: () => void;
 }
 
-const SidebarAction = memo(function SidebarAction({ icon, label, shortcut, onClick }: SidebarActionProps) {
+const SidebarAction = memo(function SidebarAction({ icon, label, shortcut, variant = 'default', onClick }: SidebarActionProps) {
   return (
     <button
       className={cn(
-        'flex items-center gap-3 w-full px-3 py-2 rounded-md text-sm',
-        'text-tokyo-fg transition-colors duration-150',
-        'hover:bg-tokyo-bg-hl hover:text-white',
-        'focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
+        'group flex items-center gap-2.5 w-full min-h-9 px-2.5 py-2 rounded-lg border text-sm',
+        'transition-all duration-150 ease-out',
+        'focus:outline-none focus:ring-1 focus:ring-tokyo-blue',
+        variant === 'primary'
+          ? 'border-tokyo-blue bg-tokyo-selection text-tokyo-fg hover:bg-tokyo-bg-hl hover:text-white'
+          : 'border-transparent text-tokyo-fg hover:border-tokyo-bg-hl hover:bg-tokyo-bg-hl hover:text-white'
       )}
       onClick={onClick}
     >
-      {icon}
-      <span className="flex-1 text-left">{label}</span>
+      <span
+        className={cn(
+          'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
+          variant === 'primary'
+            ? 'bg-tokyo-bg-hl text-tokyo-blue'
+            : 'bg-tokyo-bg text-tokyo-comment group-hover:text-tokyo-fg'
+        )}
+        aria-hidden="true"
+      >
+        {icon}
+      </span>
+      <span className="flex-1 truncate text-left">{label}</span>
       {shortcut && (
-        <span className="text-xs text-tokyo-comment">{shortcut}</span>
+        <span className="kbd-chip">{shortcut}</span>
       )}
     </button>
   );
@@ -86,6 +99,7 @@ function App() {
   const [isSnippetManagerOpen, setIsSnippetManagerOpen] = useState(false);
   const [isTunnelPanelOpen, setIsTunnelPanelOpen] = useState(false);
   const [serverToConnect, setServerToConnect] = useState<Server | null>(null);
+  const [connectForceNew, setConnectForceNew] = useState(false);
   const [serverToEdit, setServerToEdit] = useState<Server | null>(null);
   const [sessionToClose, setSessionToClose] = useState<string | null>(null);
 
@@ -196,8 +210,9 @@ function App() {
     }, 100);
   }, [setActiveSession]);
 
-  const handleConnect = useCallback(async (server: Server) => {
+  const handleConnect = useCallback(async (server: Server, options?: { forceNew?: boolean }) => {
     console.log('[App] handleConnect called for server:', server.name);
+    const forceNew = options?.forceNew ?? false;
 
     const credResult = await safeInvoke<{
       id: string;
@@ -220,7 +235,8 @@ function App() {
         cred.credential,
         cred.passphrase || undefined,
         80,
-        24
+        24,
+        forceNew
       );
 
       if (session) {
@@ -229,11 +245,13 @@ function App() {
       } else {
         console.log('[App] Auto-connect failed, showing dialog');
         setServerToConnect(server);
+        setConnectForceNew(forceNew);
         setIsConnectOpen(true);
       }
     } else {
       console.log('[App] No saved credentials, opening connection dialog');
       setServerToConnect(server);
+      setConnectForceNew(forceNew);
       setIsConnectOpen(true);
     }
   }, [connectWithCredentials, handleConnected]);
@@ -252,7 +270,7 @@ function App() {
   }, []);
 
   const handleNewSessionForServer = useCallback((server: Server) => {
-    handleConnect(server);
+    handleConnect(server, { forceNew: true });
   }, [handleConnect]);
 
   const handleQuickCommand = useCallback(() => {
@@ -311,26 +329,27 @@ function App() {
   const sessionToCloseObj = sessionToClose ? sessions.find((s) => s.id === sessionToClose) : null;
 
   return (
-    <div className="h-screen flex flex-col bg-tokyo-bg">
+    <div className="app-shell h-screen flex flex-col bg-tokyo-bg">
       <div
-        className="h-screen flex flex-col bg-tokyo-bg absolute inset-0 z-10"
+        className="app-shell h-screen flex flex-col bg-tokyo-bg absolute inset-0 z-10"
         style={{ display: isSettingsView ? 'flex' : 'none' }}
       >
         <TitleBar />
         <Notifications />
-        <header className="h-10 flex items-center px-4 bg-tokyo-bg-dark border-b border-tokyo-bg-hl">
+        <header className="h-11 flex items-center px-4 bg-tokyo-bg-dark border-b border-tokyo-bg-hl">
           <button
             className={cn(
-              'flex items-center gap-2 px-3 py-1.5 rounded-md',
+              'flex items-center gap-2 px-3 py-1.5 rounded-lg border border-transparent',
               'text-tokyo-fg hover:text-white hover:bg-tokyo-bg-hl',
-              'transition-colors duration-150'
+              'hover:border-tokyo-selection transition-colors duration-150',
+              'focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
             )}
             onClick={goToMain}
           >
             <ArrowLeft className="w-4 h-4" />
             <span className="text-sm">{t('common.back')}</span>
           </button>
-          <h1 className="ml-4 text-white font-semibold">{t('settings.title')}</h1>
+          <h1 className="ml-4 text-tokyo-fg font-semibold">{t('settings.title')}</h1>
         </header>
         <div className="flex-1 overflow-y-auto bg-tokyo-bg">
           <Settings />
@@ -349,7 +368,7 @@ function App() {
         <Notifications />
 
         <div className="flex-1 flex overflow-hidden">
-          <aside className="w-56 flex flex-col border-r border-tokyo-bg-hl bg-tokyo-bg-dark flex-shrink-0">
+          <aside className="app-sidebar hidden w-64 flex-shrink-0 flex-col border-r border-tokyo-bg-hl bg-tokyo-bg-dark md:flex">
             <div className="flex-1 overflow-hidden">
               <ServerList
                 onConnect={handleConnect}
@@ -360,14 +379,15 @@ function App() {
               />
             </div>
 
-            <div className="border-t border-tokyo-bg-hl p-2 space-y-1">
-              <div className="px-2 py-1.5 text-xs font-medium text-tokyo-comment uppercase tracking-wider">
+            <div className="border-t border-tokyo-bg-hl p-2 space-y-1.5">
+              <div className="px-2 py-1 text-xs font-medium text-tokyo-comment">
                 {t('common.actions')}
               </div>
               <SidebarAction
                 icon={<Plus className="w-4 h-4" />}
                 label={t('sidebar.addServer')}
                 shortcut="Ctrl+N"
+                variant="primary"
                 onClick={handleAddServer}
               />
               <SidebarAction
@@ -400,7 +420,7 @@ function App() {
             </div>
           </aside>
 
-          <main className="flex-1 flex flex-col min-w-0 relative">
+          <main className="main-workspace flex-1 flex flex-col min-w-0 relative">
             <SessionTabs onNewSession={handleNewSession} />
 
             <div className="flex-1 min-h-0 flex flex-col">
@@ -412,8 +432,8 @@ function App() {
                         key={session.id}
                         className={
                           session.id === activeSessionId
-                            ? 'absolute inset-0'
-                            : 'absolute inset-0 invisible pointer-events-none'
+                            ? 'terminal-card absolute inset-2'
+                            : 'terminal-card absolute inset-2 invisible pointer-events-none'
                         }
                         style={
                           session.id !== activeSessionId
@@ -438,24 +458,47 @@ function App() {
                   )}
                 </>
               ) : (
-                <div className="h-full flex items-center justify-center bg-tokyo-bg">
-                  <div className="text-center">
-                    <div className="text-6xl mb-4 text-tokyo-comment">{'>'}_</div>
-                    <p className="text-tokyo-fg text-lg mb-2">{t('session.noActiveSession')}</p>
+                <div className="h-full flex items-center justify-center bg-tokyo-bg p-6">
+                  <div className="empty-session-panel text-center">
+                    <div className="empty-session-console" aria-hidden="true">
+                      <span />
+                      <span />
+                      <span />
+                      <strong>VSH</strong>
+                    </div>
+                    <div className="empty-session-glyph mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-tokyo-bg-hl bg-tokyo-bg-dark text-tokyo-blue">
+                      <TerminalIcon className="h-7 w-7" aria-hidden="true" />
+                    </div>
+                    <p className="text-tokyo-fg text-lg font-semibold mb-2">{t('session.noActiveSession')}</p>
                     <p className="text-tokyo-comment text-sm mb-6">
                       {t('session.noActiveSessionDesc')}
                     </p>
-                    <button
-                      className={cn(
-                        'inline-flex items-center gap-2 px-4 py-2 rounded-md',
-                        'bg-tokyo-blue hover:bg-tokyo-blue/80 text-white',
-                        'transition-colors duration-150'
-                      )}
-                      onClick={handleNewSession}
-                    >
-                      <Plus className="w-4 h-4" />
-                      {t('session.newSession')}
-                    </button>
+                    <div className="empty-session-actions">
+                      <button
+                        className={cn(
+                          'inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg',
+                          'bg-tokyo-blue hover:bg-tokyo-cyan text-white',
+                          'transition-colors duration-150',
+                          'focus:outline-none focus:ring-2 focus:ring-tokyo-blue focus:ring-offset-2 focus:ring-offset-tokyo-bg'
+                        )}
+                        onClick={handleNewSession}
+                      >
+                        <Plus className="w-4 h-4" aria-hidden="true" />
+                        {t('session.newSession')}
+                      </button>
+                      <button
+                        className={cn(
+                          'inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border',
+                          'border-tokyo-bg-hl bg-tokyo-bg text-tokyo-fg hover:bg-tokyo-bg-hl hover:text-white',
+                          'transition-colors duration-150',
+                          'focus:outline-none focus:ring-2 focus:ring-tokyo-blue focus:ring-offset-2 focus:ring-offset-tokyo-bg'
+                        )}
+                        onClick={handleAddServer}
+                      >
+                        <Plus className="w-4 h-4" aria-hidden="true" />
+                        {t('sidebar.addServer')}
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -492,7 +535,9 @@ function App() {
         onClose={() => {
           setIsConnectOpen(false);
           setServerToConnect(null);
+          setConnectForceNew(false);
         }}
+        forceNew={connectForceNew}
         onConnected={handleConnected}
       />
 

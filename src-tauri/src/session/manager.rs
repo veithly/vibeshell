@@ -46,6 +46,28 @@ impl SessionManager {
         sessions.get(id).cloned()
     }
 
+    pub async fn find_reusable_by_server_name(&self, server_name: &str) -> Option<Arc<Session>> {
+        let sessions = {
+            let sessions = self.sessions.read().await;
+            sessions.values().cloned().collect::<Vec<_>>()
+        };
+
+        let mut reusable = Vec::new();
+        for session in sessions {
+            if session.server_name != server_name {
+                continue;
+            }
+
+            if matches!(session.get_state().await, SessionState::Connected) {
+                reusable.push(session);
+            }
+        }
+
+        reusable
+            .into_iter()
+            .min_by_key(|session| session.created_at())
+    }
+
     pub async fn reap_inactive_sessions(&self, max_idle: Duration) -> Result<Vec<String>> {
         let sessions = {
             let sessions = self.sessions.read().await;

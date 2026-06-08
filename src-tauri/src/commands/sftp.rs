@@ -21,6 +21,7 @@ use crate::local_shell::LocalShellManager;
 use crate::session::SessionManager;
 use crate::sftp::helpers::{
     resolve_remote_path, resolve_remote_upload_path, sftp_mkdir_recursive, sftp_remove_recursive,
+    write_remote_file,
 };
 use crate::sftp::{
     default_upload_ignore_config, effective_directory_transfer_options, load_upload_ignore_config,
@@ -1057,9 +1058,7 @@ pub async fn sftp_upload_file(
     );
 
     // Write via SFTP (binary-safe, no size limits)
-    sftp.write(&remote_path, &content)
-        .await
-        .map_err(|e| format!("Failed to upload file to {}: {}", remote_path, e))?;
+    write_remote_file(sftp, &remote_path, &content).await?;
 
     let mut progress = TransferProgress::new(filename, content.len() as u64);
     progress.transferred_bytes = content.len() as u64;
@@ -1661,9 +1660,7 @@ pub async fn sftp_write_file(
         request.content.len()
     );
 
-    sftp.write(&path, request.content.as_bytes())
-        .await
-        .map_err(|e| format!("Failed to write file {}: {}", path, e))?;
+    write_remote_file(sftp, &path, request.content.as_bytes()).await?;
 
     Ok(())
 }

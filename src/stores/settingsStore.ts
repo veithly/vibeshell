@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  defaultAiPredictionSettings,
+  normalizeAiPredictionSettings,
+  type AiPredictionSettings,
+} from '../lib/aiCommandPrediction';
 
 // ============================================================================
 // Types
@@ -111,6 +116,7 @@ export interface AppSettings {
   appearance: AppearanceSettings;
   sshDefaults: SshDefaultSettings;
   serverStatus: ServerStatusSettings;
+  aiPrediction: AiPredictionSettings;
 }
 
 /**
@@ -139,6 +145,7 @@ export const defaultSettings: AppSettings = {
     defaultExpanded: false,
     showNetworkRates: true,
   },
+  aiPrediction: { ...defaultAiPredictionSettings },
 };
 
 export const defaultUploadIgnoreConfig: UploadIgnoreConfig = {
@@ -211,6 +218,8 @@ interface SettingsStore {
   updateSshDefaultSettings: (settings: Partial<SshDefaultSettings>) => Promise<void>;
   /** Update server status settings */
   updateServerStatusSettings: (settings: Partial<ServerStatusSettings>) => Promise<void>;
+  /** Update AI command prediction settings */
+  updateAiPredictionSettings: (settings: Partial<AiPredictionSettings>) => Promise<void>;
   /** Update global recursive upload ignore config */
   updateUploadIgnoreConfig: (config: Partial<UploadIgnoreConfig>) => Promise<void>;
   /** Reset all settings to defaults */
@@ -237,6 +246,7 @@ function loadSettingsFromStorage(): AppSettings {
         appearance: { ...defaultSettings.appearance, ...parsed.appearance },
         sshDefaults: { ...defaultSettings.sshDefaults, ...parsed.sshDefaults },
         serverStatus: { ...defaultSettings.serverStatus, ...parsed.serverStatus },
+        aiPrediction: normalizeAiPredictionSettings(parsed.aiPrediction),
       };
     }
   } catch (error) {
@@ -269,6 +279,7 @@ async function loadSettings(): Promise<AppSettings> {
         appearance: { ...defaultSettings.appearance, ...settings.appearance },
         sshDefaults: { ...defaultSettings.sshDefaults, ...settings.sshDefaults },
         serverStatus: { ...defaultSettings.serverStatus, ...settings.serverStatus },
+        aiPrediction: normalizeAiPredictionSettings(settings.aiPrediction),
       };
     }
   } catch (error) {
@@ -450,6 +461,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ...currentSettings.serverStatus,
         ...serverStatusUpdates,
       },
+    };
+
+    set({ settings: newSettings });
+    await saveSettings(newSettings);
+  },
+
+  updateAiPredictionSettings: async (aiPredictionUpdates: Partial<AiPredictionSettings>) => {
+    const currentSettings = get().settings;
+    const newSettings: AppSettings = {
+      ...currentSettings,
+      aiPrediction: normalizeAiPredictionSettings({
+        ...currentSettings.aiPrediction,
+        ...aiPredictionUpdates,
+      }),
     };
 
     set({ settings: newSettings });

@@ -26,20 +26,20 @@ export function IntegrationCard({
 
   // Determine the status display
   const getStatus = () => {
-    if (!installed) {
-      return {
-        text: 'Not Available',
-        color: 'text-tokyo-comment',
-        bgColor: 'bg-tokyo-bg-hl',
-        icon: <AlertCircle className="w-3 h-3" />,
-      };
-    }
     if (vibeshellInstalled) {
       return {
         text: 'Skill Installed',
         color: 'text-tokyo-green',
         bgColor: 'bg-tokyo-green/10',
         icon: <Check className="w-3 h-3" />,
+      };
+    }
+    if (!installed) {
+      return {
+        text: 'Path Known',
+        color: 'text-tokyo-comment',
+        bgColor: 'bg-tokyo-bg-hl',
+        icon: <AlertCircle className="w-3 h-3" />,
       };
     }
     return {
@@ -54,17 +54,6 @@ export function IntegrationCard({
 
   // Determine button state and action
   const renderButton = () => {
-    if (!installed) {
-      return (
-        <button
-          disabled
-          className="px-4 py-2 text-sm rounded-lg bg-tokyo-bg-hl text-tokyo-comment cursor-not-allowed"
-        >
-          Not Available
-        </button>
-      );
-    }
-
     if (vibeshellInstalled) {
       return (
         <button
@@ -112,7 +101,7 @@ export function IntegrationCard({
           ? vibeshellInstalled
             ? 'VibeShell skill is installed and ready to use.'
             : 'Click Install Skill to enable VibeShell in this tool.'
-          : 'This AI tool is not detected on your system.'}
+          : 'Install to the known user-level skill directory.'}
       </p>
 
       <div className="flex justify-end">{renderButton()}</div>

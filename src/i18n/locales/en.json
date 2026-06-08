@@ -124,6 +124,27 @@
     "scrollbackLines": "Scrollback Lines",
     "scrollbackLinesDesc": "Number of lines to keep in history (1,000-100,000)",
 
+    "aiPrediction": "AI Command Prediction",
+    "aiPredictionDesc": "Use your own OpenAI-compatible or Claude-compatible API key to predict inline command ghost text.",
+    "aiPredictionEnabled": "Enable Prediction",
+    "aiPredictionEnabledDesc": "Show AI predictions as ghost text only; commands are never executed automatically.",
+    "aiPredictionProvider": "Provider",
+    "aiPredictionProviderDesc": "Choose the API format used for prediction requests.",
+    "aiPredictionApiKey": "API Key",
+    "aiPredictionApiKeyDesc": "Bring your own key. It is stored in VibeShell settings on this device.",
+    "aiPredictionBaseUrl": "Base URL",
+    "aiPredictionBaseUrlDesc": "Override for compatible gateways or self-hosted proxies.",
+    "aiPredictionModel": "Model",
+    "aiPredictionModelDesc": "Model name sent to the selected provider.",
+    "aiPredictionMinChars": "Minimum Characters",
+    "aiPredictionMinCharsDesc": "Start prediction only after this many typed characters.",
+    "aiPredictionDebounce": "Prediction Delay",
+    "aiPredictionDebounceDesc": "Wait after typing before sending a prediction request.",
+    "aiPredictionProviders": {
+      "openai": "OpenAI compatible",
+      "claude": "Claude compatible"
+    },
+
     "appearance": "Appearance",
     "appearanceDesc": "Customize the look and feel of VibeShell.",
     "theme": "Theme",

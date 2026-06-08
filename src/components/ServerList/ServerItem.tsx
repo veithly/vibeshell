@@ -43,15 +43,18 @@ export function ServerItem({
   return (
     <div
       className={cn(
-        'group flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer',
-        'transition-colors duration-150',
-        'hover:bg-gray-700/50',
-        isSelected && 'bg-gray-700/70 border-l-2 border-blue-500',
-        !isSelected && 'border-l-2 border-transparent'
+        'group flex items-center gap-3 px-2.5 py-2 rounded-lg cursor-pointer border',
+        'transition-all duration-150 ease-out',
+        'hover:bg-tokyo-bg-hl hover:border-tokyo-selection',
+        'focus:outline-none focus:ring-1 focus:ring-tokyo-blue',
+        isSelected
+          ? 'bg-tokyo-selection border-tokyo-blue text-white'
+          : 'border-transparent text-tokyo-fg'
       )}
       onClick={handleClick}
       role="button"
       tabIndex={0}
+      aria-pressed={isSelected}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -62,15 +65,16 @@ export function ServerItem({
       {/* Server Icon */}
       <div
         className={cn(
-          'flex-shrink-0 w-8 h-8 rounded-md flex items-center justify-center',
-          'bg-gray-700/50',
-          isConnected && 'bg-green-900/30'
+          'flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border',
+          isConnected
+            ? 'bg-tokyo-bg-hl border-tokyo-green'
+            : 'bg-tokyo-bg-dark border-tokyo-bg-hl'
         )}
       >
         <Monitor
           className={cn(
             'w-4 h-4',
-            isConnected ? 'text-green-400' : 'text-gray-400'
+            isConnected ? 'text-tokyo-green' : 'text-tokyo-comment'
           )}
         />
       </div>
@@ -81,7 +85,7 @@ export function ServerItem({
           <span
             className={cn(
               'text-sm font-medium truncate',
-              isSelected ? 'text-white' : 'text-gray-200'
+              isSelected ? 'text-white' : 'text-tokyo-fg'
             )}
           >
             {server.name}
@@ -89,16 +93,16 @@ export function ServerItem({
           {/* Connection Status Indicator */}
           {isConnected && (
             <div className="flex items-center gap-1 flex-shrink-0">
-              <Wifi className="w-3 h-3 text-green-400" />
+              <Wifi className="w-3 h-3 text-tokyo-green" />
               {sessionCount > 1 && (
-                <span className="text-[10px] bg-green-700/50 text-green-300 px-1 rounded-full font-medium">
+                <span className="min-w-[1rem] h-4 inline-flex items-center justify-center rounded-full bg-tokyo-bg-hl px-1 text-[10px] font-semibold text-tokyo-green">
                   {sessionCount}
                 </span>
               )}
             </div>
           )}
         </div>
-        <span className="text-xs text-gray-500 truncate block">
+        <span className="text-xs text-tokyo-comment truncate block">
           {connectionString}
         </span>
       </div>
@@ -106,14 +110,14 @@ export function ServerItem({
       {/* Context Menu Button (shows on hover) */}
       <button
         className={cn(
-          'flex-shrink-0 p-1 rounded opacity-0 group-hover:opacity-100',
-          'transition-opacity duration-150',
-          'hover:bg-gray-600/50 focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-gray-500'
+          'flex-shrink-0 p-1 rounded-md opacity-0 group-hover:opacity-100',
+          'transition-opacity duration-150 text-tokyo-comment',
+          'hover:bg-tokyo-bg hover:text-tokyo-fg focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
         )}
         onClick={handleContextMenuClick}
         aria-label={`More options for ${server.name}`}
       >
-        <MoreVertical className="w-4 h-4 text-gray-400" />
+        <MoreVertical className="w-4 h-4" />
       </button>
     </div>
   );

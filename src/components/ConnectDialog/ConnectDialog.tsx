@@ -8,6 +8,7 @@ import { safeInvoke } from '../../lib/tauri';
 interface ConnectDialogProps {
   isOpen: boolean;
   server: Server | null;
+  forceNew?: boolean;
   onClose: () => void;
   onConnected: (sessionId: string) => void;
 }
@@ -24,7 +25,7 @@ function JumpHostBadge({ jumpHostId }: { jumpHostId: string }) {
   );
 }
 
-export function ConnectDialog({ isOpen, server, onClose, onConnected }: ConnectDialogProps) {
+export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onConnected }: ConnectDialogProps) {
   const { connectWithCredentials } = useSessionStore();
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -165,7 +166,8 @@ export function ConnectDialog({ isOpen, server, onClose, onConnected }: ConnectD
         credential,
         passphrase,
         80,
-        24
+        24,
+        forceNew
       );
 
       console.log('[ConnectDialog] connectWithCredentials result:', session);
@@ -186,7 +188,7 @@ export function ConnectDialog({ isOpen, server, onClose, onConnected }: ConnectD
     } finally {
       setIsConnecting(false);
     }
-  }, [server, password, keyContent, connectWithCredentials, onConnected, onClose]);
+  }, [server, password, keyContent, connectWithCredentials, forceNew, onConnected, onClose]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     const isKeyAuth = server?.auth_type === 'key' || server?.auth_type === 'key_with_passphrase';

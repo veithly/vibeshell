@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use crate::sftp::helpers::{join_remote_child, sftp_mkdir_recursive};
+use crate::sftp::helpers::{join_remote_child, sftp_mkdir_recursive, write_remote_file};
 
 const DEFAULT_UPLOAD_EXCLUDES: &[&str] = &[
     "node_modules/",
@@ -168,7 +168,9 @@ pub fn effective_directory_transfer_options(
     let mut config = load_upload_ignore_config().unwrap_or_else(|_| default_upload_ignore_config());
 
     if let Ok(env_excludes) = std::env::var("VIBESHELL_SFTP_EXCLUDES") {
-        config.excluded_paths.extend(parse_exclude_list(&env_excludes));
+        config
+            .excluded_paths
+            .extend(parse_exclude_list(&env_excludes));
     }
     if let Some(extra) = request_excludes {
         config.excluded_paths.extend(extra);
@@ -317,9 +319,7 @@ pub async fn transfer_directory_to_sftp(
                 e
             )
         })?;
-        sftp.write(&remote_path, &content)
-            .await
-            .map_err(|e| format!("Failed to write remote file {}: {}", remote_path, e))?;
+        write_remote_file(sftp, &remote_path, &content).await?;
         uploaded_files += 1;
         transferred_bytes += content.len() as u64;
     }

@@ -12,7 +12,7 @@ pub fn resolve_remote_path(path: &str, home_dir: &str, current_path: &str) -> St
     if trimmed.is_empty() || trimmed == "~" {
         home_dir.to_string()
     } else if let Some(rest) = trimmed.strip_prefix("~/") {
-        format!("{}/{}", home_dir, rest)
+        join_remote_child(home_dir, rest)
     } else if trimmed.starts_with('/') {
         trimmed.to_string()
     } else {
@@ -22,7 +22,7 @@ pub fn resolve_remote_path(path: &str, home_dir: &str, current_path: &str) -> St
         } else {
             current_path
         };
-        format!("{}/{}", base, trimmed)
+        join_remote_child(base, trimmed)
     }
 }
 
@@ -62,6 +62,45 @@ pub async fn resolve_remote_upload_path(
         }
         _ => resolved_remote_path.to_string(),
     }
+}
+
+fn remote_parent_dir(path: &str) -> Option<String> {
+    let path = path.trim().trim_end_matches('/');
+    if path.is_empty() || path == "/" {
+        return None;
+    }
+
+    match path.rfind('/') {
+        Some(0) => Some("/".to_string()),
+        Some(index) => Some(path[..index].to_string()),
+        None => None,
+    }
+}
+
+/// Write a file through SFTP, creating the parent directory first when needed.
+pub async fn write_remote_file(
+    sftp: &SftpSession,
+    remote_path: &str,
+    content: &[u8],
+) -> Result<(), String> {
+    if remote_path.trim().is_empty() || remote_path.trim_end_matches('/') != remote_path {
+        return Err(format!("Remote upload path is not a file: {}", remote_path));
+    }
+
+    if let Some(parent) = remote_parent_dir(remote_path) {
+        if parent != "/" && parent != "." {
+            sftp_mkdir_recursive(sftp, &parent).await.map_err(|e| {
+                format!(
+                    "Failed to create parent directory {} for upload {}: {}",
+                    parent, remote_path, e
+                )
+            })?;
+        }
+    }
+
+    sftp.write(remote_path, content)
+        .await
+        .map_err(|e| format!("Failed to write remote file {}: {}", remote_path, e))
 }
 
 /// Recursively delete a directory via SFTP with depth limit to prevent symlink loops
@@ -175,6 +214,8 @@ mod tests {
             resolve_remote_path("relative", "/home/user", ""),
             "/home/user/relative"
         );
+        assert_eq!(resolve_remote_path("file.txt", "/", "/"), "/file.txt");
+        assert_eq!(resolve_remote_path("~/docs", "/", "/"), "/docs");
     }
 
     #[test]
@@ -192,5 +233,18 @@ mod tests {
             join_remote_child("/home/user/uploads", "/file.txt"),
             "/home/user/uploads/file.txt"
         );
+    }
+
+    #[test]
+    fn test_remote_parent_dir() {
+        assert_eq!(
+            remote_parent_dir("/home/user/file.txt"),
+            Some("/home/user".to_string())
+        );
+        assert_eq!(remote_parent_dir("/file.txt"), Some("/".to_string()));
+        assert_eq!(remote_parent_dir("./file.txt"), Some(".".to_string()));
+        assert_eq!(remote_parent_dir("file.txt"), None);
+        assert_eq!(remote_parent_dir("/"), None);
+        assert_eq!(remote_parent_dir(""), None);
     }
 }

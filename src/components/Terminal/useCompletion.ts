@@ -1,6 +1,11 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { getCommandSuggestions, getHistorySuggestions } from './completionData';
+import { getCommandSuggestions, getCompletionQuery, getHistorySuggestions } from './completionData';
 import type { CompletionItem, CompletionType } from './CompletionPopup';
+import {
+  isAiPredictionReady,
+  predictCommandSuffix,
+  type AiPredictionSettings,
+} from '../../lib/aiCommandPrediction';
 
 const MAX_HISTORY_SIZE = 500;
 const HISTORY_STORAGE_KEY = 'vibeshell_command_history';
@@ -164,7 +169,7 @@ function getEnvVarSuggestions(input: string, maxResults = 5): CompletionItem[] {
     }));
 }
 
-export function useCompletion(): [CompletionState, CompletionActions] {
+export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [CompletionState, CompletionActions] {
   const [visible, setVisible] = useState(false);
   const [items, setItems] = useState<CompletionItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -174,10 +179,35 @@ export function useCompletion(): [CompletionState, CompletionActions] {
   const [ghostText, setGhostText] = useState('');
 
   const historyRef = useRef<string[]>(loadHistory());
+  const aiPredictionSettingsRef = useRef(aiPredictionSettings);
+  const aiPredictionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiPredictionAbortRef = useRef<AbortController | null>(null);
+  const aiPredictionRequestIdRef = useRef(0);
+  const latestInputRef = useRef('');
 
   useEffect(() => {
     historyRef.current = loadHistory();
   }, []);
+
+  useEffect(() => {
+    aiPredictionSettingsRef.current = aiPredictionSettings;
+  }, [aiPredictionSettings]);
+
+  const cancelAiPrediction = useCallback(() => {
+    aiPredictionRequestIdRef.current++;
+
+    if (aiPredictionTimerRef.current) {
+      clearTimeout(aiPredictionTimerRef.current);
+      aiPredictionTimerRef.current = null;
+    }
+
+    if (aiPredictionAbortRef.current) {
+      aiPredictionAbortRef.current.abort();
+      aiPredictionAbortRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => cancelAiPrediction, [cancelAiPrediction]);
 
   const generateCompletions = useCallback((input: string): CompletionItem[] => {
     const trimmedInput = input.trim();
@@ -186,22 +216,28 @@ export function useCompletion(): [CompletionState, CompletionActions] {
     }
 
     const results: Array<CompletionItem & { score: number }> = [];
+    const completionQuery = getCompletionQuery(input);
 
     const envItems = getEnvVarSuggestions(trimmedInput);
     if (envItems.length > 0) {
       return envItems;
     }
 
-    const commandSuggestions = getCommandSuggestions(trimmedInput, 15);
+    const commandSuggestions = getCommandSuggestions(input, 15);
     commandSuggestions.forEach((cmd) => {
-      const fuzzyResult = fuzzyMatch(trimmedInput, cmd.text);
+      const matchQuery = completionQuery;
+      const fuzzyResult = matchQuery ? fuzzyMatch(matchQuery, cmd.text) : {
+        matches: true,
+        score: 1,
+        ranges: [],
+      };
       if (fuzzyResult.matches) {
         results.push({
           text: cmd.text,
           description: cmd.description,
           category: cmd.category,
           isHistory: false,
-          type: 'command' as CompletionType,
+          type: (cmd.completionType ?? 'command') as CompletionType,
           score: fuzzyResult.score,
           matchRanges: fuzzyResult.ranges,
         });
@@ -232,7 +268,7 @@ export function useCompletion(): [CompletionState, CompletionActions] {
     return results.slice(0, 12).map(({ score: _score, ...item }) => item);
   }, []);
 
-  const calculateGhostText = useCallback((input: string): string => {
+  const calculateLocalGhostText = useCallback((input: string): string => {
     const trimmedInput = input.trim();
     if (!trimmedInput || trimmedInput.length < 2) {
       return '';
@@ -247,19 +283,71 @@ export function useCompletion(): [CompletionState, CompletionActions] {
       return historyMatch.slice(trimmedInput.length);
     }
 
-    const suggestions = getCommandSuggestions(trimmedInput, 1);
+    const suggestions = getCommandSuggestions(input, 1);
     if (suggestions.length > 0) {
       const suggestion = suggestions[0].text;
-      if (suggestion.toLowerCase().startsWith(trimmedInput.toLowerCase())) {
-        return suggestion.slice(trimmedInput.length);
+      const completionQuery = getCompletionQuery(input);
+      if (completionQuery && suggestion.toLowerCase().startsWith(completionQuery.toLowerCase())) {
+        return suggestion.slice(completionQuery.length);
       }
     }
 
     return '';
   }, []);
 
+  const scheduleAiPrediction = useCallback((input: string, localCompletions: CompletionItem[]) => {
+    const settings = aiPredictionSettingsRef.current;
+    latestInputRef.current = input;
+
+    if (!settings || !isAiPredictionReady(settings) || input.trim().length < settings.minChars) {
+      cancelAiPrediction();
+      return;
+    }
+
+    cancelAiPrediction();
+
+    const requestId = ++aiPredictionRequestIdRef.current;
+    const controller = new AbortController();
+    aiPredictionAbortRef.current = controller;
+
+    aiPredictionTimerRef.current = setTimeout(async () => {
+      aiPredictionTimerRef.current = null;
+
+      try {
+        const suffix = await predictCommandSuffix(
+          settings,
+          {
+            input,
+            history: historyRef.current,
+            localSuggestions: localCompletions.map((item) => item.text),
+          },
+          controller.signal
+        );
+
+        if (
+          requestId === aiPredictionRequestIdRef.current &&
+          latestInputRef.current === input &&
+          suffix
+        ) {
+          setGhostText(suffix);
+        }
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          console.debug('[Completion] AI prediction skipped:', error);
+        }
+      } finally {
+        if (aiPredictionAbortRef.current === controller) {
+          aiPredictionAbortRef.current = null;
+        }
+      }
+    }, settings.debounceMs);
+  }, [cancelAiPrediction]);
+
   const showCompletions = useCallback((input: string, pos: { x: number; y: number }) => {
     const completions = generateCompletions(input);
+    const ghost = calculateLocalGhostText(input);
+    latestInputRef.current = input;
+    scheduleAiPrediction(input, completions);
 
     if (completions.length > 0) {
       setItems(completions);
@@ -268,12 +356,12 @@ export function useCompletion(): [CompletionState, CompletionActions] {
       setCurrentInput(input);
       setCompletionPrefix(input.trim());
       setVisible(true);
-      setGhostText(calculateGhostText(input));
+      setGhostText(ghost);
     } else {
       setVisible(false);
-      setGhostText('');
+      setGhostText(ghost);
     }
-  }, [generateCompletions, calculateGhostText]);
+  }, [generateCompletions, calculateLocalGhostText, scheduleAiPrediction]);
 
   const autoTrigger = useCallback((input: string, pos: { x: number; y: number }) => {
     const trimmedInput = input.trim();
@@ -282,54 +370,54 @@ export function useCompletion(): [CompletionState, CompletionActions] {
       setVisible(false);
       setItems([]);
       setGhostText('');
+      cancelAiPrediction();
       return;
     }
 
     const completions = generateCompletions(input);
-    const ghost = calculateGhostText(input);
-
-    console.debug('[Completion] autoTrigger:', { input: trimmedInput, completionsCount: completions.length, pos });
+    const ghost = calculateLocalGhostText(input);
 
     setCurrentInput(input);
     setCompletionPrefix(trimmedInput);
     setGhostText(ghost);
-
-    if (completions.length > 0) {
-      setItems(completions);
-      setSelectedIndex(0);
-      setPosition(pos);
-      setVisible(true);
-    } else {
-      setVisible(false);
-      setItems([]);
-    }
-  }, [generateCompletions, calculateGhostText]);
+    setItems(completions);
+    setSelectedIndex(0);
+    setPosition(pos);
+    setVisible(false);
+    scheduleAiPrediction(input, completions);
+  }, [generateCompletions, calculateLocalGhostText, scheduleAiPrediction, cancelAiPrediction]);
 
   const updateCompletions = useCallback((input: string) => {
     const completions = generateCompletions(input);
+    const ghost = calculateLocalGhostText(input);
+    latestInputRef.current = input;
+    scheduleAiPrediction(input, completions);
 
     if (completions.length > 0) {
       setItems(completions);
       setSelectedIndex(0);
       setCurrentInput(input);
       setCompletionPrefix(input.trim());
-      setGhostText(calculateGhostText(input));
+      setGhostText(ghost);
     } else {
       setVisible(false);
-      setGhostText('');
+      setItems([]);
+      setGhostText(ghost);
     }
-  }, [generateCompletions, calculateGhostText]);
+  }, [generateCompletions, calculateLocalGhostText, scheduleAiPrediction]);
 
   const hideCompletions = useCallback(() => {
     setVisible(false);
     setItems([]);
     setSelectedIndex(0);
     setGhostText('');
-  }, []);
+    cancelAiPrediction();
+  }, [cancelAiPrediction]);
 
   const clearGhostText = useCallback(() => {
     setGhostText('');
-  }, []);
+    cancelAiPrediction();
+  }, [cancelAiPrediction]);
 
   const getGhostText = useCallback(() => ghostText, [ghostText]);
 

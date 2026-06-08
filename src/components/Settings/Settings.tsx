@@ -10,6 +10,11 @@ import {
   type ThemeName,
   type ServerStatusRefreshInterval,
 } from '../../stores/settingsStore';
+import {
+  getDefaultAiBaseUrl,
+  getDefaultAiModel,
+  type AiPredictionProvider,
+} from '../../lib/aiCommandPrediction';
 import { useFingerprintStore } from '../../stores/fingerprintStore';
 import { IntegrationCard } from './IntegrationCard';
 import {
@@ -27,6 +32,9 @@ import {
   Video,
   Trash2,
   FolderOpen,
+  Sparkles,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useRecordingStore } from '../../stores/recordingStore';
 import type { Recording } from '../../types/tunnel';
@@ -209,24 +217,56 @@ interface TextInputProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  type?: 'text' | 'password' | 'url';
+  className?: string;
 }
 
 /**
  * A styled text input.
  */
-function TextInput({ value, onChange, placeholder }: TextInputProps) {
+function TextInput({ value, onChange, placeholder, type = 'text', className = 'w-48' }: TextInputProps) {
   return (
     <input
-      type="text"
+      type={type}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="w-48 px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
+      className={`${className} px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
                  text-tokyo-fg text-sm
                  focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue
                  hover:border-tokyo-comment transition-colors
-                 placeholder:text-tokyo-comment"
+                 placeholder:text-tokyo-comment`}
     />
+  );
+}
+
+function SecretInput({ value, onChange, placeholder }: TextInputProps) {
+  const [visible, setVisible] = useState(false);
+
+  return (
+    <div className="relative">
+      <input
+        type={visible ? 'text' : 'password'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-80 pl-3 pr-10 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
+                   text-tokyo-fg text-sm
+                   focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue
+                   hover:border-tokyo-comment transition-colors
+                   placeholder:text-tokyo-comment"
+      />
+      <button
+        type="button"
+        onClick={() => setVisible((current) => !current)}
+        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md
+                   text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-selection/40
+                   transition-colors"
+        aria-label={visible ? 'Hide API key' : 'Show API key'}
+      >
+        {visible ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+      </button>
+    </div>
   );
 }
 
@@ -444,6 +484,7 @@ export function Settings() {
     updateAppearanceSettings,
     updateSshDefaultSettings,
     updateServerStatusSettings,
+    updateAiPredictionSettings,
     updateUploadIgnoreConfig,
     resetSettings,
   } = useSettingsStore();
@@ -482,6 +523,14 @@ export function Settings() {
         .split(/\r?\n|,|;/)
         .map((value) => value.trim())
         .filter(Boolean),
+    });
+  };
+
+  const handleAiProviderChange = (provider: AiPredictionProvider) => {
+    updateAiPredictionSettings({
+      provider,
+      baseUrl: getDefaultAiBaseUrl(provider),
+      model: getDefaultAiModel(provider),
     });
   };
 
@@ -550,6 +599,79 @@ export function Settings() {
             step={1000}
             onChange={(scrollbackLines) => updateTerminalSettings({ scrollbackLines })}
             formatValue={(v) => v.toLocaleString()}
+          />
+        </SettingRow>
+      </SettingsSection>
+
+      {/* ================================================================== */}
+      {/* AI Command Prediction Section */}
+      {/* ================================================================== */}
+      <SettingsSection
+        icon={<Sparkles className="w-5 h-5" />}
+        title={t('settings.aiPrediction')}
+        description={t('settings.aiPredictionDesc')}
+      >
+        <SettingRow label={t('settings.aiPredictionEnabled')} description={t('settings.aiPredictionEnabledDesc')}>
+          <Toggle
+            checked={settings.aiPrediction.enabled}
+            onChange={(enabled) => updateAiPredictionSettings({ enabled })}
+          />
+        </SettingRow>
+
+        <SettingRow label={t('settings.aiPredictionProvider')} description={t('settings.aiPredictionProviderDesc')}>
+          <Select<AiPredictionProvider>
+            value={settings.aiPrediction.provider}
+            options={[
+              { value: 'openai', label: t('settings.aiPredictionProviders.openai') },
+              { value: 'claude', label: t('settings.aiPredictionProviders.claude') },
+            ]}
+            onChange={handleAiProviderChange}
+          />
+        </SettingRow>
+
+        <SettingRow label={t('settings.aiPredictionApiKey')} description={t('settings.aiPredictionApiKeyDesc')}>
+          <SecretInput
+            value={settings.aiPrediction.apiKey}
+            onChange={(apiKey) => updateAiPredictionSettings({ apiKey })}
+            placeholder={settings.aiPrediction.provider === 'claude' ? 'sk-ant-...' : 'sk-...'}
+          />
+        </SettingRow>
+
+        <SettingRow label={t('settings.aiPredictionBaseUrl')} description={t('settings.aiPredictionBaseUrlDesc')}>
+          <TextInput
+            type="url"
+            value={settings.aiPrediction.baseUrl}
+            onChange={(baseUrl) => updateAiPredictionSettings({ baseUrl })}
+            placeholder={getDefaultAiBaseUrl(settings.aiPrediction.provider)}
+            className="w-80"
+          />
+        </SettingRow>
+
+        <SettingRow label={t('settings.aiPredictionModel')} description={t('settings.aiPredictionModelDesc')}>
+          <TextInput
+            value={settings.aiPrediction.model}
+            onChange={(model) => updateAiPredictionSettings({ model })}
+            placeholder={getDefaultAiModel(settings.aiPrediction.provider)}
+            className="w-64"
+          />
+        </SettingRow>
+
+        <SettingRow label={t('settings.aiPredictionMinChars')} description={t('settings.aiPredictionMinCharsDesc')}>
+          <NumberInput
+            value={settings.aiPrediction.minChars}
+            min={1}
+            max={20}
+            onChange={(minChars) => updateAiPredictionSettings({ minChars })}
+          />
+        </SettingRow>
+
+        <SettingRow label={t('settings.aiPredictionDebounce')} description={t('settings.aiPredictionDebounceDesc')}>
+          <NumberInput
+            value={settings.aiPrediction.debounceMs}
+            min={150}
+            max={2000}
+            onChange={(debounceMs) => updateAiPredictionSettings({ debounceMs })}
+            suffix="ms"
           />
         </SettingRow>
       </SettingsSection>

@@ -14,6 +14,7 @@ use crate::remote_tools::{build_remote_rg_command, RemoteSearchOptions};
 use crate::session::SessionManager;
 use crate::sftp::helpers::{
     resolve_remote_path, resolve_remote_upload_path, sftp_mkdir_recursive, sftp_remove_recursive,
+    write_remote_file,
 };
 use crate::sftp::{
     effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
@@ -833,9 +834,7 @@ async fn tool_sftp_upload(state: &McpState, args: &Value) -> Result<String, Stri
         .to_string();
     let resolved_remote = resolve_remote_upload_path(&sftp, &resolved_remote, &filename).await;
 
-    sftp.write(&resolved_remote, &content)
-        .await
-        .map_err(|e| format!("Failed to upload to '{}': {}", resolved_remote, e))?;
+    write_remote_file(&sftp, &resolved_remote, &content).await?;
 
     Ok(format!(
         "Uploaded '{}' -> '{}' ({} bytes)",
@@ -1125,9 +1124,7 @@ async fn tool_sftp_write(state: &McpState, args: &Value) -> Result<String, Strin
     let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
     let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
 
-    sftp.write(&resolved_path, content.as_bytes())
-        .await
-        .map_err(|e| format!("Failed to write '{}': {}", resolved_path, e))?;
+    write_remote_file(&sftp, &resolved_path, content.as_bytes()).await?;
 
     Ok(format!(
         "Written {} bytes to '{}'",
@@ -1171,15 +1168,26 @@ async fn tool_add_file(state: &McpState, args: &Value) -> Result<String, String>
         ));
     }
 
-    if parents {
-        if let Some(parent) = remote_parent_path(&resolved_path) {
+    if let Some(parent) = remote_parent_path(&resolved_path) {
+        if parents {
             sftp_mkdir_recursive(&sftp, &parent).await?;
+        } else if parent != "/" {
+            match sftp.metadata(&parent).await {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => {
+                    return Err(format!("Parent path is not a directory: {}", parent));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Parent directory does not exist for '{}': {}. Set parents=true to create it.",
+                        resolved_path, e
+                    ));
+                }
+            }
         }
     }
 
-    sftp.write(&resolved_path, content.as_bytes())
-        .await
-        .map_err(|e| format!("Failed to write '{}': {}", resolved_path, e))?;
+    write_remote_file(&sftp, &resolved_path, content.as_bytes()).await?;
 
     Ok(format!(
         "Added {} bytes to '{}'",
@@ -1227,9 +1235,7 @@ async fn tool_edit_file(state: &McpState, args: &Value) -> Result<String, String
     }
 
     if let Some(content) = content {
-        sftp.write(&resolved_path, content.as_bytes())
-            .await
-            .map_err(|e| format!("Failed to write '{}': {}", resolved_path, e))?;
+        write_remote_file(&sftp, &resolved_path, content.as_bytes()).await?;
         return Ok(format!(
             "Edited '{}' ({} bytes)",
             resolved_path,
@@ -1262,9 +1268,7 @@ async fn tool_edit_file(state: &McpState, args: &Value) -> Result<String, String
     })?;
 
     let (updated, replacements) = replace_text(&current, old_text, new_text, replace_all)?;
-    sftp.write(&resolved_path, updated.as_bytes())
-        .await
-        .map_err(|e| format!("Failed to write '{}': {}", resolved_path, e))?;
+    write_remote_file(&sftp, &resolved_path, updated.as_bytes()).await?;
 
     Ok(format!(
         "Edited '{}' ({} replacement(s))",

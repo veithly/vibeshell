@@ -110,6 +110,7 @@ tarpaulin-report.html
 # Misc
 # ============================================
 .omx/
+.impeccable/
 pnpm-lock.yaml
 *.tsbuildinfo
 *.backup.*

@@ -26,6 +26,8 @@ pub struct ConnectRequest {
     pub passphrase: Option<String>, // for encrypted keys
     pub cols: Option<u32>,
     pub rows: Option<u32>,
+    #[serde(default)]
+    pub force_new: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +192,15 @@ async fn fetch_remote_session(session_id: &str) -> Result<SessionInfo, String> {
         .ok_or_else(|| format!("Session not found: {}", session_id))
 }
 
+async fn find_remote_reusable_session(server_name: &str) -> Result<Option<SessionInfo>, String> {
+    Ok(fetch_remote_sessions()
+        .await?
+        .into_iter()
+        .filter(|session| session.server_name == server_name)
+        .filter(|session| matches!(session.state, crate::session::SessionState::Connected))
+        .min_by_key(|session| session.created_at))
+}
+
 fn start_remote_session_forwarder(
     app: AppHandle,
     session_id: String,
@@ -331,6 +342,17 @@ pub async fn session_connect(
     request: ConnectRequest,
 ) -> Result<SessionInfo, String> {
     if access_state.is_remote() {
+        if !request.force_new {
+            if let Some(session) = find_remote_reusable_session(&request.server_name).await? {
+                start_remote_session_forwarder(
+                    app,
+                    session.id.clone(),
+                    access_state.inner().clone(),
+                );
+                return Ok(session);
+            }
+        }
+
         match ipc_send(IpcMessage::CreateSessionWithCredentials {
             server_name: request.server_name,
             auth_type: request.auth_type,
@@ -356,6 +378,16 @@ pub async fn session_connect(
                     other
                 ));
             }
+        }
+    }
+
+    if !request.force_new {
+        if let Some(session) = manager
+            .find_reusable_by_server_name(&request.server_name)
+            .await
+        {
+            ensure_session_output_forwarder(app, session.clone()).await;
+            return Ok(session.get_info().await);
         }
     }
 

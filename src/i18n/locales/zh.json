@@ -124,6 +124,27 @@
     "scrollbackLines": "回滚行数",
     "scrollbackLinesDesc": "历史记录保留的行数 (1,000-100,000)",
 
+    "aiPrediction": "AI 指令预测",
+    "aiPredictionDesc": "使用你自己的 OpenAI 兼容或 Claude 兼容 API Key 预测行内指令 ghost text。",
+    "aiPredictionEnabled": "启用预测",
+    "aiPredictionEnabledDesc": "仅显示 AI ghost text 预测，不会自动执行命令。",
+    "aiPredictionProvider": "服务商",
+    "aiPredictionProviderDesc": "选择预测请求使用的 API 格式。",
+    "aiPredictionApiKey": "API Key",
+    "aiPredictionApiKeyDesc": "BYOK 自带密钥。密钥只保存在此设备的 VibeShell 设置中。",
+    "aiPredictionBaseUrl": "Base URL",
+    "aiPredictionBaseUrlDesc": "可填写兼容网关或自建代理地址。",
+    "aiPredictionModel": "模型",
+    "aiPredictionModelDesc": "发送给所选服务商的模型名称。",
+    "aiPredictionMinChars": "最少字符数",
+    "aiPredictionMinCharsDesc": "输入达到该字符数后才开始预测。",
+    "aiPredictionDebounce": "预测延迟",
+    "aiPredictionDebounceDesc": "停止输入后等待多久再发送预测请求。",
+    "aiPredictionProviders": {
+      "openai": "OpenAI 兼容",
+      "claude": "Claude 兼容"
+    },
+
     "appearance": "外观",
     "appearanceDesc": "自定义 VibeShell 的外观。",
     "theme": "主题",

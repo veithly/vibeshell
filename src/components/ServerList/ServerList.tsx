@@ -58,8 +58,9 @@ function GroupSection({
       <button
         className={cn(
           'w-full flex items-center gap-2 px-2 py-1.5 rounded-md',
-          'text-xs font-medium text-gray-400 uppercase tracking-wider',
-          'hover:bg-gray-700/30 transition-colors duration-150'
+          'text-xs font-medium text-tokyo-comment',
+          'hover:bg-tokyo-bg-hl hover:text-tokyo-fg transition-colors duration-150',
+          'focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
         )}
         onClick={onToggle}
         aria-expanded={isExpanded}
@@ -71,10 +72,12 @@ function GroupSection({
         )}
         <FolderClosed
           className="w-3 h-3"
-          style={{ color: group.color || '#6b7280' }}
+          style={{ color: group.color || 'var(--tokyo-comment)' }}
         />
         <span className="truncate">{group.name}</span>
-        <span className="ml-auto text-gray-500">{servers.length}</span>
+        <span className="ml-auto rounded-full bg-tokyo-bg px-1.5 py-0.5 text-[10px] text-tokyo-comment">
+          {servers.length}
+        </span>
       </button>
 
       {/* Server Items */}
@@ -302,27 +305,47 @@ export function ServerList({
     return items;
   }, [contextMenu.server, connectedServerIds, handleConnectFromMenu, handleNewSessionFromMenu, handleEditFromMenu, handleDeleteFromMenu]);
 
+  const totalServers = groupedServers.reduce((total, group) => total + group.servers.length, ungroupedServers.length);
+  const activeServerCount = connectedServerIds.size;
+
   return (
     <>
-      <div className="h-full flex flex-col bg-gray-800/50">
+      <div className="h-full flex flex-col bg-tokyo-bg-dark">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/50">
-          <div className="flex items-center gap-2">
-            <ServerIcon className="w-4 h-4 text-gray-400" />
-            <h2 className="text-sm font-semibold text-gray-200">Servers</h2>
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-tokyo-bg-hl">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <ServerIcon className="w-4 h-4 text-tokyo-blue" />
+              <h2 className="text-sm font-semibold text-tokyo-fg">Servers</h2>
+            </div>
+            <div className="mt-1 flex items-center gap-2 text-[11px] text-tokyo-comment">
+              <span>{totalServers} saved</span>
+              <span className="h-1 w-1 rounded-full bg-tokyo-bg-hl" />
+              <span className={activeServerCount > 0 ? 'text-tokyo-green' : undefined}>
+                {activeServerCount} active
+              </span>
+            </div>
           </div>
-          <button
-            className={cn(
-              'p-1.5 rounded-md',
-              'text-gray-400 hover:text-white',
-              'hover:bg-gray-700/50 transition-colors duration-150',
-              'focus:outline-none focus:ring-1 focus:ring-gray-500'
-            )}
-            onClick={onAddServer}
-            aria-label="Add server"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="server-signal" aria-hidden="true">
+              <span className={totalServers > 0 ? 'is-on' : undefined} />
+              <span className={activeServerCount > 0 ? 'is-on' : undefined} />
+              <span />
+              <span />
+            </div>
+            <button
+              className={cn(
+                'p-1.5 rounded-md flex-shrink-0',
+                'text-tokyo-comment hover:text-tokyo-fg',
+                'hover:bg-tokyo-bg-hl transition-colors duration-150',
+                'focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
+              )}
+              onClick={onAddServer}
+              aria-label="Add server"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
@@ -330,17 +353,17 @@ export function ServerList({
           {/* Loading State */}
           {loading && (
             <div className="flex items-center justify-center py-8">
-              <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
-              <span className="ml-2 text-sm text-gray-400">Loading servers...</span>
+              <Loader2 className="w-5 h-5 text-tokyo-blue animate-spin" />
+              <span className="ml-2 text-sm text-tokyo-comment">Loading servers...</span>
             </div>
           )}
 
           {/* Error State */}
           {error && !loading && (
-            <div className="mx-2 my-4 p-3 rounded-md bg-red-900/20 border border-red-800/30">
-              <p className="text-sm text-red-400">{error}</p>
+            <div className="mx-2 my-4 p-3 rounded-lg bg-tokyo-bg border border-tokyo-red">
+              <p className="text-sm text-tokyo-red">{error}</p>
               <button
-                className="mt-2 text-xs text-red-300 hover:text-red-200 underline"
+                className="mt-2 text-xs text-tokyo-red hover:text-white underline underline-offset-4"
                 onClick={clearError}
               >
                 Dismiss
@@ -350,20 +373,21 @@ export function ServerList({
 
           {/* Empty State */}
           {!loading && !error && groupedServers.length === 0 && ungroupedServers.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-8 px-4">
-              <ServerIcon className="w-8 h-8 text-gray-600 mb-3" />
-              <p className="text-sm text-gray-400 text-center mb-4">
-                No servers configured yet.
-                <br />
+            <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
+              <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-tokyo-bg-hl bg-tokyo-bg">
+                <ServerIcon className="w-5 h-5 text-tokyo-blue" />
+              </div>
+              <p className="text-sm text-tokyo-fg mb-1">No servers configured yet.</p>
+              <p className="text-xs leading-5 text-tokyo-comment mb-4">
                 Add your first server to get started.
               </p>
               <button
                 className={cn(
                   'flex items-center gap-2 px-4 py-2 rounded-md',
-                  'bg-blue-600 hover:bg-blue-500',
+                  'bg-tokyo-blue hover:bg-tokyo-cyan',
                   'text-sm font-medium text-white',
                   'transition-colors duration-150',
-                  'focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-800'
+                  'focus:outline-none focus:ring-2 focus:ring-tokyo-blue focus:ring-offset-2 focus:ring-offset-tokyo-bg-dark'
                 )}
                 onClick={onAddServer}
               >
@@ -393,7 +417,7 @@ export function ServerList({
           {!loading && ungroupedServers.length > 0 && (
             <div className="mt-2">
               {groupedServers.length > 0 && (
-                <div className="px-2 py-1.5 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <div className="px-2 py-1.5 text-xs font-medium text-tokyo-comment">
                   Ungrouped
                 </div>
               )}
@@ -416,13 +440,13 @@ export function ServerList({
 
         {/* Footer with Add Server button (when not empty) */}
         {!loading && (groupedServers.length > 0 || ungroupedServers.length > 0) && (
-          <div className="px-3 py-2 border-t border-gray-700/50">
+          <div className="px-3 py-2 border-t border-tokyo-bg-hl">
             <button
               className={cn(
                 'w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md',
-                'text-sm text-gray-400 hover:text-white',
-                'hover:bg-gray-700/50 transition-colors duration-150',
-                'focus:outline-none focus:ring-1 focus:ring-gray-500'
+                'text-sm text-tokyo-comment hover:text-tokyo-fg',
+                'hover:bg-tokyo-bg-hl transition-colors duration-150',
+                'focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
               )}
               onClick={onAddServer}
             >

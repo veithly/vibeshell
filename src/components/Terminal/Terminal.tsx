@@ -94,7 +94,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     useEffect(() => { resizeForSessionRef.current = resizeSessionForSession; }, [resizeSessionForSession]);
     useEffect(() => { onDataRef.current = onData; }, [onData]);
 
-    const [completionState, completionActions] = useCompletion();
+    const [completionState, completionActions] = useCompletion(settings.aiPrediction);
 
     const [contextMenu, setContextMenu] = useState({
       visible: false,
@@ -661,7 +661,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       <>
         <div
           ref={terminalRef}
-          className="w-full h-full relative overflow-hidden"
+          className="terminal-viewport w-full h-full relative overflow-hidden"
           style={{ backgroundColor: bgColor }}
           onContextMenu={handleContextMenu}
         />
@@ -679,13 +679,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
         {contextMenu.visible && (
           <div
-            className="fixed z-50 min-w-[160px] py-1 rounded-lg shadow-lg border"
+            className="fixed z-50 min-w-[160px] py-1 rounded-lg border"
             style={{
               left: contextMenu.x,
               top: contextMenu.y,
               backgroundColor: themeColors.bgDark,
               borderColor: themeColors.bgHl,
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
             }}
           >
             <button
