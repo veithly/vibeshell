@@ -1,6 +1,7 @@
 //! Shared SFTP helper functions used by both Tauri commands and MCP tools.
 
 use russh_sftp::client::SftpSession;
+use tokio::io::AsyncWriteExt;
 
 /// Maximum recursion depth for directory operations (prevents symlink loops)
 pub const MAX_RECURSIVE_DEPTH: u32 = 100;
@@ -98,9 +99,19 @@ pub async fn write_remote_file(
         }
     }
 
-    sftp.write(remote_path, content)
+    // russh-sftp's SftpSession::write opens with WRITE only; create is required
+    // for first-time uploads where the remote file does not exist yet.
+    let mut file = sftp
+        .create(remote_path)
         .await
-        .map_err(|e| format!("Failed to write remote file {}: {}", remote_path, e))
+        .map_err(|e| format!("Failed to create remote file {}: {}", remote_path, e))?;
+
+    file.write_all(content)
+        .await
+        .map_err(|e| format!("Failed to write remote file {}: {}", remote_path, e))?;
+    file.shutdown()
+        .await
+        .map_err(|e| format!("Failed to close remote file {}: {}", remote_path, e))
 }
 
 /// Recursively delete a directory via SFTP with depth limit to prevent symlink loops
