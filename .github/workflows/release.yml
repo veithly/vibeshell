@@ -223,8 +223,71 @@ jobs:
 
       - name: Build Tauri app
         shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
         run: |
           npx tauri build ${{ matrix.args }}
+
+      - name: Repair unsigned macOS app bundle
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          VERSION: ${{ needs.bump-and-release.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [[ -n "${APPLE_CERTIFICATE:-}" || -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+            echo "Apple signing is configured; keeping Tauri's signed and notarized bundles."
+            exit 0
+          fi
+
+          app_candidates=(
+            "target/${TARGET}/release/bundle/macos/VibeShell.app"
+            "target/release/bundle/macos/VibeShell.app"
+          )
+          APP_PATH=""
+          for candidate in "${app_candidates[@]}"; do
+            if [ -d "$candidate" ]; then
+              APP_PATH="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$APP_PATH" ]; then
+            echo "VibeShell.app not found. Checked:"
+            printf '  %s\n' "${app_candidates[@]}"
+            exit 1
+          fi
+
+          codesign --force --deep --sign - "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+          bundle_root="$(dirname "$(dirname "$APP_PATH")")"
+          dmg_dir="${bundle_root}/dmg"
+          mkdir -p "$dmg_dir"
+          find "$dmg_dir" -maxdepth 1 -type f -name "*.dmg" -delete
+
+          arch="x64"
+          if [[ "$TARGET" == *"aarch64"* ]]; then
+            arch="aarch64"
+          fi
+
+          staging_dir="$(mktemp -d)"
+          ditto "$APP_PATH" "${staging_dir}/VibeShell.app"
+          ln -s /Applications "${staging_dir}/Applications"
+          hdiutil create \
+            -volname "VibeShell" \
+            -srcfolder "$staging_dir" \
+            -ov \
+            -format UDZO \
+            "${dmg_dir}/VibeShell_${VERSION}_${arch}.dmg"
 
       - name: Collect and upload release assets
         shell: bash
