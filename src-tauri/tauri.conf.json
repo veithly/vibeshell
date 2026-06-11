@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "node node_modules/vite/bin/vite.js",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "node scripts/build-vshell-sidecar.js && node node_modules/typescript/bin/tsc && node node_modules/vite/bin/vite.js build",
+    "beforeBuildCommand": "node node_modules/typescript/bin/tsc && node node_modules/vite/bin/vite.js build && node scripts/build-vshell-sidecar.js",
     "frontendDist": "../dist"
   },
   "app": {

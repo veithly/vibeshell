@@ -60,6 +60,12 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install Rust stable
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
       - name: Bump version
         id: bump
         run: |
@@ -93,6 +99,7 @@ jobs:
             jq --arg v "$NEW_VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
             npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version
             sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
+            cargo update -p vibeshell -p vshell
           fi
 
       - name: Commit version bump
@@ -103,7 +110,7 @@ jobs:
           if git diff --quiet; then
             echo "No version changes to commit"
           else
-            git add src-tauri/tauri.conf.json package.json package-lock.json Cargo.toml
+            git add src-tauri/tauri.conf.json package.json package-lock.json Cargo.toml Cargo.lock
             git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
             git push origin HEAD:${{ github.ref_name }}
           fi
@@ -177,7 +184,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ needs.bump-and-release.outputs.tag_name }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -214,39 +221,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build vshell CLI
-        shell: bash
-        run: |
-          if [[ "${{ matrix.target }}" != "" && "${{ matrix.args }}" == *"--target"* ]]; then
-            cargo build --release --package vshell --target ${{ matrix.target }}
-          else
-            cargo build --release --package vshell
-          fi
-
-      - name: Copy vshell to sidecar location
-        shell: bash
-        run: |
-          mkdir -p src-tauri/binaries
-          TARGET="${{ matrix.target }}"
-          EXT=""
-          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
-            EXT=".exe"
-          fi
-
-          # Determine source path
-          if [[ "${{ matrix.args }}" == *"--target"* ]]; then
-            SRC="target/${TARGET}/release/vshell${EXT}"
-          else
-            SRC="target/release/vshell${EXT}"
-          fi
-
-          DEST="src-tauri/binaries/vshell-${TARGET}${EXT}"
-
-          echo "Copying $SRC -> $DEST"
-          cp "$SRC" "$DEST"
-          chmod +x "$DEST" 2>/dev/null || true
-          ls -la src-tauri/binaries/
-
       - name: Build Tauri app
         shell: bash
         run: |
@@ -266,18 +240,22 @@ jobs:
             EXT=".exe"
           fi
 
-          # Find the built vshell binary
-          if [[ "${{ matrix.args }}" == *"--target"* ]]; then
-            BINARY="target/${TARGET}/release/vshell${EXT}"
-          else
-            BINARY="target/release/vshell${EXT}"
-          fi
+          binary_candidates=(
+            "target/${TARGET}/release/vshell${EXT}"
+            "target/release/vshell${EXT}"
+          )
+          BINARY=""
+          for candidate in "${binary_candidates[@]}"; do
+            if [ -f "$candidate" ]; then
+              BINARY="$candidate"
+              break
+            fi
+          done
 
-          if [[ "${{ matrix.args }}" == *"--target"* ]]; then
-            BUNDLE_DIR="target/${TARGET}/release/bundle"
-          else
-            BUNDLE_DIR="target/release/bundle"
-          fi
+          bundle_dirs=(
+            "target/${TARGET}/release/bundle"
+            "target/release/bundle"
+          )
 
           # Determine platform-friendly name
           case "${{ matrix.platform }}" in
@@ -296,19 +274,24 @@ jobs:
               ;;
           esac
 
-          if [ -f "$BINARY" ]; then
+          if [ -n "$BINARY" ]; then
             cp "$BINARY" "$DEST"
             chmod +x "$DEST" 2>/dev/null || true
           else
-            echo "vshell binary not found at $BINARY"
+            echo "vshell binary not found. Checked:"
+            printf '  %s\n' "${binary_candidates[@]}"
             exit 1
           fi
 
           uploads=("$DEST")
-          if [ -d "$BUNDLE_DIR" ]; then
+          for bundle_dir in "${bundle_dirs[@]}"; do
+            if [ ! -d "$bundle_dir" ]; then
+              continue
+            fi
+
             while IFS= read -r -d '' file; do
               uploads+=("$file")
-            done < <(find "$BUNDLE_DIR" -type f \( \
+            done < <(find "$bundle_dir" -type f \( \
               -name "*.AppImage" -o \
               -name "*.deb" -o \
               -name "*.dmg" -o \
@@ -316,10 +299,11 @@ jobs:
               -name "*.msi" -o \
               -name "*.rpm" \
             \) -print0)
-          fi
+          done
 
           if [ "${#uploads[@]}" -lt 2 ]; then
-            echo "No desktop installer artifacts found under $BUNDLE_DIR"
+            echo "No desktop installer artifacts found. Checked bundle dirs:"
+            printf '  %s\n' "${bundle_dirs[@]}"
             find target -maxdepth 5 -type f 2>/dev/null | sort || true
             exit 1
           fi
