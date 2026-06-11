@@ -224,26 +224,48 @@ jobs:
       - name: Build Tauri app
         shell: bash
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
+          VIBESHELL_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          VIBESHELL_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          VIBESHELL_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          VIBESHELL_APPLE_ID: ${{ secrets.APPLE_ID }}
+          VIBESHELL_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          VIBESHELL_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          VIBESHELL_APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
         run: |
+          if [[ -n "${VIBESHELL_APPLE_CERTIFICATE:-}" ]]; then
+            export APPLE_CERTIFICATE="$VIBESHELL_APPLE_CERTIFICATE"
+          fi
+          if [[ -n "${VIBESHELL_APPLE_CERTIFICATE_PASSWORD:-}" ]]; then
+            export APPLE_CERTIFICATE_PASSWORD="$VIBESHELL_APPLE_CERTIFICATE_PASSWORD"
+          fi
+          if [[ -n "${VIBESHELL_APPLE_SIGNING_IDENTITY:-}" ]]; then
+            export APPLE_SIGNING_IDENTITY="$VIBESHELL_APPLE_SIGNING_IDENTITY"
+          fi
+          if [[ -n "${VIBESHELL_APPLE_ID:-}" ]]; then
+            export APPLE_ID="$VIBESHELL_APPLE_ID"
+          fi
+          if [[ -n "${VIBESHELL_APPLE_PASSWORD:-}" ]]; then
+            export APPLE_PASSWORD="$VIBESHELL_APPLE_PASSWORD"
+          fi
+          if [[ -n "${VIBESHELL_APPLE_TEAM_ID:-}" ]]; then
+            export APPLE_TEAM_ID="$VIBESHELL_APPLE_TEAM_ID"
+          fi
+          if [[ -n "${VIBESHELL_APPLE_PROVIDER_SHORT_NAME:-}" ]]; then
+            export APPLE_PROVIDER_SHORT_NAME="$VIBESHELL_APPLE_PROVIDER_SHORT_NAME"
+          fi
+
           npx tauri build ${{ matrix.args }}
 
       - name: Repair unsigned macOS app bundle
         if: matrix.platform == 'macos-latest'
         shell: bash
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          VIBESHELL_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          VIBESHELL_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           VERSION: ${{ needs.bump-and-release.outputs.version }}
           TARGET: ${{ matrix.target }}
         run: |
-          if [[ -n "${APPLE_CERTIFICATE:-}" || -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
+          if [[ -n "${VIBESHELL_APPLE_CERTIFICATE:-}" || -n "${VIBESHELL_APPLE_SIGNING_IDENTITY:-}" ]]; then
             echo "Apple signing is configured; keeping Tauri's signed and notarized bundles."
             exit 0
           fi
