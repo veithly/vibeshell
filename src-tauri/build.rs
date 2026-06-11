@@ -46,9 +46,10 @@ fn main() {
     }
 
     // Ensure externalBin sidecar binary exists.
-    // During CI checks (cargo check / clippy), the real binary may not be built yet.
-    // Create a placeholder so tauri_build doesn't fail.
-    // The real binary is placed here by CI before `tauri build`.
+    // During checks and while scripts/build-vshell-sidecar.js is building the CLI,
+    // the real binary may not exist yet. In those cases we create a placeholder
+    // so tauri_build validation can continue. Release app builds should reach
+    // this point only after beforeBuildCommand has copied the real CLI here.
     let target = env::var("TARGET").unwrap_or_default();
     let ext = if target.contains("windows") {
         ".exe"
@@ -57,6 +58,20 @@ fn main() {
     };
     let binaries_dir = manifest_dir.join("binaries");
     let sidecar_path = binaries_dir.join(format!("vshell-{}{}", target, ext));
+
+    let profile = env::var("PROFILE").unwrap_or_default();
+    let building_sidecar = env::var("VIBESHELL_BUILDING_SIDECAR").is_ok();
+    let sidecar_missing_or_empty = sidecar_path
+        .metadata()
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(true);
+
+    if profile == "release" && sidecar_missing_or_empty && !building_sidecar {
+        panic!(
+            "Missing real vshell sidecar at {}. Run `node scripts/build-vshell-sidecar.js` from the workspace root before building the Tauri app.",
+            sidecar_path.display()
+        );
+    }
 
     if !sidecar_path.exists() {
         fs::create_dir_all(&binaries_dir).ok();
@@ -67,6 +82,8 @@ fn main() {
             sidecar_path.display()
         );
     }
+
+    println!("cargo:rerun-if-changed={}", sidecar_path.display());
 
     tauri_build::build()
 }

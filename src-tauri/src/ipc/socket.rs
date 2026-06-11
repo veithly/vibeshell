@@ -24,8 +24,9 @@ use interprocess::os::windows::security_descriptor::{
 use crate::commands::sftp::{SftpEntry, SftpFileContent};
 use crate::session::SessionManager;
 use crate::sftp::helpers::{
-    resolve_remote_path, resolve_remote_upload_path, sftp_mkdir_recursive, sftp_remove_recursive,
-    write_remote_file,
+    ensure_remote_file_write_target, resolve_remote_path, resolve_remote_upload_path,
+    sftp_mkdir_recursive, sftp_remove_recursive, write_remote_file, write_remote_file_with_options,
+    WriteRemoteFileOptions,
 };
 use crate::sftp::{
     effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
@@ -207,6 +208,16 @@ pub enum IpcMessage {
         session_id: String,
         path: String,
         content: String,
+    },
+    /// Create a remote text file, honoring add-file overwrite and parents semantics
+    SftpAddFile {
+        session_id: String,
+        path: String,
+        content: String,
+        #[serde(default)]
+        overwrite: bool,
+        #[serde(default)]
+        parents: bool,
     },
 
     // Responses from GUI to CLI
@@ -1268,6 +1279,44 @@ impl IpcServer {
                     Err(message) => IpcMessage::Error { message },
                 }
             }
+            IpcMessage::SftpAddFile {
+                session_id,
+                path,
+                content,
+                overwrite,
+                parents,
+            } => {
+                let context = match Self::get_sftp_context(&sftp_contexts, &session_id) {
+                    Ok(context) => context,
+                    Err(message) => return IpcMessage::Error { message },
+                };
+                let resolved = resolve_remote_path(&path, &context.home_dir, &context.current_path);
+                match rt.block_on(async {
+                    let session = session_manager
+                        .get(&session_id)
+                        .await
+                        .ok_or_else(|| format!("Session not found: {}", session_id))?;
+                    let sftp = session
+                        .open_sftp_session()
+                        .await
+                        .map_err(|e| format!("Failed to open SFTP subsystem: {}", e))?;
+
+                    ensure_remote_file_write_target(&sftp, &resolved, overwrite).await?;
+
+                    write_remote_file_with_options(
+                        &sftp,
+                        &resolved,
+                        content.as_bytes(),
+                        WriteRemoteFileOptions {
+                            create_parent_dirs: parents,
+                        },
+                    )
+                    .await
+                }) {
+                    std::result::Result::Ok(_) => IpcMessage::Ok,
+                    Err(message) => IpcMessage::Error { message },
+                }
+            }
             IpcMessage::SftpDownloadFile {
                 session_id,
                 remote_path,
@@ -1870,6 +1919,17 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("SftpWriteFile"));
+
+        let msg = IpcMessage::SftpAddFile {
+            session_id: "abc".to_string(),
+            path: "notes.txt".to_string(),
+            content: "hello".to_string(),
+            overwrite: false,
+            parents: true,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("SftpAddFile"));
+        assert!(json.contains("parents"));
 
         let msg = IpcMessage::SftpUploadDirectory {
             session_id: "abc".to_string(),

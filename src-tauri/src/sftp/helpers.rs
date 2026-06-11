@@ -1,10 +1,23 @@
 //! Shared SFTP helper functions used by both Tauri commands and MCP tools.
 
-use russh_sftp::client::SftpSession;
+use russh_sftp::{client::error::Error as SftpError, client::SftpSession, protocol::StatusCode};
 use tokio::io::AsyncWriteExt;
 
 /// Maximum recursion depth for directory operations (prevents symlink loops)
 pub const MAX_RECURSIVE_DEPTH: u32 = 100;
+
+#[derive(Clone, Copy, Debug)]
+pub struct WriteRemoteFileOptions {
+    pub create_parent_dirs: bool,
+}
+
+impl Default for WriteRemoteFileOptions {
+    fn default() -> Self {
+        Self {
+            create_parent_dirs: true,
+        }
+    }
+}
 
 /// Resolve a path that may contain `~` against the SFTP home directory.
 /// Relative paths are resolved against `current_path`.
@@ -78,11 +91,56 @@ fn remote_parent_dir(path: &str) -> Option<String> {
     }
 }
 
+fn is_no_such_file(error: &SftpError) -> bool {
+    matches!(
+        error,
+        SftpError::Status(status) if status.status_code == StatusCode::NoSuchFile
+    )
+}
+
+pub async fn ensure_remote_file_write_target(
+    sftp: &SftpSession,
+    remote_path: &str,
+    overwrite: bool,
+) -> Result<(), String> {
+    match sftp.metadata(remote_path).await {
+        Ok(metadata) if metadata.is_dir() => Err(format!(
+            "Remote path is a directory, not a file: {}",
+            remote_path
+        )),
+        Ok(_) if !overwrite => Err(format!(
+            "Remote path already exists: {}. Use --overwrite or overwrite=true to replace it.",
+            remote_path
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if is_no_such_file(&error) => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to inspect remote path {} before writing: {}",
+            remote_path, error
+        )),
+    }
+}
+
 /// Write a file through SFTP, creating the parent directory first when needed.
 pub async fn write_remote_file(
     sftp: &SftpSession,
     remote_path: &str,
     content: &[u8],
+) -> Result<(), String> {
+    write_remote_file_with_options(
+        sftp,
+        remote_path,
+        content,
+        WriteRemoteFileOptions::default(),
+    )
+    .await
+}
+
+pub async fn write_remote_file_with_options(
+    sftp: &SftpSession,
+    remote_path: &str,
+    content: &[u8],
+    options: WriteRemoteFileOptions,
 ) -> Result<(), String> {
     if remote_path.trim().is_empty() || remote_path.trim_end_matches('/') != remote_path {
         return Err(format!("Remote upload path is not a file: {}", remote_path));
@@ -90,12 +148,31 @@ pub async fn write_remote_file(
 
     if let Some(parent) = remote_parent_dir(remote_path) {
         if parent != "/" && parent != "." {
-            sftp_mkdir_recursive(sftp, &parent).await.map_err(|e| {
-                format!(
-                    "Failed to create parent directory {} for upload {}: {}",
-                    parent, remote_path, e
-                )
-            })?;
+            if options.create_parent_dirs {
+                sftp_mkdir_recursive(sftp, &parent).await.map_err(|e| {
+                    format!(
+                        "Failed to create parent directory {} for upload {}: {}",
+                        parent, remote_path, e
+                    )
+                })?;
+            } else {
+                match sftp.metadata(&parent).await {
+                    Ok(metadata) if metadata.is_dir() => {}
+                    Ok(_) => return Err(format!("Parent path is not a directory: {}", parent)),
+                    Err(e) if is_no_such_file(&e) => {
+                        return Err(format!(
+                            "Parent directory does not exist for '{}': {}",
+                            remote_path, e
+                        ))
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "Failed to inspect parent directory {} for '{}': {}",
+                            parent, remote_path, e
+                        ))
+                    }
+                }
+            }
         }
     }
 

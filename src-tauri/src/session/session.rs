@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Error, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -270,27 +270,61 @@ impl Session {
     /// Execute a command via SSH exec channel (does not show in terminal)
     /// Returns the command output as a string
     pub async fn exec_command(&self, command: &str) -> Result<String> {
-        let ssh_guard = self.ssh_client.lock().await;
-        if let Some(ref client) = *ssh_guard {
-            let output = client.exec_command(command).await?;
-            drop(ssh_guard);
-            self.mark_activity().await;
-            Ok(output)
-        } else {
-            Err(anyhow::anyhow!("SSH client not connected"))
+        let client = {
+            let ssh_guard = self.ssh_client.lock().await;
+            ssh_guard
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("SSH client not connected"))?
+        };
+
+        match client.exec_command(command).await {
+            Ok(output) => {
+                self.mark_activity().await;
+                Ok(output)
+            }
+            Err(error) => {
+                if is_ssh_channel_or_transport_error(&error) {
+                    self.set_state(SessionState::Error).await;
+                }
+                Err(error)
+            }
         }
     }
 
     /// Open an SFTP subsystem session on a new SSH channel.
     /// Returns an SftpSession for performing file operations via the SFTP protocol.
     pub async fn open_sftp_session(&self) -> Result<russh_sftp::client::SftpSession> {
-        let ssh_guard = self.ssh_client.lock().await;
-        if let Some(ref client) = *ssh_guard {
-            client.open_sftp_session().await
-        } else {
-            Err(anyhow::anyhow!("SSH client not connected"))
+        let client = {
+            let ssh_guard = self.ssh_client.lock().await;
+            ssh_guard
+                .as_ref()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("SSH client not connected"))?
+        };
+
+        match client.open_sftp_session().await {
+            Ok(sftp) => Ok(sftp),
+            Err(error) => {
+                if is_ssh_channel_or_transport_error(&error) {
+                    self.set_state(SessionState::Error).await;
+                }
+                Err(error)
+            }
         }
     }
+}
+
+fn is_ssh_channel_or_transport_error(error: &Error) -> bool {
+    error.chain().any(|cause| {
+        let message = cause.to_string().to_ascii_lowercase();
+        message.contains("failed to open exec channel")
+            || message.contains("failed to open sftp channel")
+            || message.contains("connection closed")
+            || message.contains("connection reset")
+            || message.contains("broken pipe")
+            || message.contains("senderror")
+    })
 }
 
 #[cfg(test)]

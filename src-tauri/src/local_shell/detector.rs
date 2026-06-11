@@ -183,15 +183,17 @@ fn detect_unix_shells() -> Vec<ShellInfo> {
             format!("/usr/local/bin/{}", name),
             format!("/opt/homebrew/bin/{}", name),
         ];
-        
+
         for path in &standard_paths {
             if std::path::Path::new(path).exists() {
                 return Some(path.clone());
             }
         }
-        
+
         // Fall back to PATH lookup
-        which::which(name).ok().map(|p| p.to_string_lossy().to_string())
+        which::which(name)
+            .ok()
+            .map(|p| p.to_string_lossy().to_string())
     }
 
     // Zsh (default on macOS, check first)

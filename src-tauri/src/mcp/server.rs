@@ -13,8 +13,9 @@ use serde_json::{json, Value};
 use crate::remote_tools::{build_remote_rg_command, RemoteSearchOptions};
 use crate::session::SessionManager;
 use crate::sftp::helpers::{
-    resolve_remote_path, resolve_remote_upload_path, sftp_mkdir_recursive, sftp_remove_recursive,
-    write_remote_file,
+    ensure_remote_file_write_target, resolve_remote_path, resolve_remote_upload_path,
+    sftp_mkdir_recursive, sftp_remove_recursive, write_remote_file, write_remote_file_with_options,
+    WriteRemoteFileOptions,
 };
 use crate::sftp::{
     effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
@@ -1161,33 +1162,17 @@ async fn tool_add_file(state: &McpState, args: &Value) -> Result<String, String>
     let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
     let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
 
-    if !overwrite && sftp.metadata(&resolved_path).await.is_ok() {
-        return Err(format!(
-            "Remote path already exists: {}. Set overwrite=true to replace it.",
-            resolved_path
-        ));
-    }
+    ensure_remote_file_write_target(&sftp, &resolved_path, overwrite).await?;
 
-    if let Some(parent) = remote_parent_path(&resolved_path) {
-        if parents {
-            sftp_mkdir_recursive(&sftp, &parent).await?;
-        } else if parent != "/" {
-            match sftp.metadata(&parent).await {
-                Ok(metadata) if metadata.is_dir() => {}
-                Ok(_) => {
-                    return Err(format!("Parent path is not a directory: {}", parent));
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "Parent directory does not exist for '{}': {}. Set parents=true to create it.",
-                        resolved_path, e
-                    ));
-                }
-            }
-        }
-    }
-
-    write_remote_file(&sftp, &resolved_path, content.as_bytes()).await?;
+    write_remote_file_with_options(
+        &sftp,
+        &resolved_path,
+        content.as_bytes(),
+        WriteRemoteFileOptions {
+            create_parent_dirs: parents,
+        },
+    )
+    .await?;
 
     Ok(format!(
         "Added {} bytes to '{}'",
@@ -1303,20 +1288,6 @@ fn replace_text(
     updated.push_str(new_text);
     updated.push_str(&content[index + old_text.len()..]);
     Ok((updated, 1))
-}
-
-fn remote_parent_path(path: &str) -> Option<String> {
-    let trimmed = path.trim_end_matches('/');
-    if trimmed.is_empty() || trimmed == "/" {
-        return None;
-    }
-
-    let index = trimmed.rfind('/')?;
-    if index == 0 {
-        Some("/".to_string())
-    } else {
-        Some(trimmed[..index].to_string())
-    }
 }
 
 #[cfg(test)]

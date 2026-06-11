@@ -53,7 +53,7 @@ fn find_reusable_session(server_name: &str) -> Result<Option<IpcSessionInfo>> {
         IpcMessage::SessionList { sessions } => Ok(sessions
             .into_iter()
             .filter(|info| info.server_name == server_name)
-            .filter(|info| matches!(info.state.as_str(), "connected" | "connecting"))
+            .filter(|info| info.state == "connected")
             .min_by_key(|info| info.created_at)),
         IpcMessage::Error { message } => bail!("Error listing sessions: {}", message),
         _ => bail!("Unexpected response from background service"),

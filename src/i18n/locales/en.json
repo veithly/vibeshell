@@ -196,6 +196,18 @@
     "inProgress": "In progress",
     "deleteRecording": "Delete recording",
 
+    "cli": "CLI",
+    "cliDesc": "Install the bundled vshell command so terminals and AI tools can find it in PATH.",
+    "cliBundledPath": "Bundled vshell",
+    "cliPathStatus": "System PATH",
+    "cliPathInstalled": "Available",
+    "cliPathMissing": "Not installed",
+    "cliPathDifferent": "Another vshell is currently first in PATH. Install again to point PATH at this VibeShell build.",
+    "cliInstallToPath": "Install to PATH",
+    "cliInstalling": "Installing...",
+    "cliCopyInstallCommand": "Copy Command",
+    "cliBinaryMissing": "The bundled vshell binary is missing or not executable. Rebuild the app so the CLI sidecar is included.",
+
     "skills": "Skills",
     "skillsDesc": "Install VibeShell as a skill to your AI coding tools for SSH and SFTP access.",
     "detectingTools": "Detecting supported AI tools...",

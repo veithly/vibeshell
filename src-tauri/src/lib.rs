@@ -43,6 +43,7 @@ use commands::{
     get_servers,
     get_session_recording_id,
     get_vshell_path,
+    get_vshell_status,
     install_to_tool,
     is_session_recording,
     list_fingerprints,
@@ -354,6 +355,7 @@ pub fn run() {
             install_to_tool,
             uninstall_from_tool,
             get_vshell_path,
+            get_vshell_status,
             add_vshell_to_path,
             // Server management commands
             get_servers,

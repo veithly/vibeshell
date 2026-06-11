@@ -5,6 +5,7 @@ use russh::*;
 use russh_keys::*;
 use russh_sftp::client::SftpSession;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 
 /// Captured server key information from the SSH handshake
@@ -16,6 +17,7 @@ pub struct ServerKeyInfo {
     pub algorithm: String,
 }
 
+#[derive(Clone)]
 pub struct SshClient {
     session: Arc<Mutex<Option<client::Handle<ClientHandler>>>>,
     channel: Arc<Mutex<Option<Channel<client::Msg>>>>,
@@ -117,6 +119,10 @@ impl Default for PtyConfig {
 }
 
 impl SshClient {
+    const EXEC_COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
+    const EXEC_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
+    const EXEC_WAIT_TICK: Duration = Duration::from_millis(250);
+
     pub fn new(output_tx: mpsc::Sender<Vec<u8>>) -> Self {
         Self {
             session: Arc::new(Mutex::new(None)),
@@ -193,20 +199,18 @@ impl SshClient {
             port,
             tcp_timeout.as_secs()
         );
-        let mut session = tokio::time::timeout(
-            tcp_timeout,
-            client::connect(config, (host, port), handler),
-        )
-        .await
-        .map_err(|_| {
-            anyhow!(
+        let mut session =
+            tokio::time::timeout(tcp_timeout, client::connect(config, (host, port), handler))
+                .await
+                .map_err(|_| {
+                    anyhow!(
                 "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
                 host,
                 port,
                 tcp_timeout.as_secs()
             )
-        })?
-        .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
+                })?
+                .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
 
         info!("[SSH] TCP connection established, starting password authentication...");
         let auth_result = session
@@ -278,20 +282,18 @@ impl SshClient {
             port,
             tcp_timeout.as_secs()
         );
-        let mut session = tokio::time::timeout(
-            tcp_timeout,
-            client::connect(config, (host, port), handler),
-        )
-        .await
-        .map_err(|_| {
-            anyhow!(
+        let mut session =
+            tokio::time::timeout(tcp_timeout, client::connect(config, (host, port), handler))
+                .await
+                .map_err(|_| {
+                    anyhow!(
                 "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
                 host,
                 port,
                 tcp_timeout.as_secs()
             )
-        })?
-        .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
+                })?
+                .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
 
         info!("[SSH] TCP connection established, parsing private key...");
         let key_pair = if let Some(pass) = passphrase {
@@ -465,16 +467,18 @@ impl SshClient {
     pub async fn open_sftp_session(&self) -> Result<SftpSession> {
         info!("[SSH] Opening SFTP subsystem channel...");
 
-        let session_guard = self.session.lock().await;
-        let session = session_guard.as_ref().ok_or_else(|| {
-            error!("[SSH] Cannot open SFTP: not connected");
-            anyhow!("Not connected")
-        })?;
+        let channel = {
+            let session_guard = self.session.lock().await;
+            let session = session_guard.as_ref().ok_or_else(|| {
+                error!("[SSH] Cannot open SFTP: not connected");
+                anyhow!("Not connected")
+            })?;
 
-        let channel = session
-            .channel_open_session()
-            .await
-            .with_context(|| "Failed to open SFTP channel")?;
+            session
+                .channel_open_session()
+                .await
+                .with_context(|| "Failed to open SFTP channel")?
+        };
 
         channel
             .request_subsystem(true, "sftp")
@@ -496,41 +500,55 @@ impl SshClient {
     pub async fn exec_command(&self, command: &str) -> Result<String> {
         debug!("[SSH] Executing command via exec channel: {}", command);
 
-        let session_guard = self.session.lock().await;
-        let session = session_guard.as_ref().ok_or_else(|| {
-            error!("[SSH] Cannot exec: not connected");
-            anyhow!("Not connected")
-        })?;
+        // Open the channel while holding the russh handle lock, then release it.
+        // The returned Channel owns its own sender/receiver, so command execution
+        // must not block unrelated SFTP/tunnel/session operations from opening
+        // their own channels.
+        let mut channel = {
+            let session_guard = self.session.lock().await;
+            let session = session_guard.as_ref().ok_or_else(|| {
+                error!("[SSH] Cannot exec: not connected");
+                anyhow!("Not connected")
+            })?;
 
-        // Open a new session channel for this command
-        let mut channel = session
-            .channel_open_session()
-            .await
-            .with_context(|| "Failed to open exec channel")?;
+            session
+                .channel_open_session()
+                .await
+                .with_context(|| "Failed to open exec channel")?
+        };
 
         // Execute the command (not a shell, just exec)
-        channel
-            .exec(true, command)
-            .await
-            .with_context(|| format!("Failed to exec command: {}", command))?;
+        if let Err(error) = channel.exec(true, command).await {
+            let _ = channel.close().await;
+            return Err(error).with_context(|| format!("Failed to exec command: {}", command));
+        }
 
         // Collect output
         let mut output = Vec::new();
-        let timeout = tokio::time::Duration::from_secs(10);
         let start = tokio::time::Instant::now();
+        let mut exit_status = None;
+        let mut remote_closed = false;
+        let mut timed_out = false;
+        let mut last_message_at = start;
+        let mut received_eof = false;
 
         loop {
-            // Check timeout
-            if start.elapsed() > timeout {
-                warn!("[SSH] Command execution timed out");
+            let elapsed = start.elapsed();
+            if elapsed >= Self::EXEC_COMMAND_TIMEOUT {
+                timed_out = true;
+                warn!(
+                    "[SSH] Command execution timed out after {:?}",
+                    Self::EXEC_COMMAND_TIMEOUT
+                );
                 break;
             }
 
-            // Try to receive data with a short timeout
-            match tokio::time::timeout(tokio::time::Duration::from_millis(100), channel.wait())
-                .await
-            {
+            let remaining = Self::EXEC_COMMAND_TIMEOUT.saturating_sub(elapsed);
+            let wait_for = remaining.min(Self::EXEC_WAIT_TICK);
+
+            match tokio::time::timeout(wait_for, channel.wait()).await {
                 Ok(Some(msg)) => {
+                    last_message_at = tokio::time::Instant::now();
                     match msg {
                         ChannelMsg::Data { data } => {
                             output.extend_from_slice(&data);
@@ -541,14 +559,19 @@ impl SshClient {
                         }
                         ChannelMsg::Eof => {
                             debug!("[SSH] Received EOF from exec channel");
-                            break;
+                            received_eof = true;
+                            // Keep draining until Close/None so russh can retire the channel.
                         }
-                        ChannelMsg::ExitStatus { exit_status } => {
-                            debug!("[SSH] Command exit status: {}", exit_status);
-                            // Continue to collect any remaining output
+                        ChannelMsg::ExitStatus {
+                            exit_status: status,
+                        } => {
+                            debug!("[SSH] Command exit status: {}", status);
+                            // Continue to collect any remaining output and wait for Close.
+                            exit_status = Some(status);
                         }
                         ChannelMsg::Close => {
                             debug!("[SSH] Exec channel closed");
+                            remote_closed = true;
                             break;
                         }
                         _ => {}
@@ -556,24 +579,36 @@ impl SshClient {
                 }
                 Ok(None) => {
                     // Channel closed
+                    remote_closed = true;
                     break;
                 }
                 Err(_) => {
-                    // Timeout on wait - check if we have output and no more data coming
-                    if !output.is_empty() {
-                        // Small grace period to see if more data comes
-                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                        // If we've been waiting a while with output, assume done
-                        if start.elapsed() > tokio::time::Duration::from_millis(500) {
-                            break;
-                        }
+                    if (exit_status.is_some() || received_eof)
+                        && last_message_at.elapsed() >= Self::EXEC_CLOSE_DRAIN_TIMEOUT
+                    {
+                        debug!(
+                            "[SSH] Exec channel did not close after completion; closing locally"
+                        );
+                        break;
                     }
                 }
             }
         }
 
-        // Close the exec channel
-        let _ = channel.eof().await;
+        // Always close channels we opened. Sending only EOF is not enough: on
+        // reused OpenSSH sessions it can leave exec channels counted against
+        // MaxSessions, causing later channel_open_session calls to fail.
+        if !remote_closed {
+            let _ = channel.eof().await;
+            let _ = channel.close().await;
+        }
+
+        if timed_out {
+            return Err(anyhow!(
+                "Command timed out after {}s",
+                Self::EXEC_COMMAND_TIMEOUT.as_secs()
+            ));
+        }
 
         let output_str = String::from_utf8_lossy(&output).to_string();
         debug!(

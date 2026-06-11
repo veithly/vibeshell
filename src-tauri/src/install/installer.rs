@@ -19,6 +19,28 @@ use super::detector::{
 const SKILL_DIR_NAME: &str = "vshell";
 const LEGACY_SKILL_DIR_NAME: &str = "vibeshell";
 
+/// Returns true when a candidate path points to a non-empty executable file.
+pub fn is_usable_vshell_binary(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+
+    if !metadata.is_file() || metadata.len() == 0 {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
 /// Resolve the absolute path to the vshell binary.
 ///
 /// Search order:
@@ -37,7 +59,7 @@ pub fn resolve_vshell_binary() -> String {
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(dir) = current_exe.parent() {
             let candidate = dir.join(vshell_name);
-            if candidate.exists() {
+            if is_usable_vshell_binary(&candidate) {
                 return candidate.to_string_lossy().to_string();
             }
         }
@@ -49,7 +71,7 @@ pub fn resolve_vshell_binary() -> String {
         for env_var in &["LOCALAPPDATA", "ProgramFiles"] {
             if let Ok(base) = std::env::var(env_var) {
                 let candidate = PathBuf::from(&base).join("VibeShell").join(vshell_name);
-                if candidate.exists() {
+                if is_usable_vshell_binary(&candidate) {
                     return candidate.to_string_lossy().to_string();
                 }
             }
@@ -62,7 +84,7 @@ pub fn resolve_vshell_binary() -> String {
             "/Applications/VibeShell.app/Contents/MacOS/vshell",
             "/usr/local/bin/vshell",
         ] {
-            if Path::new(c).exists() {
+            if is_usable_vshell_binary(Path::new(c)) {
                 return c.to_string();
             }
         }
@@ -71,7 +93,7 @@ pub fn resolve_vshell_binary() -> String {
     #[cfg(target_os = "linux")]
     {
         for c in &["/usr/bin/vshell", "/usr/local/bin/vshell"] {
-            if Path::new(c).exists() {
+            if is_usable_vshell_binary(Path::new(c)) {
                 return c.to_string();
             }
         }
@@ -90,7 +112,7 @@ pub fn resolve_vshell_binary() -> String {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if let Some(first_line) = path.lines().next() {
-                    if Path::new(first_line).exists() {
+                    if is_usable_vshell_binary(Path::new(first_line)) {
                         return first_line.to_string();
                     }
                 }
@@ -103,7 +125,7 @@ pub fn resolve_vshell_binary() -> String {
         if let Ok(output) = std::process::Command::new("which").arg("vshell").output() {
             if output.status.success() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if Path::new(&path).exists() {
+                if is_usable_vshell_binary(Path::new(&path)) {
                     return path;
                 }
             }

@@ -94,20 +94,7 @@ pub fn add_file(
 ) -> Result<()> {
     let content = content_input.resolve()?;
     with_sftp_session(target, target_is_session, |session_id| {
-        if !overwrite && remote_path_exists(session_id, path)? {
-            bail!(
-                "Remote path already exists: {}. Use --overwrite to replace it.",
-                path
-            );
-        }
-
-        if parents {
-            if let Some(parent) = remote_parent_path(path) {
-                mkdir(session_id, &parent)?;
-            }
-        }
-
-        write_file(session_id, path, &content)?;
+        add_remote_file(session_id, path, &content, overwrite, parents)?;
         println!("Added {} ({} bytes)", path, content.len());
         Ok(())
     })
@@ -249,7 +236,7 @@ fn find_reusable_session(server_name: &str) -> Result<Option<IpcSessionInfo>> {
         IpcMessage::SessionList { sessions } => Ok(sessions
             .into_iter()
             .filter(|info| info.server_name == server_name)
-            .filter(|info| matches!(info.state.as_str(), "connected" | "connecting"))
+            .filter(|info| info.state == "connected")
             .min_by_key(|info| info.created_at)),
         IpcMessage::Error { message } => bail!("Error listing sessions: {}", message),
         _ => bail!("Unexpected response from background service"),
@@ -303,24 +290,22 @@ fn write_file(session_id: &str, path: &str, content: &str) -> Result<()> {
     }
 }
 
-fn mkdir(session_id: &str, path: &str) -> Result<()> {
-    match ipc_support::send(&IpcMessage::SftpMkdir {
+fn add_remote_file(
+    session_id: &str,
+    path: &str,
+    content: &str,
+    overwrite: bool,
+    parents: bool,
+) -> Result<()> {
+    match ipc_support::send(&IpcMessage::SftpAddFile {
         session_id: session_id.to_string(),
         path: path.to_string(),
+        content: content.to_string(),
+        overwrite,
+        parents,
     })? {
         IpcMessage::Ok => Ok(()),
         IpcMessage::Error { message } => bail!("{}", message),
-        _ => bail!("Unexpected response from background service"),
-    }
-}
-
-fn remote_path_exists(session_id: &str, path: &str) -> Result<bool> {
-    match ipc_support::send(&IpcMessage::SftpStat {
-        session_id: session_id.to_string(),
-        path: path.to_string(),
-    })? {
-        IpcMessage::SftpStatResult { .. } => Ok(true),
-        IpcMessage::Error { .. } => Ok(false),
         _ => bail!("Unexpected response from background service"),
     }
 }
@@ -370,23 +355,9 @@ fn replace_text(
     Ok((updated, 1))
 }
 
-fn remote_parent_path(path: &str) -> Option<String> {
-    let trimmed = path.trim_end_matches('/');
-    if trimmed.is_empty() || trimmed == "/" {
-        return None;
-    }
-
-    let index = trimmed.rfind('/')?;
-    if index == 0 {
-        Some("/".to_string())
-    } else {
-        Some(trimmed[..index].to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{remote_parent_path, replace_text, ContentInputArgs};
+    use super::{replace_text, ContentInputArgs};
 
     #[test]
     fn replace_text_replaces_once_by_default() {
@@ -404,20 +375,6 @@ mod tests {
 
         assert_eq!(updated, "hi hi");
         assert_eq!(count, 2);
-    }
-
-    #[test]
-    fn remote_parent_path_handles_absolute_and_relative_paths() {
-        assert_eq!(
-            remote_parent_path("/etc/nginx/nginx.conf").as_deref(),
-            Some("/etc/nginx")
-        );
-        assert_eq!(remote_parent_path("/payload.txt").as_deref(), Some("/"));
-        assert_eq!(
-            remote_parent_path("nested/payload.txt").as_deref(),
-            Some("nested")
-        );
-        assert_eq!(remote_parent_path("payload.txt"), None);
     }
 
     #[test]

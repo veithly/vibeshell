@@ -44,7 +44,33 @@ pub fn connect(server_name: &str, command: &[String], wait: bool, force_new: boo
     // GUI terminal is also attached).
     if !command.is_empty() {
         let joined = command.join(" ");
-        return run_isolated_command(&session_id, &alias, &joined, !reused_existing);
+        if !reused_existing {
+            return run_isolated_command(&session_id, &alias, &joined, true);
+        }
+
+        match run_isolated_command(&session_id, &alias, &joined, false) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                eprintln!(
+                    "Reused session {} (alias: {}) could not execute the command: {}",
+                    session_id, alias, error
+                );
+                eprintln!("Creating a fresh session and retrying...");
+
+                if ipc_support::session_client_count(&session_id) == 0 {
+                    let _ = ipc_support::send(&IpcMessage::KillSession {
+                        session_id: session_id.clone(),
+                    });
+                    let _ = session_alias::remove_by_session_id(&session_id);
+                }
+
+                let fresh_session_id = create_session_with_retry(server_name, wait)?;
+                let fresh_alias = session_alias::register(&fresh_session_id, server_name)
+                    .unwrap_or_else(|_| fresh_session_id[..8].to_string());
+
+                return run_isolated_command(&fresh_session_id, &fresh_alias, &joined, true);
+            }
+        }
     }
 
     if reused_existing {
@@ -158,7 +184,7 @@ fn pick_reusable_session(sessions: &[IpcSessionInfo], server_name: &str) -> Opti
     sessions
         .iter()
         .filter(|info| info.server_name == server_name)
-        .filter(|info| matches!(info.state.as_str(), "connected" | "connecting"))
+        .filter(|info| info.state == "connected")
         .min_by_key(|info| info.created_at)
         .cloned()
 }
@@ -262,6 +288,7 @@ mod tests {
     #[test]
     fn pick_reusable_session_ignores_disconnected_sessions() {
         let sessions = vec![
+            session("pending", "prod", "connecting", 0),
             session("dead", "prod", "disconnected", 1),
             session("errored", "prod", "error", 2),
         ];

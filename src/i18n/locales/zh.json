@@ -196,6 +196,18 @@
     "inProgress": "进行中",
     "deleteRecording": "删除录制",
 
+    "cli": "CLI",
+    "cliDesc": "安装随 VibeShell 打包的 vshell 命令，让终端和 AI 工具可以从 PATH 中找到它。",
+    "cliBundledPath": "随 App 打包的 vshell",
+    "cliPathStatus": "系统 PATH",
+    "cliPathInstalled": "可用",
+    "cliPathMissing": "未安装",
+    "cliPathDifferent": "当前 PATH 中优先找到的是另一个 vshell。重新安装可让 PATH 指向此版本的 VibeShell。",
+    "cliInstallToPath": "安装到 PATH",
+    "cliInstalling": "安装中...",
+    "cliCopyInstallCommand": "复制命令",
+    "cliBinaryMissing": "随 App 打包的 vshell 缺失或不可执行。请重新构建 App，确保 CLI sidecar 被包含。",
+
     "skills": "技能",
     "skillsDesc": "将 VibeShell 作为技能安装到您的 AI 编程工具中，以获取 SSH 和 SFTP 访问权限。",
     "detectingTools": "正在检测支持的 AI 工具...",
