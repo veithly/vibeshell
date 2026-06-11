@@ -290,7 +290,18 @@ jobs:
             fi
 
             while IFS= read -r -d '' file; do
-              uploads+=("$file")
+              upload="$file"
+
+              if [[ "${{ matrix.platform }}" == "macos-latest" && "$file" == *.dmg ]]; then
+                if [[ "${{ matrix.args }}" == *"aarch64"* ]]; then
+                  upload="VibeShell-${VERSION}-macos-arm64.dmg"
+                else
+                  upload="VibeShell-${VERSION}-macos-x64.dmg"
+                fi
+                cp "$file" "$upload"
+              fi
+
+              uploads+=("$upload")
             done < <(find "$bundle_dir" -type f \( \
               -name "*.AppImage" -o \
               -name "*.deb" -o \
