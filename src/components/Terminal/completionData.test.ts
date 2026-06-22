@@ -29,4 +29,11 @@ describe('terminal command completion data', () => {
     expect(context.currentToken).toBe('gi');
     expect(suggestions).toContain('git');
   });
+
+  it('does not add weak contains matches for single-character command input', () => {
+    const suggestions = getCommandSuggestions('w', 50).map((item) => item.text);
+
+    expect(suggestions).toContain('wc');
+    expect(suggestions).not.toContain('awk');
+  });
 });

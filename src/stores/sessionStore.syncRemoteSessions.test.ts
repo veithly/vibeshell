@@ -100,4 +100,42 @@ describe('sessionStore.syncRemoteSessions', () => {
     ]);
     expect(useSessionStore.getState().activeSessionId).toBe('local-shell');
   });
+
+  it('does not update store state when backend sessions are unchanged', async () => {
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'ssh-session',
+          serverId: 'server-1',
+          serverName: 'prod',
+          state: 'connected',
+          createdAt: 1000,
+          sessionType: 'ssh',
+        },
+      ],
+      activeSessionId: 'ssh-session',
+    });
+
+    safeInvokeMock.mockResolvedValue({
+      success: true,
+      data: [
+        {
+          id: 'ssh-session',
+          server_id: 'server-1',
+          server_name: 'prod',
+          state: 'connected',
+          created_at: 1,
+          clients: 1,
+        },
+      ] satisfies SessionInfo[],
+    });
+
+    const listener = vi.fn();
+    const unsubscribe = useSessionStore.subscribe(listener);
+
+    await useSessionStore.getState().syncRemoteSessions();
+
+    expect(listener).not.toHaveBeenCalled();
+    unsubscribe();
+  });
 });

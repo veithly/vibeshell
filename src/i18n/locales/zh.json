@@ -44,6 +44,7 @@
     "closeLocalShell": "关闭本地终端",
     "closeSessionConfirm": "确定要关闭会话 \"{{name}}\" 吗？这将断开与服务器的连接。",
     "closeLocalShellConfirm": "确定要关闭本地终端 \"{{name}}\" 吗？这将终止终端进程。",
+    "reconnect": "重新连接",
     "startRecording": "开始录制",
     "stopRecording": "停止录制",
     "recording": "正在录制会话",

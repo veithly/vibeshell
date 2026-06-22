@@ -9,7 +9,7 @@ import {
 
 const MAX_HISTORY_SIZE = 500;
 const HISTORY_STORAGE_KEY = 'vibeshell_command_history';
-const AUTO_TRIGGER_MIN_CHARS = 1;
+const AUTO_TRIGGER_MIN_CHARS = 2;
 
 const COMMON_ENV_VARS = [
   { name: 'HOME', description: 'User home directory' },

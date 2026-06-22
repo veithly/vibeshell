@@ -44,6 +44,7 @@
     "closeLocalShell": "Close Local Shell",
     "closeSessionConfirm": "Are you sure you want to close the session \"{{name}}\"? This will disconnect from the server.",
     "closeLocalShellConfirm": "Are you sure you want to close the local shell \"{{name}}\"? This will terminate the shell process.",
+    "reconnect": "Reconnect",
     "startRecording": "Start Recording",
     "stopRecording": "Stop Recording",
     "recording": "Recording session",

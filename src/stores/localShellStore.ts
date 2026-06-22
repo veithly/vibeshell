@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { safeInvoke, TauriError, fireAndForgetInvoke } from '../lib/tauri';
+import { safeInvoke, TauriError, sendInputBatched } from '../lib/tauri';
 import { useNotificationStore } from './notificationStore';
 
 /**
@@ -86,7 +86,7 @@ interface LocalShellStore {
   createSession: (shellId?: string, cols?: number, rows?: number) => Promise<LocalShellInfo | null>;
   /** Send input to a session */
   sendInput: (sessionId: string, data: string) => Promise<boolean>;
-  /** Send input fast (fire-and-forget) */
+  /** Send input fast (batched fire-and-forget) */
   sendInputFast: (sessionId: string, data: string) => void;
   /** Send raw bytes to a session */
   sendBytes: (sessionId: string, data: Uint8Array) => Promise<boolean>;
@@ -182,12 +182,7 @@ export const useLocalShellStore = create<LocalShellStore>((set) => ({
   },
 
   sendInputFast: (sessionId: string, data: string) => {
-    fireAndForgetInvoke('local_shell_send_input', {
-      request: {
-        sessionId,
-        data,
-      },
-    });
+    sendInputBatched(sessionId, data, 'local_shell_send_input');
   },
 
   sendBytes: async (sessionId: string, data: Uint8Array) => {

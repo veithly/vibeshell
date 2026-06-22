@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { invoke } from '@tauri-apps/api/core';
+import { invokeOrThrow } from '../lib/tauri';
 import {
   defaultAiPredictionSettings,
   normalizeAiPredictionSettings,
@@ -299,7 +299,7 @@ function saveSettingsToStorage(settings: AppSettings): void {
  */
 async function loadSettings(): Promise<AppSettings> {
   try {
-    const settings = await invoke<AppSettings | null>('load_settings');
+    const settings = await invokeOrThrow<AppSettings | null>('load_settings');
     if (settings) {
       // Merge with defaults to handle new settings added in updates
       return {
@@ -324,7 +324,7 @@ async function saveSettings(settings: AppSettings): Promise<void> {
   saveSettingsToStorage(settings);
 
   try {
-    await invoke('save_settings', { settings });
+    await invokeOrThrow('save_settings', { settings });
   } catch (error) {
     console.warn('Failed to save settings to Tauri backend:', error);
   }
@@ -332,7 +332,7 @@ async function saveSettings(settings: AppSettings): Promise<void> {
 
 async function loadUploadIgnoreConfig(): Promise<UploadIgnoreConfig> {
   try {
-    const config = await invoke<UploadIgnoreConfig | null>('sftp_get_upload_ignore_config');
+    const config = await invokeOrThrow<UploadIgnoreConfig | null>('sftp_get_upload_ignore_config');
     if (config) {
       return {
         excludedPaths: config.excludedPaths ?? defaultUploadIgnoreConfig.excludedPaths,
@@ -347,7 +347,7 @@ async function loadUploadIgnoreConfig(): Promise<UploadIgnoreConfig> {
 
 async function saveUploadIgnoreConfig(config: UploadIgnoreConfig): Promise<UploadIgnoreConfig> {
   try {
-    return await invoke<UploadIgnoreConfig>('sftp_save_upload_ignore_config', { config });
+    return await invokeOrThrow<UploadIgnoreConfig>('sftp_save_upload_ignore_config', { config });
   } catch (error) {
     console.warn('Failed to save upload ignore config:', error);
     throw error;
@@ -381,7 +381,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   fetchAiTools: async () => {
     set({ loading: true, error: null });
     try {
-      const tools = await invoke<AiTool[]>('detect_ai_tools');
+      const tools = await invokeOrThrow<AiTool[]>('detect_ai_tools');
       set({ aiTools: tools, loading: false });
     } catch (error) {
       set({
@@ -393,7 +393,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   fetchVshellStatus: async () => {
     try {
-      const status = await invoke<VshellStatus>('get_vshell_status');
+      const status = await invokeOrThrow<VshellStatus>('get_vshell_status');
       set({ vshellStatus: status });
     } catch (error) {
       set({
@@ -405,7 +405,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   installVshellToPath: async () => {
     set({ cliInstallLoading: true, cliInstallMessage: null, error: null });
     try {
-      const message = await invoke<string>('add_vshell_to_path');
+      const message = await invokeOrThrow<string>('add_vshell_to_path');
       set({ cliInstallMessage: message, cliInstallLoading: false });
       await get().fetchVshellStatus();
     } catch (error) {
@@ -420,7 +420,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   installTo: async (toolId: string) => {
     set({ loading: true, loadingToolId: toolId, error: null });
     try {
-      await invoke('install_to_tool', { toolId });
+      await invokeOrThrow('install_to_tool', { toolId });
       // Refresh the tools list after installation
       await get().fetchAiTools();
       set({ loadingToolId: null });
@@ -436,7 +436,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   uninstallFrom: async (toolId: string) => {
     set({ loading: true, loadingToolId: toolId, error: null });
     try {
-      await invoke('uninstall_from_tool', { toolId });
+      await invokeOrThrow('uninstall_from_tool', { toolId });
       // Refresh the tools list after uninstallation
       await get().fetchAiTools();
       set({ loadingToolId: null });

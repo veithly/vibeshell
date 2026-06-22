@@ -469,8 +469,12 @@ export function getCommandSuggestions(input: string, maxResults = 10): CommandSu
   if (!context.isCommandPosition && context.commandName) {
     const cmd = commonCommands.find(c => c.text === context.commandName.toLowerCase());
     if (cmd?.subcommands) {
+      const allowContainsMatch = query.length >= 2;
       const matchingSubcommands = cmd.subcommands
-        .filter((sub) => query === '' || sub.toLowerCase().startsWith(query) || sub.toLowerCase().includes(query))
+        .filter((sub) => {
+          const lowerSub = sub.toLowerCase();
+          return query === '' || lowerSub.startsWith(query) || (allowContainsMatch && lowerSub.includes(query));
+        })
         .map(sub => ({
           text: sub,
           description: `${context.commandName} ${sub}`,
@@ -492,10 +496,12 @@ export function getCommandSuggestions(input: string, maxResults = 10): CommandSu
     cmd.text.toLowerCase().startsWith(commandInput)
   );
 
-  const containsMatches = commonCommands.filter(cmd =>
-    !cmd.text.toLowerCase().startsWith(commandInput) &&
-    cmd.text.toLowerCase().includes(commandInput)
-  );
+  const containsMatches = commandInput.length >= 2
+    ? commonCommands.filter(cmd =>
+      !cmd.text.toLowerCase().startsWith(commandInput) &&
+      cmd.text.toLowerCase().includes(commandInput)
+    )
+    : [];
 
   return [...exactStartMatches, ...containsMatches].slice(0, maxResults);
 }

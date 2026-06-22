@@ -320,7 +320,7 @@ export const CompletionPopup = memo(function CompletionPopup({
     if (selectedRef.current && popupRef.current) {
       selectedRef.current.scrollIntoView({
         block: 'nearest',
-        behavior: 'smooth',
+        behavior: 'auto',
       });
     }
   }, [selectedIndex]);
@@ -350,6 +350,7 @@ export const CompletionPopup = memo(function CompletionPopup({
   // Calculate popup position to stay within viewport
   const maxWidth = 400;
   const maxHeight = 300;
+  const estimatedHeight = Math.min(maxHeight, 38 + (items.length * 34) + 8);
   let left = position.x;
   let top = position.y;
 
@@ -361,9 +362,9 @@ export const CompletionPopup = memo(function CompletionPopup({
     if (left < 10) {
       left = 10;
     }
-    if (top + maxHeight > window.innerHeight) {
+    if (top + estimatedHeight > window.innerHeight) {
       // Position above cursor if not enough space below
-      top = Math.max(10, position.y - maxHeight - 20);
+      top = Math.max(10, position.y - estimatedHeight - 20);
     }
   }
 

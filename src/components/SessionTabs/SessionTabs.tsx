@@ -1,6 +1,6 @@
 ﻿import { useState, useCallback, memo, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle } from 'lucide-react';
+import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle, RefreshCw } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useSessionStore, type Session, type SessionState, type SessionType } from '../../stores/sessionStore';
 import { useRecordingStore } from '../../stores/recordingStore';
@@ -9,6 +9,8 @@ import { ConfirmDialog } from '../ConfirmDialog';
 interface SessionTabsProps {
   /** Callback when "New Session" is clicked */
   onNewSession?: () => void;
+  /** Callback when reconnecting a disconnected SSH session is requested */
+  onReconnectSession?: (session: Session) => void;
 }
 
 /**
@@ -40,6 +42,7 @@ interface SessionTabProps {
   isActive: boolean;
   isRecording: boolean;
   onSelect: () => void;
+  onReconnect?: () => void;
   onClose: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }
@@ -47,7 +50,23 @@ interface SessionTabProps {
 /**
  * Individual session tab component - memoized to prevent unnecessary re-renders
  */
-const SessionTab = memo(function SessionTab({ session, isActive, isRecording, onSelect, onClose, onContextMenu }: SessionTabProps) {
+const SessionTab = memo(function SessionTab({
+  session,
+  isActive,
+  isRecording,
+  onSelect,
+  onReconnect,
+  onClose,
+  onContextMenu,
+}: SessionTabProps) {
+  const canReconnect =
+    session.sessionType === 'ssh' && (session.state === 'disconnected' || session.state === 'error');
+
+  const handleReconnect = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    onReconnect?.();
+  }, [onReconnect]);
+
   const handleClose = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     onClose();
@@ -95,6 +114,22 @@ const SessionTab = memo(function SessionTab({ session, isActive, isRecording, on
         </span>
       )}
 
+      {/* Reconnect Button */}
+      {canReconnect && (
+        <button
+          className={cn(
+            'flex-shrink-0 p-0.5 rounded-md opacity-0 group-hover:opacity-100',
+            'transition-opacity duration-150',
+            'hover:bg-tokyo-bg-hl focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
+          )}
+          onClick={handleReconnect}
+          aria-label={`Reconnect ${session.serverName} session`}
+          title={`Reconnect ${session.serverName}`}
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
+      )}
+
       {/* Close Button */}
       <button
         className={cn(
@@ -121,12 +156,24 @@ interface ContextMenuProps {
   isRecording: boolean;
   onStartRecording: () => void;
   onStopRecording: () => void;
+  onReconnect: () => void;
   onClose: () => void;
 }
 
-function TabContextMenu({ x, y, session, isRecording, onStartRecording, onStopRecording, onClose }: ContextMenuProps) {
+function TabContextMenu({
+  x,
+  y,
+  session,
+  isRecording,
+  onStartRecording,
+  onStopRecording,
+  onReconnect,
+  onClose,
+}: ContextMenuProps) {
   const { t } = useTranslation();
   const menuRef = useRef<HTMLDivElement>(null);
+  const canReconnect =
+    session.sessionType === 'ssh' && (session.state === 'disconnected' || session.state === 'error');
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -159,6 +206,17 @@ function TabContextMenu({ x, y, session, isRecording, onStartRecording, onStopRe
       <div className="px-3 py-1.5 text-xs text-tokyo-comment border-b border-tokyo-bg-hl mb-1 font-medium">
         {session.serverName}
       </div>
+      {canReconnect && (
+        <button
+          role="menuitem"
+          className="w-full text-left px-3 py-2 text-sm text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors
+                     flex items-center gap-2.5 cursor-pointer"
+          onClick={() => { onReconnect(); onClose(); }}
+        >
+          <RefreshCw className="w-3 h-3 text-tokyo-blue" />
+          {t('session.reconnect')}
+        </button>
+      )}
       {session.state === 'connected' && (
         isRecording ? (
           <button
@@ -189,7 +247,7 @@ function TabContextMenu({ x, y, session, isRecording, onStartRecording, onStopRe
 /**
  * Session tabs component displaying all active sessions
  */
-export function SessionTabs({ onNewSession }: SessionTabsProps) {
+export function SessionTabs({ onNewSession, onReconnectSession }: SessionTabsProps) {
   const { t } = useTranslation();
   const { sessions, activeSessionId, setActiveSession, killSession, killLocalShellSession, removeSession } =
     useSessionStore();
@@ -205,13 +263,23 @@ export function SessionTabs({ onNewSession }: SessionTabsProps) {
     setActiveSession(sessionId);
   }, [setActiveSession]);
 
+  const closeInactiveSession = useCallback(async (session: Session) => {
+    const success = session.sessionType === 'local'
+      ? await killLocalShellSession(session.id)
+      : await killSession(session.id);
+
+    if (!success) {
+      removeSession(session.id);
+    }
+  }, [killSession, killLocalShellSession, removeSession]);
+
   const handleRequestClose = useCallback((session: Session) => {
     if (session.state === 'connected' || session.state === 'connecting') {
       setConfirmClose(session);
     } else {
-      removeSession(session.id);
+      void closeInactiveSession(session);
     }
-  }, [removeSession]);
+  }, [closeInactiveSession]);
 
   const handleConfirmClose = useCallback(async () => {
     if (!confirmClose) return;
@@ -246,6 +314,10 @@ export function SessionTabs({ onNewSession }: SessionTabsProps) {
     await stopRecording(session.id);
   }, [stopRecording]);
 
+  const handleReconnect = useCallback((session: Session) => {
+    onReconnectSession?.(session);
+  }, [onReconnectSession]);
+
   return (
     <>
       <div className="session-tabbar flex h-11 items-center gap-1.5 px-2 bg-tokyo-bg-dark overflow-x-auto border-b border-tokyo-bg-hl">
@@ -266,6 +338,7 @@ export function SessionTabs({ onNewSession }: SessionTabsProps) {
             isActive={activeSessionId === session.id}
             isRecording={isRecording(session.id)}
             onSelect={() => handleSelectSession(session.id)}
+            onReconnect={() => handleReconnect(session)}
             onClose={() => handleRequestClose(session)}
             onContextMenu={(e) => handleContextMenu(e, session)}
           />
@@ -296,6 +369,7 @@ export function SessionTabs({ onNewSession }: SessionTabsProps) {
           isRecording={isRecording(contextMenu.session.id)}
           onStartRecording={() => handleStartRecording(contextMenu.session)}
           onStopRecording={() => handleStopRecording(contextMenu.session)}
+          onReconnect={() => handleReconnect(contextMenu.session)}
           onClose={() => setContextMenu(null)}
         />
       )}

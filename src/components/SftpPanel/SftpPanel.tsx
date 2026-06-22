@@ -1,4 +1,4 @@
-import { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import type { SessionType } from '../../stores/sessionStore';
 import {
   ChevronUp,
@@ -30,7 +30,8 @@ import { safeInvoke } from '../../lib/tauri';
 import { useNotificationStore } from '../../stores/notificationStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { FileIcon, isTextPreviewable, isImagePreviewable } from './FileIcon';
-import { PreviewModal } from './PreviewModal';
+
+const PreviewModal = lazy(() => import('./PreviewModal').then((mod) => ({ default: mod.PreviewModal })));
 
 /**
  * Archive format types supported for compression
@@ -159,6 +160,26 @@ function joinRemotePath(parent: string, child: string): string {
   return `${parent.replace(/\/+$/, '')}/${child}`;
 }
 
+function getErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
+}
+
+function isSftpConnectionError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return [
+    'sftp not initialized',
+    'ssh client not connected',
+    'failed to open sftp',
+    'subsystem',
+    'connection closed',
+    'connection reset',
+    'broken pipe',
+    'channel',
+    'session not found',
+    'eof',
+  ].some((needle) => normalized.includes(needle));
+}
+
 /**
  * Collapsible SFTP file browser panel with full functionality
  */
@@ -242,15 +263,19 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     return selectedEntry && !selectedEntry.isDirectory && canPreviewFile(selectedEntry.name);
   }, [selectedEntry]);
 
-  // Reset to collapsed when session changes
+  // Reset SFTP browser state whenever the owning terminal session changes.
   useEffect(() => {
+    setIsInitialized(false);
+    setEntries([]);
+    setSelectedEntries(new Set());
+    setLastSelectedIndex(null);
+    setCurrentPath('~');
+    setError(null);
+    setPreviewEntry(null);
+
     if (!sessionId) {
       setIsCollapsed(true);
       setIsFullscreen(false);
-      setIsInitialized(false);
-      setEntries([]);
-      setSelectedEntries(new Set());
-      setCurrentPath('~');
     }
   }, [sessionId]);
 
@@ -339,7 +364,11 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       }
     } catch (err) {
       console.error('[SftpPanel] Failed to load directory:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load directory');
+      const message = getErrorMessage(err, 'Failed to load directory');
+      if (isSftpConnectionError(message)) {
+        setIsInitialized(false);
+      }
+      setError(message);
     } finally {
       setIsLoading(false);
     }
@@ -382,7 +411,9 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       await loadDirectory(initialPath);
     } catch (err) {
       console.error('[SftpPanel] Failed to initialize SFTP:', err);
-      setError(err instanceof Error ? err.message : 'Failed to initialize SFTP');
+      setIsInitialized(false);
+      setEntries([]);
+      setError(getErrorMessage(err, 'Failed to initialize SFTP'));
     } finally {
       setIsLoading(false);
     }
@@ -411,8 +442,12 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   }, [loadDirectory]);
 
   const handleRefresh = useCallback(() => {
+    if (!isInitialized) {
+      initializeSftp();
+      return;
+    }
     loadDirectory(currentPath);
-  }, [currentPath, loadDirectory]);
+  }, [currentPath, isInitialized, initializeSftp, loadDirectory]);
 
   const handleGoHome = useCallback(() => {
     loadDirectory('~');
@@ -1324,8 +1359,17 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               <span className="truncate">{error}</span>
               <button
-                onClick={() => setError(null)}
+                onClick={() => {
+                  setError(null);
+                  handleRefresh();
+                }}
                 className="ml-auto text-red-400 hover:text-red-300"
+              >
+                Retry
+              </button>
+              <button
+                onClick={() => setError(null)}
+                className="text-red-400 hover:text-red-300"
               >
                 Dismiss
               </button>
@@ -1792,16 +1836,18 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
       {/* Preview Modal */}
       {previewEntry && sessionId && (
-        <PreviewModal
-          isOpen={true}
-          filePath={previewEntry.path}
-          fileName={previewEntry.name}
-          fileSize={previewEntry.size}
-          sessionId={sessionId}
-          onClose={handleClosePreview}
-          onDownload={handleDownloadPreviewFile}
-          onSave={handleSavePreviewFile}
-        />
+        <Suspense fallback={null}>
+          <PreviewModal
+            isOpen={true}
+            filePath={previewEntry.path}
+            fileName={previewEntry.name}
+            fileSize={previewEntry.size}
+            sessionId={sessionId}
+            onClose={handleClosePreview}
+            onDownload={handleDownloadPreviewFile}
+            onSave={handleSavePreviewFile}
+          />
+        </Suspense>
       )}
     </div>
   );

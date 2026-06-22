@@ -1,4 +1,4 @@
-import { useCallback, useState, useRef, useEffect, useMemo, memo } from 'react';
+import { useCallback, useState, useRef, useEffect, useMemo, memo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Plus,
@@ -11,14 +11,12 @@ import {
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { safeInvoke } from './lib/tauri';
-import { useSessionStore } from './stores/sessionStore';
+import { useSessionStore, type Session } from './stores/sessionStore';
 import { useNavigationStore } from './stores/navigationStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useSettingsStore, themes } from './stores/settingsStore';
 import { SessionTabs } from './components/SessionTabs';
-import { Settings } from './components/Settings';
 import { TitleBar } from './components/TitleBar';
-import { Terminal, TerminalHandle } from './components/Terminal';
 import { SftpPanel, SftpPanelHandle } from './components/SftpPanel';
 import { ServerStatus } from './components/ServerStatus';
 import { ServerList } from './components/ServerList';
@@ -32,7 +30,11 @@ import { Notifications } from './components/Notifications';
 import { FingerprintVerificationDialog, FingerprintManagerDialog } from './components/FingerprintDialog';
 import { SnippetManagerDialog } from './components/SnippetManager/SnippetManagerDialog';
 import { TunnelPanelDialog } from './components/TunnelPanel/TunnelPanelDialog';
-import type { Server } from './stores/serverStore';
+import { useServerStore, type Server } from './stores/serverStore';
+import type { TerminalHandle } from './components/Terminal';
+
+const Settings = lazy(() => import('./components/Settings').then((mod) => ({ default: mod.Settings })));
+const Terminal = lazy(() => import('./components/Terminal').then((mod) => ({ default: mod.Terminal })));
 
 interface SidebarActionProps {
   icon: React.ReactNode;
@@ -90,6 +92,8 @@ function App() {
   const { currentView, goToMain, goToSettings } = useNavigationStore();
   const { warning: notifyWarning } = useNotificationStore();
   const { settings, initializeSettings } = useSettingsStore();
+  const servers = useServerStore((state) => state.servers);
+  const fetchServers = useServerStore((state) => state.fetchServers);
 
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
   const [isConnectOpen, setIsConnectOpen] = useState(false);
@@ -139,6 +143,16 @@ function App() {
     console.log('[App] Applied theme:', currentTheme.name);
   }, [settings.appearance.theme]);
 
+  const closeInactiveSession = useCallback(async (session: Session) => {
+    const success = session.sessionType === 'local'
+      ? await killLocalShellSession(session.id)
+      : await killSession(session.id);
+
+    if (!success) {
+      removeSession(session.id);
+    }
+  }, [killSession, killLocalShellSession, removeSession]);
+
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
       if (event.key === 'F12') {
@@ -174,8 +188,8 @@ function App() {
               const activeSession = sessions.find((s) => s.id === activeSessionId);
               if (activeSession?.state === 'connected' || activeSession?.state === 'connecting') {
                 setSessionToClose(activeSessionId);
-              } else {
-                removeSession(activeSessionId);
+              } else if (activeSession) {
+                void closeInactiveSession(activeSession);
               }
             }
             break;
@@ -185,7 +199,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeSessionId, sessions, goToSettings, removeSession]);
+  }, [activeSessionId, sessions, goToSettings, closeInactiveSession]);
 
   const connectedServerIds = useMemo(() => new Set(
     sessions
@@ -256,6 +270,38 @@ function App() {
     }
   }, [connectWithCredentials, handleConnected]);
 
+  const resolveServerForSession = useCallback(async (session: Session) => {
+    let server = servers.find((candidate) =>
+      candidate.id === session.serverId || candidate.name === session.serverName
+    );
+
+    if (server) {
+      return server;
+    }
+
+    await fetchServers();
+    server = useServerStore.getState().servers.find((candidate) =>
+      candidate.id === session.serverId || candidate.name === session.serverName
+    );
+
+    return server ?? null;
+  }, [servers, fetchServers]);
+
+  const handleReconnectSession = useCallback(async (session: Session) => {
+    if (session.sessionType !== 'ssh') {
+      return;
+    }
+
+    const server = await resolveServerForSession(session);
+    if (!server) {
+      notifyWarning('Server Not Found', `Could not find a saved server for ${session.serverName}.`);
+      return;
+    }
+
+    await closeInactiveSession(session);
+    await handleConnect(server, { forceNew: true });
+  }, [resolveServerForSession, notifyWarning, closeInactiveSession, handleConnect]);
+
   const handleAddServer = useCallback(() => {
     setIsAddServerOpen(true);
   }, []);
@@ -294,6 +340,12 @@ function App() {
       notifyWarning('No Active Session', 'Connect to a server first to use SFTP.');
       return;
     }
+
+    if (activeSession.sessionType === 'ssh' && activeSession.state !== 'connected') {
+      notifyWarning('Session Disconnected', 'Reconnect the server before opening SFTP.');
+      return;
+    }
+
     sftpPanelRef.current?.expand();
   }, [activeSession, notifyWarning]);
 
@@ -352,7 +404,11 @@ function App() {
           <h1 className="ml-4 text-tokyo-fg font-semibold">{t('settings.title')}</h1>
         </header>
         <div className="flex-1 overflow-y-auto bg-tokyo-bg">
-          <Settings />
+          {isSettingsView && (
+            <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
+              <Settings />
+            </Suspense>
+          )}
         </div>
       </div>
 
@@ -421,7 +477,10 @@ function App() {
           </aside>
 
           <main className="main-workspace flex-1 flex flex-col min-w-0 relative">
-            <SessionTabs onNewSession={handleNewSession} />
+            <SessionTabs
+              onNewSession={handleNewSession}
+              onReconnectSession={handleReconnectSession}
+            />
 
             <div className="flex-1 min-h-0 flex flex-col">
               {sessions.length > 0 ? (
@@ -441,11 +500,13 @@ function App() {
                             : undefined
                         }
                       >
-                        <Terminal
-                          ref={session.id === activeSessionId ? terminalRef : undefined}
-                          sessionId={session.id}
-                          onData={handleData}
-                        />
+                        <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
+                          <Terminal
+                            ref={session.id === activeSessionId ? terminalRef : undefined}
+                            sessionId={session.id}
+                            onData={handleData}
+                          />
+                        </Suspense>
                       </div>
                     ))}
                   </div>

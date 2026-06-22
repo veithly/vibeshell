@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { safeInvoke, TauriError, sendInputBatched, fireAndForgetInvoke } from '../lib/tauri';
+import { safeInvoke, TauriError, sendInputBatched } from '../lib/tauri';
 import { useNotificationStore } from './notificationStore';
 
 /**
@@ -473,62 +473,54 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (!result.success) return;
 
     const backendSessions = result.data;
-    const { sessions: localSessions } = get();
+    const { sessions: localSessions, activeSessionId } = get();
     const backendById = new Map(backendSessions.map((session) => [session.id, session]));
 
     const localSshIds = new Set(
       localSessions.filter((s) => s.sessionType === 'ssh').map((s) => s.id)
     );
 
-    // Add sessions that exist in the backend but not in the local store
-    const newSessions: Session[] = backendSessions
-      .filter((info) => !localSshIds.has(info.id))
-      .map(mapSessionInfo);
-
-    if (newSessions.length === 0) {
-      const updated = localSessions
-        .filter((s) => s.sessionType !== 'ssh' || backendById.has(s.id))
-        .map((s) => {
-          if (s.sessionType !== 'ssh') return s;
-          const backend = backendById.get(s.id);
-          if (!backend) return s;
-          if (backend.state !== s.state) {
-            return { ...s, state: backend.state };
-          }
-          return s;
-        });
-      set((state) => ({
-        sessions: updated,
-        activeSessionId:
-          state.activeSessionId && updated.some((session) => session.id === state.activeSessionId)
-            ? state.activeSessionId
-            : (updated[0]?.id ?? null),
-      }));
-      return;
-    }
-
     // Merge: keep local-shell sessions + update existing SSH + add new CLI sessions.
     // If an SSH session no longer exists in the backend, drop it instead of keeping a
     // disconnected zombie tab around in the GUI.
+    let changed = false;
     const merged = localSessions
-      .filter((s) => s.sessionType !== 'ssh' || backendById.has(s.id))
-      .map((s) => {
-        if (s.sessionType !== 'ssh') return s;
+      .flatMap((s) => {
+        if (s.sessionType !== 'ssh') return [s];
         const backend = backendById.get(s.id);
-        if (backend && backend.state !== s.state) {
-          return { ...s, state: backend.state };
+        if (!backend) {
+          changed = true;
+          return [];
         }
-        return s;
-      })
-      .concat(newSessions);
+        if (backend.state !== s.state) {
+          changed = true;
+          return [{ ...s, state: backend.state }];
+        }
+        return [s];
+      });
 
-    set((state) => ({
+    const newSessions = backendSessions
+      .filter((info) => !localSshIds.has(info.id))
+      .map(mapSessionInfo);
+
+    if (newSessions.length > 0) {
+      changed = true;
+      merged.push(...newSessions);
+    }
+
+    const nextActiveSessionId =
+      activeSessionId && merged.some((session) => session.id === activeSessionId)
+        ? activeSessionId
+        : (merged[0]?.id ?? null);
+
+    if (!changed && nextActiveSessionId === activeSessionId) {
+      return;
+    }
+
+    set({
       sessions: merged,
-      activeSessionId:
-        state.activeSessionId && merged.some((session) => session.id === state.activeSessionId)
-          ? state.activeSessionId
-          : (merged[0]?.id ?? null),
-    }));
+      activeSessionId: nextActiveSessionId,
+    });
   },
 
   // Local shell session methods
@@ -592,12 +584,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   sendLocalShellInputFast: (sessionId: string, data: string) => {
-    fireAndForgetInvoke('local_shell_send_input', {
-      request: {
-        sessionId,
-        data,
-      },
-    });
+    sendInputBatched(sessionId, data, 'local_shell_send_input');
   },
 
   resizeLocalShellSession: async (sessionId: string, cols: number, rows: number) => {

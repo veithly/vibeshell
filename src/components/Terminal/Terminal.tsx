@@ -11,6 +11,46 @@ import { useCompletion } from './useCompletion';
 
 type ConnectionStatus = 'initializing' | 'listening' | 'receiving' | 'error';
 
+function getTerminalScreenRect(xterm: XTerm, fallbackElement: HTMLElement): DOMRect {
+  const screen = xterm.element?.querySelector('.xterm-screen') as HTMLElement | null;
+  return (screen ?? fallbackElement).getBoundingClientRect();
+}
+
+function getCompletionPosition(
+  xterm: XTerm,
+  terminalElement: HTMLElement,
+  options: { afterCursor?: boolean; viewportRelative?: boolean } = {}
+): { x: number; y: number } {
+  const screenRect = getTerminalScreenRect(xterm, terminalElement);
+  const terminalRect = terminalElement.getBoundingClientRect();
+  const cellWidth = screenRect.width / Math.max(1, xterm.cols);
+  const cellHeight = screenRect.height / Math.max(1, xterm.rows);
+  const cursorX = Math.min(xterm.cols - 1, xterm.buffer.active.cursorX + (options.afterCursor ? 1 : 0));
+  const cursorY = Math.min(xterm.rows - 1, xterm.buffer.active.cursorY);
+  const baseX = options.viewportRelative ? screenRect.left : screenRect.left - terminalRect.left;
+  const baseY = options.viewportRelative ? screenRect.top : screenRect.top - terminalRect.top;
+
+  return {
+    x: baseX + (cursorX * cellWidth),
+    y: baseY + ((cursorY + 1) * cellHeight) + 6,
+  };
+}
+
+function getGhostTextPosition(
+  xterm: XTerm,
+  terminalElement: HTMLElement
+): { x: number; y: number } {
+  const screenRect = getTerminalScreenRect(xterm, terminalElement);
+  const terminalRect = terminalElement.getBoundingClientRect();
+  const cellWidth = screenRect.width / Math.max(1, xterm.cols);
+  const cellHeight = screenRect.height / Math.max(1, xterm.rows);
+
+  return {
+    x: (screenRect.left - terminalRect.left) + (xterm.buffer.active.cursorX * cellWidth),
+    y: (screenRect.top - terminalRect.top) + (xterm.buffer.active.cursorY * cellHeight),
+  };
+}
+
 function throttle<T extends (...args: Parameters<T>) => void>(
   func: T,
   limit: number
@@ -442,16 +482,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           } else {
             const input = inputBufferRef.current;
             if (input.trim() && terminalRef.current) {
-              const termRect = terminalRef.current.getBoundingClientRect();
-              const cellWidth = termRect.width / xterm.cols;
-              const cellHeight = termRect.height / xterm.rows;
-              const cursorX = xterm.buffer.active.cursorX;
-              const cursorY = xterm.buffer.active.cursorY;
-              const pos = {
-                x: termRect.left + (cursorX * cellWidth),
-                y: termRect.top + ((cursorY + 1) * cellHeight) + 5,
-              };
-              ca.showCompletions(input, pos);
+              ca.showCompletions(input, getCompletionPosition(xterm, terminalRef.current, { viewportRelative: true }));
             }
           }
           return false;
@@ -564,16 +595,10 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           cursorPositionRef.current += 1;
 
           if (terminalRef.current) {
-            const termRect = terminalRef.current.getBoundingClientRect();
-            const cellWidth = termRect.width / xterm.cols;
-            const cellHeight = termRect.height / xterm.rows;
-            const cursorX = xterm.buffer.active.cursorX;
-            const cursorY = xterm.buffer.active.cursorY;
-
-            const position = {
-              x: termRect.left + ((cursorX + 1) * cellWidth),
-              y: termRect.top + ((cursorY + 1) * cellHeight) + 5,
-            };
+            const position = getCompletionPosition(xterm, terminalRef.current, {
+              afterCursor: true,
+              viewportRelative: true,
+            });
 
             if (compState.visible) {
               compActions.updateCompletions(inputBufferRef.current);
@@ -798,16 +823,7 @@ function GhostTextOverlay({
     }
 
     const xterm = xtermRef.current;
-    const termRect = terminalRef.current.getBoundingClientRect();
-    const cellWidth = termRect.width / xterm.cols;
-    const cellHeight = termRect.height / xterm.rows;
-    const cursorX = xterm.buffer.active.cursorX;
-    const cursorY = xterm.buffer.active.cursorY;
-
-    setPosition({
-      x: cursorX * cellWidth,
-      y: cursorY * cellHeight,
-    });
+    setPosition(getGhostTextPosition(xterm, terminalRef.current));
 
     setFontSize(xterm.options.fontSize || 14);
   }, [ghostText, terminalRef, xtermRef]);

@@ -209,12 +209,14 @@ export function fireAndForgetInvoke(
  * Input batching state for combining rapid keystrokes
  */
 interface InputBatchState {
+  command: string;
   sessionId: string;
   data: string;
   rafId: number | null;
 }
 
 const inputBatch: InputBatchState = {
+  command: 'session_send_input',
   sessionId: '',
   data: '',
   rafId: null,
@@ -226,13 +228,18 @@ const inputBatch: InputBatchState = {
  *
  * PERFORMANCE: Groups multiple keystrokes within a single animation frame
  */
-export function sendInputBatched(sessionId: string, data: string): void {
-  // If batch is for a different session, flush first
-  if (inputBatch.sessionId && inputBatch.sessionId !== sessionId) {
+export function sendInputBatched(
+  sessionId: string,
+  data: string,
+  command = 'session_send_input'
+): void {
+  // If batch is for a different target, flush first
+  if (inputBatch.sessionId && (inputBatch.sessionId !== sessionId || inputBatch.command !== command)) {
     flushInputBatch();
   }
 
   // Add to batch
+  inputBatch.command = command;
   inputBatch.sessionId = sessionId;
   inputBatch.data += data;
 
@@ -252,14 +259,17 @@ function flushInputBatch(): void {
   }
 
   if (inputBatch.data && inputBatch.sessionId) {
+    const command = inputBatch.command;
     const sessionId = inputBatch.sessionId;
     const data = inputBatch.data;
 
     // Clear batch
+    inputBatch.command = 'session_send_input';
+    inputBatch.sessionId = '';
     inputBatch.data = '';
 
     // Send batched data
-    fireAndForgetInvoke('session_send_input', {
+    fireAndForgetInvoke(command, {
       request: {
         sessionId,
         data,
