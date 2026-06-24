@@ -20,6 +20,7 @@
     "refresh": "刷新",
     "actions": "操作",
     "none": "无",
+    "unknown": "未知",
     "yes": "是",
     "no": "否",
     "noData": "暂无数据",
@@ -34,6 +35,11 @@
     "tunnels": "隧道",
     "snippets": "命令片段",
     "settings": "设置"
+  },
+
+  "updates": {
+    "availableTitle": "发现新版本",
+    "availableMessage": "VibeShell {{version}} 已发布。打开 设置 > 关于 即可下载更新。"
   },
 
   "session": {
@@ -221,6 +227,20 @@
     "aboutDesc": "关于 VibeShell 的信息。",
     "appTitle": "VibeShell",
     "appSubtitle": "现代 SSH & SFTP 终端",
+    "updates": "版本更新",
+    "updateAvailable": "发现可用版本 {{version}}。",
+    "updateUpToDate": "当前已是最新版本。",
+    "latestVersion": "最新发布版本：{{version}}",
+    "updateNotChecked": "尚未检查。",
+    "updateLastChecked": "上次检查：{{time}}",
+    "updateCheckFailed": "检查更新失败：{{message}}",
+    "updateCheckNow": "检查更新",
+    "updateChecking": "检查中...",
+    "updateDownload": "下载更新",
+    "updateInstall": "安装更新",
+    "updateInstalling": "安装中...",
+    "updateInstallingProgress": "正在安装更新... {{progress}}%",
+    "updateOpenLatest": "最新发布",
 
     "resetSettings": "重置设置",
     "resetSettingsDesc": "将所有设置恢复为默认值。",

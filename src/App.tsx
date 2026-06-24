@@ -15,6 +15,7 @@ import { useSessionStore, type Session } from './stores/sessionStore';
 import { useNavigationStore } from './stores/navigationStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useSettingsStore, themes } from './stores/settingsStore';
+import { UPDATE_CHECK_INTERVAL_MS, useUpdateStore } from './stores/updateStore';
 import { SessionTabs } from './components/SessionTabs';
 import { TitleBar } from './components/TitleBar';
 import { SftpPanel, SftpPanelHandle } from './components/SftpPanel';
@@ -92,6 +93,7 @@ function App() {
   const { currentView, goToMain, goToSettings } = useNavigationStore();
   const { warning: notifyWarning } = useNotificationStore();
   const { settings, initializeSettings } = useSettingsStore();
+  const { checkForUpdates, markVersionNotified } = useUpdateStore();
   const servers = useServerStore((state) => state.servers);
   const fetchServers = useServerStore((state) => state.fetchServers);
 
@@ -113,6 +115,33 @@ function App() {
   useEffect(() => {
     initializeSettings();
   }, [initializeSettings]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkUpdates = async () => {
+      const release = await checkForUpdates();
+      if (!release || cancelled) return;
+
+      const { lastNotifiedVersion } = useUpdateStore.getState();
+      if (lastNotifiedVersion === release.version) return;
+
+      notifyWarning(
+        t('updates.availableTitle'),
+        t('updates.availableMessage', { version: release.version }),
+        12000
+      );
+      markVersionNotified(release.version);
+    };
+
+    checkUpdates();
+    const intervalId = window.setInterval(checkUpdates, UPDATE_CHECK_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [checkForUpdates, markVersionNotified, notifyWarning, t]);
 
   useEffect(() => {
     fetchSessions();

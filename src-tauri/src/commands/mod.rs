@@ -1,3 +1,4 @@
+pub mod app;
 pub mod dialog;
 pub mod fingerprint;
 pub mod install;
@@ -9,6 +10,7 @@ pub mod sftp;
 pub mod snippet;
 pub mod tunnel;
 
+pub use app::*;
 pub use dialog::*;
 pub use fingerprint::*;
 pub use install::*;

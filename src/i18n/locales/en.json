@@ -20,6 +20,7 @@
     "refresh": "Refresh",
     "actions": "Actions",
     "none": "None",
+    "unknown": "Unknown",
     "yes": "Yes",
     "no": "No",
     "noData": "No data",
@@ -34,6 +35,11 @@
     "tunnels": "Tunnels",
     "snippets": "Snippets",
     "settings": "Settings"
+  },
+
+  "updates": {
+    "availableTitle": "Update available",
+    "availableMessage": "VibeShell {{version}} is available. Open Settings > About to download it."
   },
 
   "session": {
@@ -221,6 +227,20 @@
     "aboutDesc": "Information about VibeShell.",
     "appTitle": "VibeShell",
     "appSubtitle": "Modern SSH & SFTP Terminal",
+    "updates": "Updates",
+    "updateAvailable": "Version {{version}} is available.",
+    "updateUpToDate": "You're on the latest version.",
+    "latestVersion": "Latest release: {{version}}",
+    "updateNotChecked": "Not checked yet.",
+    "updateLastChecked": "Last checked: {{time}}",
+    "updateCheckFailed": "Update check failed: {{message}}",
+    "updateCheckNow": "Check for updates",
+    "updateChecking": "Checking...",
+    "updateDownload": "Download update",
+    "updateInstall": "Install update",
+    "updateInstalling": "Installing...",
+    "updateInstallingProgress": "Installing update... {{progress}}%",
+    "updateOpenLatest": "Latest release",
 
     "resetSettings": "Reset Settings",
     "resetSettingsDesc": "Restore all settings to their default values.",

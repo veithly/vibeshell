@@ -15,6 +15,7 @@ on:
       - 'vite.config.ts'
       - 'tailwind.config.js'
       - 'postcss.config.js'
+      - 'scripts/generate-latest-json.js'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/release.yml'
@@ -231,6 +232,8 @@ jobs:
           VIBESHELL_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           VIBESHELL_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           VIBESHELL_APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           if [[ -n "${VIBESHELL_APPLE_CERTIFICATE:-}" ]]; then
             export APPLE_CERTIFICATE="$VIBESHELL_APPLE_CERTIFICATE"
@@ -393,7 +396,10 @@ jobs:
               -name "*.dmg" -o \
               -name "*.exe" -o \
               -name "*.msi" -o \
-              -name "*.rpm" \
+              -name "*.rpm" -o \
+              -name "*.tar.gz" -o \
+              -name "*.zip" -o \
+              -name "*.sig" \
             \) -print0)
           done
 
@@ -407,3 +413,43 @@ jobs:
           printf 'Uploading release assets:\n'
           printf '  %s\n' "${uploads[@]}"
           gh release upload "$TAG_NAME" "${uploads[@]}" --repo "${{ github.repository }}" --clobber
+
+  publish-updater-manifest:
+    name: Publish updater manifest
+    needs:
+      - bump-and-release
+      - build-tauri
+    if: needs.bump-and-release.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-and-release.outputs.tag_name }}
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.bump-and-release.outputs.tag_name }}
+        run: |
+          mkdir -p release-assets
+          gh release download "$TAG_NAME" \
+            --repo "${{ github.repository }}" \
+            --dir release-assets \
+            --clobber
+
+      - name: Generate latest.json
+        run: |
+          node scripts/generate-latest-json.js \
+            release-assets \
+            "${{ needs.bump-and-release.outputs.version }}" \
+            "${{ needs.bump-and-release.outputs.tag_name }}" \
+            "${{ github.repository }}"
+
+      - name: Upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.bump-and-release.outputs.tag_name }}
+        run: |
+          gh release upload "$TAG_NAME" release-assets/latest.json \
+            --repo "${{ github.repository }}" \
+            --clobber

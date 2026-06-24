@@ -34,6 +34,7 @@ use commands::{
     delete_recording,
     delete_server,
     detect_ai_tools,
+    get_app_version,
     get_credential,
     // Fingerprint commands
     get_fingerprint,
@@ -60,6 +61,7 @@ use commands::{
     local_shell_resize,
     local_shell_send_bytes,
     local_shell_send_input,
+    open_external_url,
     pick_directory_for_upload,
     pick_download_directory,
     pick_file_for_upload,
@@ -238,6 +240,8 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|_app| {
@@ -338,6 +342,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
+            open_external_url,
+            get_app_version,
             // Session commands
             session_list,
             session_create,

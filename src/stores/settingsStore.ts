@@ -202,6 +202,10 @@ interface SettingsStore {
   aiTools: AiTool[];
   /** Bundled CLI and PATH installation status */
   vshellStatus: VshellStatus | null;
+  /** Current application version from the backend package metadata */
+  appVersion: string | null;
+  /** Whether app version lookup has completed */
+  appVersionLoaded: boolean;
 
   // App Settings state
   /** Current application settings */
@@ -228,6 +232,8 @@ interface SettingsStore {
   fetchAiTools: () => Promise<void>;
   /** Fetch bundled CLI and PATH status */
   fetchVshellStatus: () => Promise<void>;
+  /** Fetch current app version */
+  fetchAppVersion: () => Promise<void>;
   /** Add vshell to the user's system PATH */
   installVshellToPath: () => Promise<void>;
   /** Install VibeShell to a specific AI tool */
@@ -365,6 +371,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   // Initial state
   aiTools: [],
   vshellStatus: null,
+  appVersion: null,
+  appVersionLoaded: false,
   settings: { ...defaultSettings },
   uploadIgnoreConfig: { ...defaultUploadIgnoreConfig },
   loading: false,
@@ -399,6 +407,16 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       set({
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  },
+
+  fetchAppVersion: async () => {
+    try {
+      const appVersion = await invokeOrThrow<string>('get_app_version');
+      set({ appVersion, appVersionLoaded: true });
+    } catch (error) {
+      console.warn('Failed to fetch app version:', error);
+      set({ appVersion: null, appVersionLoaded: true });
     }
   },
 
