@@ -143,22 +143,64 @@ jobs:
               --repo "${{ github.repository }}" \
               --title "VibeShell $TAG_NAME" \
               --notes-file release-notes.md \
-              --latest
+              --draft \
+              --latest=false
           else
             gh release create "$TAG_NAME" \
               --repo "${{ github.repository }}" \
               --target "$(git rev-parse HEAD)" \
               --title "VibeShell $TAG_NAME" \
               --notes-file release-notes.md \
-              --latest
+              --draft \
+              --latest=false
           fi
 
           RELEASE_ID="$(gh api "repos/${{ github.repository }}/releases/tags/$TAG_NAME" --jq .id)"
           echo "id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
 
+  validate-updater-signing:
+    name: Validate updater signing key
+    needs: bump-and-release
+    if: needs.bump-and-release.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump-and-release.outputs.tag_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Validate updater key can sign artifacts
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is not configured."
+            exit 1
+          fi
+
+          workdir="$(mktemp -d)"
+          cp package.json "${workdir}/package.json"
+          CI=true npx tauri signer sign \
+            -k "${TAURI_SIGNING_PRIVATE_KEY}" \
+            -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD-}" \
+            "${workdir}/package.json"
+          test -f "${workdir}/package.json.sig"
+
   build-tauri:
     name: Build (${{ matrix.name }})
-    needs: bump-and-release
+    needs:
+      - bump-and-release
+      - validate-updater-signing
     if: needs.bump-and-release.outputs.should_build == 'true'
     strategy:
       fail-fast: false
@@ -453,3 +495,13 @@ jobs:
           gh release upload "$TAG_NAME" release-assets/latest.json \
             --repo "${{ github.repository }}" \
             --clobber
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.bump-and-release.outputs.tag_name }}
+        run: |
+          gh release edit "$TAG_NAME" \
+            --repo "${{ github.repository }}" \
+            --draft=false \
+            --latest
