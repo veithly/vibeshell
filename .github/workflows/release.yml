@@ -143,16 +143,14 @@ jobs:
               --repo "${{ github.repository }}" \
               --title "VibeShell $TAG_NAME" \
               --notes-file release-notes.md \
-              --draft \
-              --latest=false
+              --latest
           else
             gh release create "$TAG_NAME" \
               --repo "${{ github.repository }}" \
               --target "$(git rev-parse HEAD)" \
               --title "VibeShell $TAG_NAME" \
               --notes-file release-notes.md \
-              --draft \
-              --latest=false
+              --latest
           fi
 
           RELEASE_ID="$(gh api "repos/${{ github.repository }}/releases/tags/$TAG_NAME" --jq .id)"
@@ -495,13 +493,3 @@ jobs:
           gh release upload "$TAG_NAME" release-assets/latest.json \
             --repo "${{ github.repository }}" \
             --clobber
-
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ needs.bump-and-release.outputs.tag_name }}
-        run: |
-          gh release edit "$TAG_NAME" \
-            --repo "${{ github.repository }}" \
-            --draft=false \
-            --latest

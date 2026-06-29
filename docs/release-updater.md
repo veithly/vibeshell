@@ -41,14 +41,13 @@ updater private key password" error. Generate or rotate updater keys with
 
 The release workflow:
 
-1. Creates the GitHub Release as a draft.
+1. Creates or updates the GitHub Release for the new tag.
 2. Validates that the updater signing key can sign an artifact before any
    platform builds start.
 3. Builds each desktop platform with `TAURI_SIGNING_PRIVATE_KEY`.
 4. Uploads updater artifacts and their `.sig` files to the GitHub Release.
 5. Generates `latest.json` with platform URLs and signatures.
 6. Uploads `latest.json`.
-7. Publishes the draft release after every asset is in place.
 
 The update manifest is served from:
 
