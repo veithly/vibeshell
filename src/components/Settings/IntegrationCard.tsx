@@ -75,7 +75,7 @@ export function IntegrationCard({
         onClick={() => onInstall(id)}
         disabled={loading}
         className="px-4 py-2 text-sm rounded-lg
-                   bg-tokyo-blue text-white
+                   bg-tokyo-blue text-tokyo-on-accent
                    hover:bg-tokyo-blue/80 transition-colors
                    disabled:opacity-50 disabled:cursor-not-allowed"
       >
@@ -87,7 +87,7 @@ export function IntegrationCard({
   return (
     <div className="p-4 rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark hover:bg-tokyo-bg-hl/50 transition-colors">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-lg font-semibold text-white">{name}</h3>
+        <h3 className="text-lg font-semibold text-tokyo-fg">{name}</h3>
         <span
           className={`inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full ${status.bgColor} ${status.color}`}
         >

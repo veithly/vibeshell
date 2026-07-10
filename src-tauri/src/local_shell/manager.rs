@@ -135,3 +135,23 @@ impl Default for LocalShellManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn creates_independent_default_shell_sessions_for_split_panes() {
+        let manager = LocalShellManager::new();
+        let first = manager.create_default_session(80, 24).await.unwrap();
+        let second = manager.create_default_session(80, 24).await.unwrap();
+
+        assert_ne!(first.id, second.id);
+        let sessions = manager.list_sessions().await;
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions.iter().any(|session| session.id == first.id));
+        assert!(sessions.iter().any(|session| session.id == second.id));
+
+        manager.kill_all().await.unwrap();
+    }
+}

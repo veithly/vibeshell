@@ -48,12 +48,12 @@ export default function AddSnippetDialog({ snippet, onClose }: AddSnippetDialogP
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
-          <h3 className="text-sm font-semibold text-white">
+          <h3 className="text-sm font-semibold text-tokyo-fg">
             {isEditing ? 'Edit Snippet' : 'Add Snippet'}
           </h3>
           <button
             onClick={onClose}
-            className="p-1 rounded-md hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white transition-colors cursor-pointer"
+            className="p-1 rounded-md hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -124,14 +124,14 @@ export default function AddSnippetDialog({ snippet, onClose }: AddSnippetDialogP
               type="button"
               onClick={onClose}
               className="px-4 py-2 text-sm rounded-md bg-tokyo-bg-hl text-tokyo-fg
-                         hover:bg-tokyo-selection hover:text-white transition-colors cursor-pointer"
+                         hover:bg-tokyo-selection hover:text-tokyo-fg transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!name.trim() || !command.trim()}
-              className="px-4 py-2 text-sm rounded-md bg-tokyo-blue text-white
+              className="px-4 py-2 text-sm rounded-md bg-tokyo-blue text-tokyo-on-accent
                          hover:bg-tokyo-blue/80 disabled:opacity-40 disabled:cursor-not-allowed
                          transition-colors cursor-pointer"
             >

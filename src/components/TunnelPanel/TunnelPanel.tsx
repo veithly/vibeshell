@@ -76,7 +76,7 @@ export default function TunnelPanel({ serverId, sessionId }: TunnelPanelProps) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
         <div className="flex items-center gap-2">
           <ArrowRightLeft className="w-4 h-4 text-tokyo-blue" />
-          <span className="text-sm font-semibold text-white">SSH Tunnels</span>
+          <span className="text-sm font-semibold text-tokyo-fg">SSH Tunnels</span>
           <span className="text-xs text-tokyo-comment px-1.5 py-0.5 rounded-full bg-tokyo-bg-hl">
             {configs.length} configs &middot; {activeTunnels.length} active
           </span>
@@ -183,13 +183,13 @@ export default function TunnelPanel({ serverId, sessionId }: TunnelPanelProps) {
           <div className="flex justify-end gap-2 pt-1">
             <button
               onClick={() => setShowAddForm(false)}
-              className="px-3 py-1.5 text-sm rounded-md bg-tokyo-bg-hl text-tokyo-fg hover:bg-tokyo-selection hover:text-white transition-colors cursor-pointer"
+              className="px-3 py-1.5 text-sm rounded-md bg-tokyo-bg-hl text-tokyo-fg hover:bg-tokyo-selection hover:text-tokyo-fg transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               onClick={handleAdd}
-              className="px-3 py-1.5 text-sm rounded-md bg-tokyo-blue text-white hover:bg-tokyo-blue/80 transition-colors cursor-pointer"
+              className="px-3 py-1.5 text-sm rounded-md bg-tokyo-blue text-tokyo-on-accent hover:bg-tokyo-blue/80 transition-colors cursor-pointer"
             >
               Save Config
             </button>
@@ -225,7 +225,7 @@ export default function TunnelPanel({ serverId, sessionId }: TunnelPanelProps) {
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="font-medium text-white">{tunnelTypeLabel(config.tunnel_type)}</span>
+                      <span className="font-medium text-tokyo-fg">{tunnelTypeLabel(config.tunnel_type)}</span>
                       {active && <span className="w-1.5 h-1.5 rounded-full bg-tokyo-green animate-pulse" />}
                     </div>
                     <div className="text-tokyo-comment truncate mt-0.5 font-mono">

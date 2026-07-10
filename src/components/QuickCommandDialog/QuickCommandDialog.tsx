@@ -122,10 +122,10 @@ export function QuickCommandDialog({ isOpen, onClose }: QuickCommandDialogProps)
         <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
           <div className="flex items-center gap-2">
             <Terminal className="w-5 h-5 text-tokyo-blue" />
-            <h2 className="text-lg font-semibold text-white">Quick Command</h2>
+            <h2 className="text-lg font-semibold text-tokyo-fg">Quick Command</h2>
           </div>
           <button
-            className="p-1 rounded-md text-tokyo-comment hover:text-white hover:bg-tokyo-bg-hl transition-colors"
+            className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
             onClick={onClose}
           >
             <X className="w-5 h-5" />
@@ -270,7 +270,7 @@ export function QuickCommandDialog({ isOpen, onClose }: QuickCommandDialogProps)
             className={cn(
               'px-4 py-2 rounded-md',
               'bg-tokyo-bg-hl text-tokyo-fg',
-              'hover:bg-tokyo-bg hover:text-white',
+              'hover:bg-tokyo-bg hover:text-tokyo-fg',
               'transition-colors'
             )}
           >
@@ -281,7 +281,7 @@ export function QuickCommandDialog({ isOpen, onClose }: QuickCommandDialogProps)
             className={cn(
               'px-4 py-2 rounded-md',
               'bg-tokyo-bg-hl text-tokyo-fg',
-              'hover:bg-tokyo-bg hover:text-white',
+              'hover:bg-tokyo-bg hover:text-tokyo-fg',
               'transition-colors'
             )}
           >

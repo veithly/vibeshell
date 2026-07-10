@@ -67,10 +67,10 @@ export function ConfirmDialog({
             {isDanger && (
               <AlertTriangle className="w-5 h-5 text-tokyo-red" />
             )}
-            <h2 className="text-lg font-semibold text-white">{title}</h2>
+            <h2 className="text-lg font-semibold text-tokyo-fg">{title}</h2>
           </div>
           <button
-            className="p-1 rounded-md text-tokyo-comment hover:text-white hover:bg-tokyo-bg-hl transition-colors"
+            className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
             onClick={onCancel}
           >
             <X className="w-5 h-5" />
@@ -89,7 +89,7 @@ export function ConfirmDialog({
             className={cn(
               'px-4 py-2 rounded-md',
               'bg-tokyo-bg-hl text-tokyo-fg',
-              'hover:bg-tokyo-bg hover:text-white',
+              'hover:bg-tokyo-bg hover:text-tokyo-fg',
               'transition-colors'
             )}
           >
@@ -103,7 +103,7 @@ export function ConfirmDialog({
               'transition-colors',
               isDanger
                 ? 'bg-tokyo-red text-white hover:bg-tokyo-red/80'
-                : 'bg-tokyo-blue text-white hover:bg-tokyo-blue/80'
+                : 'bg-tokyo-blue text-tokyo-on-accent hover:bg-tokyo-blue/80'
             )}
           >
             {confirmLabel}

@@ -228,10 +228,10 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
             ) : (
               <Lock className="w-5 h-5 text-tokyo-blue" />
             )}
-            <h2 className="text-lg font-semibold text-white">Connect to Server</h2>
+            <h2 className="text-lg font-semibold text-tokyo-fg">Connect to Server</h2>
           </div>
           <button
-            className="p-1 rounded-md text-tokyo-comment hover:text-white hover:bg-tokyo-bg-hl transition-colors"
+            className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
             onClick={onClose}
           >
             <X className="w-5 h-5" />
@@ -243,7 +243,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
           {/* Server Info */}
           <div className="p-3 rounded-md bg-tokyo-bg border border-tokyo-bg-hl">
             <div className="text-sm text-tokyo-comment">Connecting to</div>
-            <div className="text-white font-medium">{server.name}</div>
+            <div className="text-tokyo-fg font-medium">{server.name}</div>
             <div className="text-sm text-tokyo-comment mt-1">
               {server.username}@{server.host}:{server.port}
             </div>
@@ -272,7 +272,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
           )}
 
           {error && (
-            <div className="p-3 rounded-md bg-red-900/20 border border-red-800/30 text-red-400 text-sm">
+            <div className="p-3 rounded-md bg-tokyo-red/10 border border-tokyo-red/30 text-tokyo-red text-sm">
               {error}
             </div>
           )}
@@ -347,7 +347,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-tokyo-comment hover:text-white"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-tokyo-comment hover:text-tokyo-fg"
               >
                 {showPassword ? (
                   <EyeOff className="w-4 h-4" />
@@ -367,7 +367,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
               className={cn(
                 'px-4 py-2 rounded-md',
                 'bg-tokyo-bg-hl text-tokyo-fg',
-                'hover:bg-tokyo-bg hover:text-white',
+                'hover:bg-tokyo-bg hover:text-tokyo-fg',
                 'disabled:opacity-50 disabled:cursor-not-allowed',
                 'transition-colors'
               )}
@@ -380,7 +380,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
               disabled={isConnecting || isLoadingKey || isLoadingCredentials || (isKeyAuth ? !keyContent : !password)}
               className={cn(
                 'px-4 py-2 rounded-md',
-                'bg-tokyo-blue text-white',
+                'bg-tokyo-blue text-tokyo-on-accent',
                 'hover:bg-tokyo-blue/80',
                 'disabled:opacity-50 disabled:cursor-not-allowed',
                 'transition-colors'

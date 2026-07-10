@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VibeShell - Logo Exploration</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f7f7f5; color: #171717; font-family: Geist, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 56px 0 72px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 24px; padding-bottom: 24px; border-bottom: 1px solid #d8d8d3; }
+    h1 { margin: 0; font-size: 38px; font-weight: 650; letter-spacing: 0; }
+    header p { margin: 8px 0 0; color: #73736e; font-size: 14px; }
+    .themes { display: flex; gap: 8px; }
+    .themes button { width: 30px; height: 30px; border: 1px solid #b9b9b3; border-radius: 6px; cursor: pointer; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin-top: 32px; background: #d8d8d3; border: 1px solid #d8d8d3; }
+    article { min-width: 0; background: var(--surface, #fff); color: var(--ink, #171717); padding: 28px; transition: background .2s ease, color .2s ease; }
+    .mark { height: 210px; display: grid; place-items: center; }
+    .logo-image { display: inline-block; background: currentColor; -webkit-mask: var(--src) center / contain no-repeat; mask: var(--src) center / contain no-repeat; }
+    .mark .logo-image { width: 126px; height: 126px; transition: transform .4s cubic-bezier(.2,.8,.2,1); }
+    article:hover .mark .logo-image { transform: scale(1.06); }
+    .sizes { display: flex; align-items: end; gap: 12px; min-height: 52px; border-top: 1px solid color-mix(in srgb, currentColor 16%, transparent); padding-top: 16px; }
+    .sizes .logo-image:nth-child(1) { width: 16px; height: 16px; }
+    .sizes .logo-image:nth-child(2) { width: 32px; height: 32px; }
+    .sizes .logo-image:nth-child(3) { width: 48px; height: 48px; }
+    h2 { margin: 24px 0 6px; font-size: 17px; letter-spacing: 0; }
+    .type { color: #73736e; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    article p { min-height: 52px; margin: 12px 0 0; color: color-mix(in srgb, currentColor 68%, transparent); font-size: 13px; line-height: 1.55; }
+    article[data-selected="true"] { box-shadow: inset 0 0 0 2px #6d4aff; }
+    .selected { display: inline-block; margin-top: 16px; color: #6d4aff; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    @media (max-width: 840px) { .grid { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 560px) { header { align-items: start; flex-direction: column; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div><h1>VibeShell</h1><p>Terminal, connection and path systems explored as compact marks.</p></div>
+      <div class="themes" aria-label="Preview colors">
+        <button style="background:#fff" data-bg="#fff" data-ink="#171717" title="Paper white"></button>
+        <button style="background:#111016" data-bg="#111016" data-ink="#f7f7f5" title="Violet black"></button>
+        <button style="background:#071718" data-bg="#071718" data-ink="#5eead4" title="Cyan black"></button>
+      </div>
+    </header>
+    <section class="grid" id="grid"></section>
+  </main>
+  <script>
+    const logos = [
+      ['01-prompt-fold.svg','Prompt Fold','Pure geometric','A V-shaped route and a terminal cursor. Strongest at dock and favicon scale.',true],
+      ['02-column-gate.svg','Column Gate','Rounded matrix','Three progressive columns turn Finder-style paths into a modular symbol.'],
+      ['03-signal-shell.svg','Signal Shell','Line system','Dense terminal lines are clipped into a prompt-shaped field.'],
+      ['04-path-matrix.svg','Path Matrix','Dots + geometry','Discrete route nodes form the V monogram while retaining network meaning.'],
+      ['05-tunnel-lines.svg','Tunnel Lines','Lines + geometry','Nested SSH tunnels converge on one stable endpoint.'],
+      ['06-node-relay.svg','Node Relay','Network topology','A compact asymmetric graph represents SSH hops and file transfer branches.']
+    ];
+    const grid = document.querySelector('#grid');
+    grid.innerHTML = logos.map(([file,title,type,copy,selected]) => `<article ${selected ? 'data-selected="true"' : ''}>
+      <div class="mark"><span class="logo-image" style="--src:url('${file}')" role="img" aria-label="${title}"></span></div>
+      <div class="sizes"><span class="logo-image" style="--src:url('${file}')"></span><span class="logo-image" style="--src:url('${file}')"></span><span class="logo-image" style="--src:url('${file}')"></span></div>
+      <h2>${title}</h2><div class="type">${type}</div><p>${copy}</p>${selected ? '<span class="selected">SELECTED FOR APP ICON</span>' : ''}
+    </article>`).join('');
+    document.querySelectorAll('.themes button').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('article').forEach(card => { card.style.setProperty('--surface', button.dataset.bg); card.style.setProperty('--ink', button.dataset.ink); });
+    }));
+  </script>
+</body>
+</html>

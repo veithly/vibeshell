@@ -88,19 +88,19 @@ export function FingerprintManagerDialog() {
           <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl flex-shrink-0">
             <div className="flex items-center gap-3">
               <Shield className="w-5 h-5 text-tokyo-blue" />
-              <h2 className="text-lg font-semibold text-white">SSH Host Key Manager</h2>
+              <h2 className="text-lg font-semibold text-tokyo-fg">SSH Host Key Manager</h2>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => fetchFingerprints()}
                 disabled={loading}
-                className="p-1.5 rounded-md text-tokyo-comment hover:text-white hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
+                className="p-1.5 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
                 title="Refresh"
               >
                 <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
               </button>
               <button
-                className="p-1 rounded-md text-tokyo-comment hover:text-white hover:bg-tokyo-bg-hl transition-colors"
+                className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
                 onClick={closeManager}
               >
                 <X className="w-5 h-5" />
@@ -134,7 +134,7 @@ export function FingerprintManagerDialog() {
                         {/* Server info */}
                         <div className="flex items-center gap-2 mb-2">
                           <Server className="w-4 h-4 text-tokyo-blue flex-shrink-0" />
-                          <span className="font-medium text-white truncate">
+                          <span className="font-medium text-tokyo-fg truncate">
                             {fp.serverName || `${fp.host}:${fp.port}`}
                           </span>
                           {fp.serverName && (

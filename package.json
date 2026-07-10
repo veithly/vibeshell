@@ -1,6 +1,6 @@
 {
   "name": "vibeshell",
-  "version": "0.1.22",
+  "version": "1.0.0",
   "description": "High-performance SSH/SFTP terminal with AI integration",
   "type": "module",
   "scripts": {
@@ -13,6 +13,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@gsap/react": "^2.1.2",
     "@tauri-apps/api": "2.9.1",
     "@tauri-apps/plugin-process": "2.3.1",
     "@tauri-apps/plugin-updater": "2.9.0",
@@ -22,6 +23,7 @@
     "@xterm/xterm": "^5.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "gsap": "^3.15.0",
     "i18next": "^25.8.6",
     "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^0.468.0",

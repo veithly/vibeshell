@@ -69,7 +69,7 @@ function Toast({ id, type, title, message, dismissible, onDismiss }: ToastProps)
     >
       <Icon className={cn('w-5 h-5 flex-shrink-0 mt-0.5', styles.icon)} />
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-white">{title}</p>
+        <p className="text-sm font-medium text-tokyo-fg">{title}</p>
         <p className="mt-1 text-sm text-tokyo-fg break-words">{message}</p>
       </div>
       {dismissible && (
@@ -77,7 +77,7 @@ function Toast({ id, type, title, message, dismissible, onDismiss }: ToastProps)
           onClick={() => onDismiss(id)}
           className={cn(
             'flex-shrink-0 p-1 rounded-md',
-            'text-tokyo-comment hover:text-white',
+            'text-tokyo-comment hover:text-tokyo-fg',
             'hover:bg-tokyo-bg-hl transition-colors'
           )}
           aria-label="Dismiss notification"
@@ -117,7 +117,7 @@ function TauriBanner() {
         onClick={dismissTauriBanner}
         className={cn(
           'p-1 rounded-md flex-shrink-0',
-          'text-tokyo-orange hover:text-white',
+          'text-tokyo-orange hover:text-tokyo-fg',
           'hover:bg-tokyo-orange/20 transition-colors'
         )}
         aria-label="Dismiss banner"

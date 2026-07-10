@@ -14,6 +14,37 @@ use uuid::Uuid;
 
 use super::ShellInfo;
 
+fn build_shell_command(shell_info: &ShellInfo) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(&shell_info.path);
+
+    match shell_info.id.as_str() {
+        "pwsh" | "powershell" => cmd.arg("-NoLogo"),
+        "bash" | "zsh" | "fish" | "sh" | "git-bash" | "msys2-bash" | "cygwin-bash" => {
+            cmd.arg("-l");
+            cmd.arg("-i");
+        }
+        "cmd" | "wsl" => {}
+        _ => {}
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("TERM_PROGRAM", "VibeShell");
+        cmd.env("SHELL", &shell_info.path);
+
+        if let Some(home) = std::env::var_os("HOME") {
+            let home_path = std::path::PathBuf::from(&home);
+            if home_path.is_dir() {
+                cmd.cwd(home);
+            }
+        }
+    }
+
+    cmd
+}
+
 /// State of a local shell session
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -82,25 +113,7 @@ impl LocalShellSession {
             pixel_height: 0,
         })?;
 
-        // Build command for the shell
-        let mut cmd = CommandBuilder::new(&shell_info.path);
-
-        // Add shell-specific arguments for interactive mode
-        match shell_info.id.as_str() {
-            "pwsh" | "powershell" => {
-                cmd.arg("-NoLogo");
-            }
-            "cmd" => {
-                // cmd doesn't need extra args
-            }
-            "bash" | "zsh" | "fish" | "sh" | "git-bash" | "msys2-bash" | "cygwin-bash" => {
-                cmd.arg("-l"); // Login shell
-            }
-            "wsl" => {
-                // WSL starts with default shell
-            }
-            _ => {}
-        }
+        let cmd = build_shell_command(shell_info);
 
         // Spawn the shell process
         let child = pair.slave.spawn_command(cmd)?;
@@ -337,5 +350,37 @@ impl LocalShellSession {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::local_shell::detector::ShellType;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn zsh_launch_is_explicitly_interactive_and_login() {
+        let shell = ShellInfo {
+            id: "zsh".to_string(),
+            name: "Zsh".to_string(),
+            path: "/bin/zsh".to_string(),
+            shell_type: ShellType::Zsh,
+            is_default: true,
+        };
+
+        let command = build_shell_command(&shell);
+        assert_eq!(command.get_argv(), &["/bin/zsh", "-l", "-i"]);
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert_eq!(command.get_env("TERM"), Some(OsStr::new("xterm-256color")));
+            assert_eq!(command.get_env("COLORTERM"), Some(OsStr::new("truecolor")));
+            assert_eq!(
+                command.get_env("TERM_PROGRAM"),
+                Some(OsStr::new("VibeShell"))
+            );
+            assert_eq!(command.get_env("SHELL"), Some(OsStr::new("/bin/zsh")));
+        }
     }
 }

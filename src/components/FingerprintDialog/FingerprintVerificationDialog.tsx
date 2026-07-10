@@ -81,7 +81,7 @@ export function FingerprintVerificationDialog() {
             </h2>
           </div>
           <button
-            className="p-1 rounded-md text-tokyo-comment hover:text-white hover:bg-tokyo-bg-hl transition-colors"
+            className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
             onClick={handleReject}
           >
             <X className="w-5 h-5" />
@@ -107,7 +107,7 @@ export function FingerprintVerificationDialog() {
           {/* Server info */}
           <div className="p-3 rounded-md bg-tokyo-bg border border-tokyo-bg-hl">
             <div className="text-sm text-tokyo-comment">Connecting to</div>
-            <div className="text-white font-medium">
+            <div className="text-tokyo-fg font-medium">
               {pendingVerification.serverName || `${pendingVerification.host}:${pendingVerification.port}`}
             </div>
             {pendingVerification.serverName && (
@@ -133,7 +133,7 @@ export function FingerprintVerificationDialog() {
               </code>
               <button
                 onClick={handleCopyFingerprint}
-                className="p-2 rounded-md bg-tokyo-bg-hl text-tokyo-fg hover:text-white transition-colors"
+                className="p-2 rounded-md bg-tokyo-bg-hl text-tokyo-fg hover:text-tokyo-fg transition-colors"
                 title="Copy fingerprint"
               >
                 {copied ? <Check className="w-4 h-4 text-tokyo-green" /> : <Copy className="w-4 h-4" />}
@@ -182,7 +182,7 @@ export function FingerprintVerificationDialog() {
             className={cn(
               'px-4 py-2 rounded-md',
               'bg-tokyo-bg-hl text-tokyo-fg',
-              'hover:bg-tokyo-bg hover:text-white',
+              'hover:bg-tokyo-bg hover:text-tokyo-fg',
               'disabled:opacity-50 disabled:cursor-not-allowed',
               'transition-colors'
             )}

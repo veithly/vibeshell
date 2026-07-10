@@ -24,6 +24,11 @@ import {
   Check,
   Minus,
   Copy,
+  Columns3,
+  Grid2X2,
+  List,
+  GripVertical,
+  MoreHorizontal,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { safeInvoke } from '../../lib/tauri';
@@ -37,6 +42,8 @@ const PreviewModal = lazy(() => import('./PreviewModal').then((mod) => ({ defaul
  * Archive format types supported for compression
  */
 type ArchiveFormat = 'tar.gz' | 'zip';
+type SftpDock = 'bottom' | 'right';
+type SftpViewMode = 'details' | 'columns' | 'icons';
 
 /**
  * Represents a file or directory in the SFTP listing
@@ -48,6 +55,11 @@ export interface SftpEntry {
   size: number;
   modifiedAt: number;
   permissions: string;
+}
+
+interface SftpColumn {
+  path: string;
+  entries: SftpEntry[];
 }
 
 interface DirectoryTransferSummary {
@@ -99,10 +111,18 @@ interface SftpPanelProps {
   minHeight?: number;
   /** Maximum height of the panel in pixels (or percentage of viewport) */
   maxHeight?: number;
+  /** Dock the browser under the terminal or as a right-side inspector. */
+  dock?: SftpDock;
+  /** Default width when docked on the right. */
+  defaultWidth?: number;
+  minWidth?: number;
+  maxWidth?: number;
   /** Callback when expand button is clicked */
   onExpand?: () => void;
   /** Callback when fullscreen state changes */
   onFullscreenChange?: (isFullscreen: boolean) => void;
+  /** Notifies the top-level SFTP command button about panel visibility. */
+  onCollapsedChange?: (isCollapsed: boolean) => void;
 }
 
 /**
@@ -164,6 +184,14 @@ function getErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+function sortDirectoryEntries(entries: SftpEntry[]): SftpEntry[] {
+  return [...entries].sort((a, b) => {
+    if (a.isDirectory && !b.isDirectory) return -1;
+    if (!a.isDirectory && b.isDirectory) return 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 function isSftpConnectionError(message: string): boolean {
   const normalized = message.toLowerCase();
   return [
@@ -180,6 +208,16 @@ function isSftpConnectionError(message: string): boolean {
   ].some((needle) => normalized.includes(needle));
 }
 
+function loadSftpViewMode(): SftpViewMode {
+  try {
+    const stored = globalThis.localStorage?.getItem('vibeshell-sftp-view');
+    if (stored === 'columns' || stored === 'icons') return stored;
+  } catch {
+    // Storage can be unavailable in hardened webviews and test environments.
+  }
+  return 'details';
+}
+
 /**
  * Collapsible SFTP file browser panel with full functionality
  */
@@ -191,16 +229,25 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     defaultHeight = 256,
     minHeight = 150,
     maxHeight = 600,
+    dock = 'bottom',
+    defaultWidth = 420,
+    minWidth = 320,
+    maxWidth = 720,
     onExpand: _onExpand,
     onFullscreenChange,
+    onCollapsedChange,
   },
   ref
 ) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [panelHeight, setPanelHeight] = useState(defaultHeight);
+  const [panelWidth, setPanelWidth] = useState(defaultWidth);
+  const [viewMode, setViewMode] = useState<SftpViewMode>(loadSftpViewMode);
   const [currentPath, setCurrentPath] = useState<string>('~');
   const [entries, setEntries] = useState<SftpEntry[]>([]);
+  const [columns, setColumns] = useState<SftpColumn[]>([]);
+  const [columnSelections, setColumnSelections] = useState<Record<string, string>>({});
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -210,11 +257,12 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0 });
+  const [isToolbarMenuOpen, setIsToolbarMenuOpen] = useState(false);
 
   // Resize drag state
   const [isDragging, setIsDragging] = useState(false);
-  const dragStartY = useRef<number>(0);
-  const dragStartHeight = useRef<number>(0);
+  const dragStartPoint = useRef<number>(0);
+  const dragStartSize = useRef<number>(0);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Rename dialog state
@@ -236,8 +284,20 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   // Drag-and-drop state
   const [isDragOver, setIsDragOver] = useState(false);
   const fileListRef = useRef<HTMLDivElement>(null);
+  const columnsScrollerRef = useRef<HTMLDivElement>(null);
+  const columnLoadRequestRef = useRef(0);
+  const columnsRef = useRef<SftpColumn[]>([]);
+  const viewModeRef = useRef<SftpViewMode>(viewMode);
 
   const { success: notifySuccess, error: notifyError } = useNotificationStore();
+
+  useEffect(() => {
+    columnsRef.current = columns;
+  }, [columns]);
+
+  useEffect(() => {
+    viewModeRef.current = viewMode;
+  }, [viewMode]);
 
   // Get selected entry for single selection operations (backward compatibility)
   const selectedEntry = useMemo(() => {
@@ -267,11 +327,14 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   useEffect(() => {
     setIsInitialized(false);
     setEntries([]);
+    setColumns([]);
+    setColumnSelections({});
     setSelectedEntries(new Set());
     setLastSelectedIndex(null);
     setCurrentPath('~');
     setError(null);
     setPreviewEntry(null);
+    columnLoadRequestRef.current += 1;
 
     if (!sessionId) {
       setIsCollapsed(true);
@@ -284,12 +347,17 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     onFullscreenChange?.(isFullscreen);
   }, [isFullscreen, onFullscreenChange]);
 
+  useEffect(() => {
+    onCollapsedChange?.(isCollapsed);
+  }, [isCollapsed, onCollapsedChange]);
+
   // Close context menu on click outside
   useEffect(() => {
     const handleClickOutside = () => {
       if (contextMenu.visible) {
         setContextMenu({ visible: false, x: 0, y: 0 });
       }
+      setIsToolbarMenuOpen(false);
     };
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
@@ -300,9 +368,13 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      const deltaY = dragStartY.current - e.clientY;
-      const newHeight = Math.min(maxHeight, Math.max(minHeight, dragStartHeight.current + deltaY));
-      setPanelHeight(newHeight);
+      if (dock === 'right') {
+        const deltaX = dragStartPoint.current - e.clientX;
+        setPanelWidth(Math.min(maxWidth, Math.max(minWidth, dragStartSize.current + deltaX)));
+      } else {
+        const deltaY = dragStartPoint.current - e.clientY;
+        setPanelHeight(Math.min(maxHeight, Math.max(minHeight, dragStartSize.current + deltaY)));
+      }
     };
 
     const handleMouseUp = () => {
@@ -313,26 +385,64 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
-    document.body.style.cursor = 'ns-resize';
+    document.body.style.cursor = dock === 'right' ? 'ew-resize' : 'ns-resize';
     document.body.style.userSelect = 'none';
 
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging, minHeight, maxHeight]);
+  }, [dock, isDragging, minHeight, maxHeight, minWidth, maxWidth]);
 
-  // Expose methods to parent via ref
+  const expandPanel = useCallback(() => setIsCollapsed(false), []);
+  const collapsePanel = useCallback(() => {
+    setIsFullscreen(false);
+    setIsCollapsed(true);
+  }, []);
+  const togglePanel = useCallback(() => {
+    setIsFullscreen(false);
+    setIsCollapsed((previous) => !previous);
+  }, []);
+  const enterFullscreen = useCallback(() => {
+    setIsCollapsed(false);
+    setIsFullscreen(true);
+  }, []);
+  const exitFullscreen = useCallback(() => setIsFullscreen(false), []);
+  const togglePanelFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      exitFullscreen();
+    } else {
+      enterFullscreen();
+    }
+  }, [enterFullscreen, exitFullscreen, isFullscreen]);
+
+  // Expose methods to parent via ref while preserving valid panel states.
   useImperativeHandle(ref, () => ({
-    expand: () => setIsCollapsed(false),
-    collapse: () => setIsCollapsed(true),
-    toggle: () => setIsCollapsed((prev) => !prev),
+    expand: expandPanel,
+    collapse: collapsePanel,
+    toggle: togglePanel,
     isCollapsed: () => isCollapsed,
-    enterFullscreen: () => setIsFullscreen(true),
-    exitFullscreen: () => setIsFullscreen(false),
-    toggleFullscreen: () => setIsFullscreen((prev) => !prev),
+    enterFullscreen,
+    exitFullscreen,
+    toggleFullscreen: togglePanelFullscreen,
     isFullscreen: () => isFullscreen,
-  }), [isCollapsed, isFullscreen]);
+  }), [collapsePanel, enterFullscreen, exitFullscreen, expandPanel, isCollapsed, isFullscreen, togglePanel, togglePanelFullscreen]);
+
+  const fetchDirectoryEntries = useCallback(async (path: string): Promise<SftpEntry[]> => {
+    if (!sessionId) return [];
+
+    const result = await safeInvoke<SftpEntry[]>('sftp_list_dir', {
+      request: {
+        sessionId,
+        path,
+      },
+    });
+
+    if (!result.success) {
+      throw new Error(result.error.message);
+    }
+    return sortDirectoryEntries(result.data);
+  }, [sessionId]);
 
   const loadDirectory = useCallback(async (path: string) => {
     if (!sessionId) return;
@@ -343,24 +453,27 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     setLastSelectedIndex(null);
 
     try {
-      const result = await safeInvoke<SftpEntry[]>('sftp_list_dir', {
-        request: {
-          sessionId: sessionId,
-          path: path,
-        },
-      });
-
-      if (result.success) {
-        // Sort: directories first, then files, alphabetically
-        const sorted = result.data.sort((a, b) => {
-          if (a.isDirectory && !b.isDirectory) return -1;
-          if (!a.isDirectory && b.isDirectory) return 1;
-          return a.name.localeCompare(b.name);
+      const sorted = await fetchDirectoryEntries(path);
+      setEntries(sorted);
+      setCurrentPath(path);
+      const existingColumnIndex = viewModeRef.current === 'columns'
+        ? columnsRef.current.findIndex((column) => column.path === path)
+        : -1;
+      if (existingColumnIndex >= 0) {
+        setColumns([
+          ...columnsRef.current.slice(0, existingColumnIndex),
+          { path, entries: sorted },
+        ]);
+        setColumnSelections((previous) => {
+          const next: Record<string, string> = {};
+          columnsRef.current.slice(0, existingColumnIndex).forEach((column) => {
+            if (previous[column.path]) next[column.path] = previous[column.path];
+          });
+          return next;
         });
-        setEntries(sorted);
-        setCurrentPath(path);
       } else {
-        throw new Error(result.error.message);
+        setColumns([{ path, entries: sorted }]);
+        setColumnSelections({});
       }
     } catch (err) {
       console.error('[SftpPanel] Failed to load directory:', err);
@@ -372,7 +485,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     } finally {
       setIsLoading(false);
     }
-  }, [sessionId]);
+  }, [fetchDirectoryEntries, sessionId]);
 
   const initializeSftp = useCallback(async () => {
     if (!sessionId) return;
@@ -440,6 +553,58 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       loadDirectory(entry.path);
     }
   }, [loadDirectory]);
+
+  const handleColumnEntryClick = useCallback(async (
+    column: SftpColumn,
+    columnIndex: number,
+    entry: SftpEntry
+  ) => {
+    setColumnSelections((previous) => {
+      const next: Record<string, string> = {};
+      columns.slice(0, columnIndex).forEach(({ path }) => {
+        if (previous[path]) next[path] = previous[path];
+      });
+      next[column.path] = entry.path;
+      return next;
+    });
+    setColumns((previous) => previous.slice(0, columnIndex + 1));
+    setCurrentPath(column.path);
+    setEntries(column.entries);
+    setSelectedEntries(new Set(entry.isDirectory ? [] : [entry.path]));
+    setLastSelectedIndex(null);
+
+    if (!entry.isDirectory) return;
+
+    const requestId = ++columnLoadRequestRef.current;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const childEntries = await fetchDirectoryEntries(entry.path);
+      if (requestId !== columnLoadRequestRef.current) return;
+      setColumns((previous) => [
+        ...previous.slice(0, columnIndex + 1),
+        { path: entry.path, entries: childEntries },
+      ]);
+      setCurrentPath(entry.path);
+      setEntries(childEntries);
+      setSelectedEntries(new Set());
+    } catch (err) {
+      if (requestId !== columnLoadRequestRef.current) return;
+      const message = getErrorMessage(err, 'Failed to load directory');
+      if (isSftpConnectionError(message)) setIsInitialized(false);
+      setError(message);
+    } finally {
+      if (requestId === columnLoadRequestRef.current) setIsLoading(false);
+    }
+  }, [columns, fetchDirectoryEntries]);
+
+  useEffect(() => {
+    if (viewMode !== 'columns') return;
+    requestAnimationFrame(() => {
+      const scroller = columnsScrollerRef.current;
+      if (scroller) scroller.scrollLeft = scroller.scrollWidth;
+    });
+  }, [columns.length, viewMode]);
 
   const handleRefresh = useCallback(() => {
     if (!isInitialized) {
@@ -1057,17 +1222,37 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    dragStartY.current = e.clientY;
-    dragStartHeight.current = panelHeight;
+    dragStartPoint.current = dock === 'right' ? e.clientX : e.clientY;
+    dragStartSize.current = dock === 'right' ? panelWidth : panelHeight;
     setIsDragging(true);
-  }, [panelHeight]);
+  }, [dock, panelHeight, panelWidth]);
 
   const toggleCollapse = () => {
-    setIsCollapsed(!isCollapsed);
+    if (isCollapsed) {
+      expandPanel();
+    } else {
+      collapsePanel();
+    }
   };
 
   const toggleFullscreen = () => {
-    setIsFullscreen(!isFullscreen);
+    togglePanelFullscreen();
+  };
+
+  const changeViewMode = (nextMode: SftpViewMode) => {
+    if (nextMode === 'columns') {
+      setColumns([{ path: currentPath, entries }]);
+      setColumnSelections({});
+      if (dock === 'right') {
+        setPanelWidth((current) => Math.max(current, Math.min(maxWidth, 680)));
+      }
+    }
+    setViewMode(nextMode);
+    try {
+      globalThis.localStorage?.setItem('vibeshell-sftp-view', nextMode);
+    } catch {
+      // The selected mode still applies for the current session.
+    }
   };
 
   if (!sessionId) {
@@ -1076,31 +1261,41 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
   // Parse path for breadcrumb navigation
   const pathParts = currentPath.split('/').filter(Boolean);
+  const isCompactToolbar = dock === 'right' && !isFullscreen && panelWidth < 620;
 
-  // Calculate panel height based on state
-  const getPanelHeight = () => {
-    if (isFullscreen) return '100%';
-    if (isCollapsed) return '40px';
-    return `${panelHeight}px`;
+  const getPanelStyle = (): React.CSSProperties => {
+    if (isFullscreen) return { width: '100%', height: '100%' };
+    if (dock === 'right') {
+      return {
+        width: isCollapsed ? '0px' : `${panelWidth}px`,
+        height: '100%',
+        flexShrink: 0,
+      };
+    }
+    return { width: '100%', height: isCollapsed ? '40px' : `${panelHeight}px` };
   };
 
   return (
     <div
       ref={panelRef}
       className={cn(
-        'relative border-t border-tokyo-bg-hl bg-tokyo-bg-dark transition-all duration-200',
-        // Fullscreen: absolute within the <main> container (not fixed over the whole viewport)
-        // so it doesn't cover the left sidebar
-        isFullscreen && 'absolute inset-0 z-40 border-t-0'
+        'relative bg-tokyo-bg-dark transition-[width,height] duration-200',
+        dock === 'right' ? 'border-l border-tokyo-bg-hl' : 'border-t border-tokyo-bg-hl',
+        dock === 'right' && isCollapsed && !isFullscreen && 'pointer-events-none overflow-hidden border-l-0',
+        isFullscreen && 'absolute inset-0 z-40 border-l-0 border-t-0'
       )}
-      style={{ height: getPanelHeight() }}
+      style={getPanelStyle()}
+      aria-hidden={dock === 'right' && isCollapsed && !isFullscreen}
+      data-testid="sftp-panel"
     >
       {/* Resize Handle (when not collapsed and not fullscreen) */}
       {!isCollapsed && !isFullscreen && (
         <div
           className={cn(
-            'absolute top-0 left-0 right-0 h-2 cursor-ns-resize z-10',
-            'group flex items-center justify-center',
+            'absolute z-10 group flex items-center justify-center',
+            dock === 'right'
+              ? 'bottom-0 left-0 top-0 w-2 cursor-ew-resize'
+              : 'left-0 right-0 top-0 h-2 cursor-ns-resize',
             'hover:bg-tokyo-blue/30 transition-colors',
             isDragging && 'bg-tokyo-blue/50'
           )}
@@ -1108,12 +1303,16 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
           title="Drag to resize"
         >
           <div className={cn(
-            'flex items-center justify-center w-12 h-4 -mt-2 rounded-t',
-            'bg-tokyo-bg-hl/80 border border-b-0 border-tokyo-bg-hl',
+            'flex items-center justify-center bg-tokyo-bg-hl/80 border border-tokyo-bg-hl',
+            dock === 'right'
+              ? '-ml-2 h-12 w-4 rounded-r border-l-0'
+              : '-mt-2 h-4 w-12 rounded-t border-b-0',
             'opacity-60 group-hover:opacity-100 transition-opacity',
             isDragging && 'opacity-100 bg-tokyo-blue/30'
           )}>
-            <GripHorizontal className="w-4 h-4 text-tokyo-comment" />
+            {dock === 'right'
+              ? <GripVertical className="w-4 h-4 text-tokyo-comment" />
+              : <GripHorizontal className="w-4 h-4 text-tokyo-comment" />}
           </div>
         </div>
       )}
@@ -1122,10 +1321,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       <div
         className={cn(
           'flex items-center justify-between px-3 h-10',
-          'border-b border-tokyo-bg-hl cursor-pointer',
-          'hover:bg-tokyo-bg-hl/30 transition-colors duration-150'
+          'border-b border-tokyo-bg-hl'
         )}
-        onClick={toggleCollapse}
       >
         <div className="flex items-center gap-2">
           <button
@@ -1157,6 +1354,34 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
         </div>
 
         <div className="flex items-center gap-1">
+          {!isCollapsed && (
+            <div className="mr-1 flex items-center rounded-md border border-tokyo-bg-hl bg-tokyo-bg p-0.5">
+              <button
+                className={cn('icon-button h-7 w-7', viewMode === 'details' && 'bg-tokyo-selection text-tokyo-fg')}
+                onClick={(e) => { e.stopPropagation(); changeViewMode('details'); }}
+                aria-label="Details view"
+                title="Details view"
+              >
+                <List className="h-4 w-4" />
+              </button>
+              <button
+                className={cn('icon-button h-7 w-7', viewMode === 'columns' && 'bg-tokyo-selection text-tokyo-fg')}
+                onClick={(e) => { e.stopPropagation(); changeViewMode('columns'); }}
+                aria-label="Column view"
+                title="Column view"
+              >
+                <Columns3 className="h-4 w-4" />
+              </button>
+              <button
+                className={cn('icon-button h-7 w-7', viewMode === 'icons' && 'bg-tokyo-selection text-tokyo-fg')}
+                onClick={(e) => { e.stopPropagation(); changeViewMode('icons'); }}
+                aria-label="Icon view"
+                title="Icon view"
+              >
+                <Grid2X2 className="h-4 w-4" />
+              </button>
+            </div>
+          )}
           {/* Fullscreen toggle */}
           <button
             className={cn(
@@ -1182,7 +1407,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       {!isCollapsed && (
         <div className="flex flex-col h-[calc(100%-40px)] relative">
           {/* Toolbar */}
-          <div className="flex items-center gap-1 px-2 py-1 border-b border-tokyo-bg-hl bg-tokyo-bg">
+          <div className="flex items-center gap-1 px-2 py-1 border-b border-tokyo-bg-hl bg-tokyo-bg" data-testid="sftp-toolbar">
             <button
               onClick={(e) => { e.stopPropagation(); handleGoHome(); }}
               disabled={isLoading}
@@ -1234,6 +1459,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
             >
               <Upload className="w-4 h-4 text-tokyo-comment" />
             </button>
+            {!isCompactToolbar && (
+              <>
             <button
               onClick={(e) => { e.stopPropagation(); handleUploadDirectory('upload'); }}
               disabled={isLoading}
@@ -1323,11 +1550,111 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
             >
               <CheckSquare className="w-4 h-4 text-tokyo-comment" />
             </button>
+              </>
+            )}
 
-            {/* Breadcrumb path */}
-            <div className="flex-1 flex items-center gap-1 ml-2 text-xs text-tokyo-comment overflow-hidden">
+            {isCompactToolbar && (
+              <div className="relative ml-auto">
+                <button
+                  className={cn(
+                    'p-1.5 rounded transition-colors hover:bg-tokyo-bg-hl',
+                    isToolbarMenuOpen && 'bg-tokyo-selection text-tokyo-fg'
+                  )}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setIsToolbarMenuOpen((open) => !open);
+                  }}
+                  aria-label="More SFTP actions"
+                  title="More actions"
+                >
+                  <MoreHorizontal className="h-4 w-4 text-tokyo-comment" />
+                </button>
+                {isToolbarMenuOpen && (
+                  <div
+                    className="absolute right-0 top-full z-50 mt-1 max-h-64 w-52 overflow-y-auto rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      onClick={() => { setIsToolbarMenuOpen(false); void handleUploadDirectory('upload'); }}
+                      disabled={isLoading}
+                    >
+                      <FolderOpen className="h-4 w-4 text-tokyo-comment" /> Upload folder
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      onClick={() => { setIsToolbarMenuOpen(false); void handleUploadDirectory('sync'); }}
+                      disabled={isLoading}
+                    >
+                      <RefreshCw className="h-4 w-4 text-tokyo-comment" /> Sync current folder
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      onClick={() => { setIsToolbarMenuOpen(false); void handleDownload(); }}
+                      disabled={isLoading || !selectedEntry || selectedEntry.isDirectory}
+                    >
+                      <Download className="h-4 w-4 text-tokyo-comment" /> Download
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      onClick={() => { setIsToolbarMenuOpen(false); handlePreview(); }}
+                      disabled={isLoading || !canPreviewSelected}
+                    >
+                      <Eye className="h-4 w-4 text-tokyo-comment" /> Preview
+                    </button>
+                    <div className="my-1 border-t border-tokyo-bg-hl" />
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      onClick={() => {
+                        setIsToolbarMenuOpen(false);
+                        if (selectedEntry) {
+                          setRenameEntry(selectedEntry);
+                          setNewName(selectedEntry.name);
+                        }
+                      }}
+                      disabled={isLoading || !selectedEntry}
+                    >
+                      <Edit3 className="h-4 w-4 text-tokyo-comment" /> Rename
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-red hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      onClick={() => { setIsToolbarMenuOpen(false); void handleDelete(); }}
+                      disabled={isLoading || selectedEntries.size === 0}
+                    >
+                      <Trash2 className="h-4 w-4" /> Delete
+                    </button>
+                    <div className="my-1 border-t border-tokyo-bg-hl" />
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      onClick={() => { setIsToolbarMenuOpen(false); handleOpenCompressDialog(); }}
+                      disabled={isLoading || selectedEntries.size === 0}
+                    >
+                      <Archive className="h-4 w-4 text-tokyo-comment" /> Compress
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      onClick={() => { setIsToolbarMenuOpen(false); void handleExtract(); }}
+                      disabled={isLoading || !hasSelectedArchives}
+                    >
+                      <FolderOpen className="h-4 w-4 text-tokyo-comment" /> Extract
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      onClick={() => { setIsToolbarMenuOpen(false); handleSelectAll(); }}
+                      disabled={isLoading || entries.length === 0}
+                    >
+                      <CheckSquare className="h-4 w-4 text-tokyo-comment" /> Select all
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Address bar */}
+          <div className="flex h-8 flex-shrink-0 items-center gap-1 overflow-hidden border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-3 text-xs text-tokyo-comment" data-testid="sftp-address-bar">
               <span
-                className="text-tokyo-fg cursor-pointer hover:text-tokyo-blue hover:underline"
+                className="cursor-pointer text-tokyo-fg hover:text-tokyo-blue hover:underline"
                 onClick={(e) => { e.stopPropagation(); loadDirectory('/'); }}
               >/</span>
               {pathParts.map((part, index) => {
@@ -1350,12 +1677,11 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                   </span>
                 );
               })}
-            </div>
           </div>
 
           {/* Error display */}
           {error && (
-            <div className="flex items-center gap-2 px-3 py-2 bg-red-900/20 border-b border-red-800/30 text-red-400 text-sm">
+            <div className="flex items-center gap-2 px-3 py-2 bg-tokyo-red/10 border-b border-tokyo-red/30 text-tokyo-red text-sm">
               <AlertCircle className="w-4 h-4 flex-shrink-0" />
               <span className="truncate">{error}</span>
               <button
@@ -1363,13 +1689,13 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                   setError(null);
                   handleRefresh();
                 }}
-                className="ml-auto text-red-400 hover:text-red-300"
+                className="ml-auto text-tokyo-red hover:text-tokyo-fg"
               >
                 Retry
               </button>
               <button
                 onClick={() => setError(null)}
-                className="text-red-400 hover:text-red-300"
+                className="text-tokyo-red hover:text-tokyo-fg"
               >
                 Dismiss
               </button>
@@ -1400,11 +1726,71 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                 </div>
               </div>
             )}
-            {entries.length === 0 && !isLoading && !error ? (
+            {viewMode === 'columns' ? (
+              <div
+                ref={columnsScrollerRef}
+                className="flex h-full min-h-0 overflow-x-auto overflow-y-hidden bg-tokyo-bg"
+                data-testid="sftp-column-browser"
+              >
+                {columns.map((column, columnIndex) => (
+                  <section
+                    key={column.path}
+                    className="flex h-full min-w-[220px] max-w-[280px] flex-1 flex-col border-r border-tokyo-bg-hl last:border-r-0"
+                    data-sftp-column={column.path}
+                  >
+                    <div className="flex h-8 flex-shrink-0 items-center border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-2">
+                      <span className="truncate font-mono text-[10px] text-tokyo-comment" title={column.path}>
+                        {column.path === '/' ? '/' : basename(column.path)}
+                      </span>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto py-1">
+                      {column.entries.length === 0 ? (
+                        <div className="px-3 py-4 text-xs text-tokyo-comment">Empty directory</div>
+                      ) : column.entries.map((entry) => (
+                        <button
+                          key={entry.path}
+                          title={entry.name}
+                          className={cn(
+                            'group flex h-8 w-full min-w-0 items-center gap-2 px-2 text-left transition-colors hover:bg-tokyo-bg-hl',
+                            'focus:outline-none focus:ring-1 focus:ring-inset focus:ring-tokyo-blue',
+                            columnSelections[column.path] === entry.path && 'bg-tokyo-selection text-tokyo-fg'
+                          )}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleColumnEntryClick(column, columnIndex, entry);
+                          }}
+                          onDoubleClick={(event) => {
+                            event.stopPropagation();
+                            if (!entry.isDirectory && canPreviewFile(entry.name)) handlePreview(entry);
+                          }}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setCurrentPath(column.path);
+                            setEntries(column.entries);
+                            setSelectedEntries(new Set([entry.path]));
+                            setColumnSelections((previous) => ({ ...previous, [column.path]: entry.path }));
+                            setContextMenu({ visible: true, x: event.clientX, y: event.clientY });
+                          }}
+                        >
+                          <FileIcon filename={entry.name} isDirectory={entry.isDirectory} />
+                          <span className="min-w-0 flex-1 truncate text-xs text-tokyo-fg">{entry.name}</span>
+                          {entry.isDirectory ? (
+                            <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-tokyo-comment" />
+                          ) : (
+                            <span className="flex-shrink-0 text-[9px] text-tokyo-comment">{formatFileSize(entry.size)}</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : entries.length === 0 && !isLoading && !error ? (
               <div className="flex items-center justify-center h-full text-tokyo-comment text-sm">
                 Empty directory
               </div>
-            ) : (
+            ) : viewMode === 'details' ? (
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-tokyo-bg border-b border-tokyo-bg-hl">
                   <tr className="text-left text-tokyo-comment">
@@ -1429,10 +1815,10 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                           )}
                         >
                           {selectedEntries.size > 0 && selectedEntries.size === entries.length && (
-                            <Check className="w-3 h-3 text-white" />
+                            <Check className="w-3 h-3 text-tokyo-on-accent" />
                           )}
                           {selectedEntries.size > 0 && selectedEntries.size < entries.length && (
-                            <Minus className="w-3 h-3 text-white" />
+                            <Minus className="w-3 h-3 text-tokyo-on-accent" />
                           )}
                         </div>
                       </div>
@@ -1490,7 +1876,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                             )}
                           >
                             {selectedEntries.has(entry.path) && (
-                              <Check className="w-3 h-3 text-white" />
+                              <Check className="w-3 h-3 text-tokyo-on-accent" />
                             )}
                           </div>
                         </div>
@@ -1511,6 +1897,49 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                   ))}
                 </tbody>
               </table>
+            ) : (
+              <div
+                className="grid grid-flow-dense grid-cols-[repeat(auto-fill,minmax(92px,1fr))] gap-2 p-2"
+              >
+                {entries.map((entry, index) => (
+                  <button
+                    key={entry.path}
+                    title={entry.name}
+                    onClick={(e) => handleEntryClick(entry, index, e)}
+                    onContextMenu={(e) => handleContextMenu(e, entry, index)}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      if (entry.isDirectory) {
+                        navigateToEntry(entry);
+                      } else if (canPreviewFile(entry.name)) {
+                        handlePreview(entry);
+                      }
+                    }}
+                    className={cn(
+                      'group relative min-w-0 overflow-hidden bg-tokyo-bg text-left transition-colors hover:bg-tokyo-bg-hl',
+                      'focus:outline-none focus:ring-1 focus:ring-inset focus:ring-tokyo-blue',
+                      'flex aspect-square max-h-28 flex-col items-center justify-center gap-2 rounded-md border border-tokyo-bg-hl p-2 text-center',
+                      selectedEntries.has(entry.path) && 'bg-tokyo-selection'
+                    )}
+                  >
+                    <FileIcon
+                      filename={entry.name}
+                      isDirectory={entry.isDirectory}
+                      size="lg"
+                      className="transition-transform duration-700 ease-out group-hover:scale-105"
+                    />
+                    <span className="w-full min-w-0 truncate text-xs text-tokyo-fg">
+                      {entry.name}
+                    </span>
+                    {selectedEntries.has(entry.path) && (
+                      <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-sm bg-tokyo-blue text-tokyo-on-accent">
+                        <Check className="h-3 w-3" />
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
 
@@ -1547,7 +1976,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                   <button
                     onClick={handleRename}
                     disabled={!newName.trim() || newName === renameEntry.name}
-                    className="px-3 py-1.5 rounded text-sm bg-tokyo-blue text-white hover:bg-tokyo-blue/80 disabled:opacity-50"
+                    className="px-3 py-1.5 rounded text-sm bg-tokyo-blue text-tokyo-on-accent hover:bg-tokyo-blue/80 disabled:opacity-50"
                   >
                     Rename
                   </button>
@@ -1588,7 +2017,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                   <button
                     onClick={handleCreateFolder}
                     disabled={!newFolderName.trim()}
-                    className="px-3 py-1.5 rounded text-sm bg-tokyo-blue text-white hover:bg-tokyo-blue/80 disabled:opacity-50"
+                    className="px-3 py-1.5 rounded text-sm bg-tokyo-blue text-tokyo-on-accent hover:bg-tokyo-blue/80 disabled:opacity-50"
                   >
                     Create
                   </button>
@@ -1655,7 +2084,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                   <button
                     onClick={handleCompress}
                     disabled={!archiveName.trim()}
-                    className="px-3 py-1.5 rounded text-sm bg-tokyo-blue text-white hover:bg-tokyo-blue/80 disabled:opacity-50"
+                    className="px-3 py-1.5 rounded text-sm bg-tokyo-blue text-tokyo-on-accent hover:bg-tokyo-blue/80 disabled:opacity-50"
                   >
                     Compress
                   </button>

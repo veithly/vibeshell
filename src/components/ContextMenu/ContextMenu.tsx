@@ -128,7 +128,7 @@ export function ContextMenu({ isOpen, position, items, onClose }: ContextMenuPro
                 ? 'text-tokyo-comment cursor-not-allowed opacity-50'
                 : item.danger
                   ? 'text-tokyo-red hover:bg-tokyo-red/20'
-                  : 'text-tokyo-fg hover:bg-tokyo-bg-hl hover:text-white'
+                  : 'text-tokyo-fg hover:bg-tokyo-bg-hl hover:text-tokyo-fg'
             )}
             onClick={() => handleItemClick(item)}
             disabled={item.disabled}

@@ -8,6 +8,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useSettingsStore, themes } from '../../stores/settingsStore';
 import { CompletionPopup, type CompletionItem } from './CompletionPopup';
 import { useCompletion } from './useCompletion';
+import { applyTrackedInput, getClickedInputPosition, getCursorMoveSequence } from './inputCursor';
 
 type ConnectionStatus = 'initializing' | 'listening' | 'receiving' | 'error';
 
@@ -322,6 +323,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       } else {
         inputBufferRef.current = completionText;
       }
+      cursorPositionRef.current = inputBufferRef.current.length;
 
       actions.hideCompletions();
       xtermRef.current?.focus();
@@ -371,13 +373,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
           if (!isLocalShell) {
             shouldDetach = await attachSession(sessionId);
+          } else {
+            // The login shell can print its first prompt before React has mounted
+            // this listener. An empty command asks it to redraw once the bridge is ready.
+            await sendInputForSessionRef.current(sessionId, '\r');
           }
 
           setConnectionStatus('listening');
-
-          if (xtermRef.current && isLocalShell) {
-            xtermRef.current.writeln('\x1b[1;32m[Ready]\x1b[0m Local shell initialized.');
-          }
         } catch (error) {
           console.error('[Terminal] Failed to set up session output listener:', error);
           setConnectionStatus('error');
@@ -472,6 +474,68 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       xtermRef.current = xterm;
       fitAddonRef.current = fitAddon;
 
+      const terminalScreen = xterm.element?.querySelector('.xterm-screen') as HTMLElement | null;
+      const handleTerminalClick = (event: MouseEvent) => {
+        const sid = sessionIdRef.current;
+        const target = event.target instanceof Element ? event.target : null;
+        if (
+          !sid ||
+          event.button !== 0 ||
+          event.altKey ||
+          event.ctrlKey ||
+          event.metaKey ||
+          event.shiftKey ||
+          xterm.buffer.active.type !== 'normal' ||
+          xterm.buffer.active.viewportY !== xterm.buffer.active.baseY ||
+          xterm.modes.mouseTrackingMode !== 'none' ||
+          xterm.hasSelection() ||
+          inputBufferRef.current.length === 0 ||
+          target?.closest('a, .xterm-hover')
+        ) {
+          return;
+        }
+
+        const screen = terminalScreen ?? terminalRef.current;
+        if (!screen) return;
+        const rect = screen.getBoundingClientRect();
+        if (
+          event.clientX < rect.left ||
+          event.clientX >= rect.right ||
+          event.clientY < rect.top ||
+          event.clientY >= rect.bottom
+        ) {
+          return;
+        }
+
+        const clickColumn = Math.min(
+          xterm.cols - 1,
+          Math.max(0, Math.floor((event.clientX - rect.left) / (rect.width / Math.max(1, xterm.cols))))
+        );
+        const clickRow = Math.min(
+          xterm.rows - 1,
+          Math.max(0, Math.floor((event.clientY - rect.top) / (rect.height / Math.max(1, xterm.rows))))
+        );
+        const currentPosition = cursorPositionRef.current;
+        const targetPosition = getClickedInputPosition({
+          clickColumn,
+          clickRow,
+          cursorColumn: xterm.buffer.active.cursorX,
+          cursorRow: xterm.buffer.active.cursorY,
+          terminalColumns: xterm.cols,
+          inputLength: inputBufferRef.current.length,
+          inputCursor: currentPosition,
+        });
+        const moveSequence = getCursorMoveSequence(currentPosition, targetPosition);
+        if (!moveSequence) return;
+
+        sendInputFastRef.current(sid, moveSequence);
+        cursorPositionRef.current = targetPosition;
+        completionActionsRef.current.hideCompletions();
+        completionActionsRef.current.clearGhostText();
+        xterm.focus();
+      };
+      terminalScreen?.addEventListener('click', handleTerminalClick);
+
       xterm.attachCustomKeyEventHandler((event: KeyboardEvent) => {
         if (event.ctrlKey && event.code === 'Space' && event.type === 'keydown') {
           event.preventDefault();
@@ -527,8 +591,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           if (sid) {
             sendInputFastRef.current(sid, compState.ghostText);
           }
-          inputBufferRef.current += compState.ghostText;
-          cursorPositionRef.current = inputBufferRef.current.length;
+          const cursor = cursorPositionRef.current;
+          inputBufferRef.current =
+            inputBufferRef.current.slice(0, cursor) +
+            compState.ghostText +
+            inputBufferRef.current.slice(cursor);
+          cursorPositionRef.current = cursor + compState.ghostText.length;
           compActions.clearGhostText();
           if (compState.visible) {
             compActions.hideCompletions();
@@ -536,65 +604,45 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           return;
         }
 
-        const resetPredictedInputState = () => {
-          inputBufferRef.current = '';
-          cursorPositionRef.current = 0;
-          compActions.hideCompletions();
-          compActions.clearGhostText();
-        };
-
-        const isAnsiCursorOrEditSequence = /^(?:\x1b\[[0-9;?]*[~A-Za-z]|\x1bO[0-9A-Za-z])$/.test(data);
-        if (isAnsiCursorOrEditSequence) {
-          resetPredictedInputState();
-        }
-
-        const shouldResetForControlChar = [
-          '\t',
-          '\x01',
-          '\x02',
-          '\x04',
-          '\x05',
-          '\x06',
-          '\x0b',
-          '\x0c',
-          '\x0e',
-          '\x10',
-          '\x17',
-        ].includes(data);
-
-        if (shouldResetForControlChar) {
-          resetPredictedInputState();
-        }
+        const previousBuffer = inputBufferRef.current;
+        const trackedInput = applyTrackedInput(
+          previousBuffer,
+          cursorPositionRef.current,
+          data
+        );
+        inputBufferRef.current = trackedInput.buffer;
+        cursorPositionRef.current = trackedInput.cursor;
 
         if (data === '\r' || data === '\n') {
-          const command = inputBufferRef.current.trim();
+          const command = previousBuffer.trim();
           if (command) {
             compActions.addToHistory(command);
           }
-          inputBufferRef.current = '';
-          cursorPositionRef.current = 0;
           compActions.hideCompletions();
           compActions.clearGhostText();
         } else if (data === '\x7f' || data === '\b') {
-          if (inputBufferRef.current.length > 0) {
-            inputBufferRef.current = inputBufferRef.current.slice(0, -1);
-            cursorPositionRef.current = Math.max(0, cursorPositionRef.current - 1);
-          }
-          if (!inputBufferRef.current.trim()) {
+          if (cursorPositionRef.current !== inputBufferRef.current.length) {
+            compActions.hideCompletions();
+            compActions.clearGhostText();
+          } else if (!inputBufferRef.current.trim()) {
             compActions.hideCompletions();
             compActions.clearGhostText();
           } else if (compState.visible) {
             compActions.updateCompletions(inputBufferRef.current);
-          } else {
-            compActions.autoTrigger(inputBufferRef.current, { x: 0, y: 0 });
+          } else if (terminalRef.current) {
+            compActions.autoTrigger(
+              inputBufferRef.current,
+              getCompletionPosition(xterm, terminalRef.current, { afterCursor: true, viewportRelative: true })
+            );
           }
-        } else if (data === '\x03' || data === '\x15') {
-          resetPredictedInputState();
+        } else if (!trackedInput.known) {
+          compActions.hideCompletions();
+          compActions.clearGhostText();
         } else if (data.length === 1 && !/[\x00-\x1F\x7F]/.test(data)) {
-          inputBufferRef.current += data;
-          cursorPositionRef.current += 1;
-
-          if (terminalRef.current) {
+          if (cursorPositionRef.current !== inputBufferRef.current.length) {
+            compActions.hideCompletions();
+            compActions.clearGhostText();
+          } else if (terminalRef.current) {
             const position = getCompletionPosition(xterm, terminalRef.current, {
               afterCursor: true,
               viewportRelative: true,
@@ -606,8 +654,21 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
               compActions.autoTrigger(inputBufferRef.current, position);
             }
           }
-        } else if (data.length > 1 && !isAnsiCursorOrEditSequence) {
-          resetPredictedInputState();
+        } else if (['\x03', '\x1b[3~', '\x15', '\x0b', '\x17'].includes(data)) {
+          compActions.hideCompletions();
+          compActions.clearGhostText();
+        } else if ([
+          '\x1b[D',
+          '\x1b[C',
+          '\x1b[H',
+          '\x1bOH',
+          '\x1b[F',
+          '\x1bOF',
+          '\x01',
+          '\x05',
+        ].includes(data)) {
+          compActions.hideCompletions();
+          compActions.clearGhostText();
         }
 
         const sid = sessionIdRef.current;
@@ -621,14 +682,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         handleTerminalResize(cols, rows);
       });
 
-      if (sessionId) {
-        if (isLocalShell) {
-          xterm.writeln('\x1b[1;34mVibeShell Terminal\x1b[0m');
-          xterm.writeln(`\x1b[90mSession: ${sessionId}\x1b[0m`);
-          xterm.writeln('\x1b[1;33m[Starting...]\x1b[0m Initializing local shell...');
-          xterm.writeln('');
-        }
-      } else {
+      if (!sessionId) {
         xterm.writeln('\x1b[1;34mVibeShell Terminal\x1b[0m');
         xterm.writeln('\x1b[90mNo session - type to test local echo\x1b[0m');
         xterm.writeln('');
@@ -654,6 +708,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       window.addEventListener('resize', handleWindowResize);
 
       return () => {
+        terminalScreen?.removeEventListener('click', handleTerminalClick);
         resizeObserver?.disconnect();
         window.removeEventListener('resize', handleWindowResize);
         xterm.dispose();
@@ -789,7 +844,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           </div>
         )}
 
-        {completionState.ghostText && !completionState.visible && (
+        {completionState.ghostText && (
           <GhostTextOverlay
             ghostText={completionState.ghostText}
             terminalRef={terminalRef}

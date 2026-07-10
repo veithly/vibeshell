@@ -131,9 +131,9 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
       <div className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-md mx-4">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
-          <h2 className="text-lg font-semibold text-white">Edit Server</h2>
+          <h2 className="text-lg font-semibold text-tokyo-fg">Edit Server</h2>
           <button
-            className="p-1 rounded-md text-tokyo-comment hover:text-white hover:bg-tokyo-bg-hl transition-colors"
+            className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
             onClick={onClose}
           >
             <X className="w-5 h-5" />
@@ -143,7 +143,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
         {/* Form */}
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {displayError && (
-            <div className="p-3 rounded-md bg-red-900/20 border border-red-800/30 text-red-400 text-sm">
+            <div className="p-3 rounded-md bg-tokyo-red/10 border border-tokyo-red/30 text-tokyo-red text-sm">
               {displayError}
             </div>
           )}
@@ -269,7 +269,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
                   className={cn(
                     'px-3 py-2 rounded-md',
                     'bg-tokyo-bg-hl text-tokyo-fg',
-                    'hover:bg-tokyo-bg hover:text-white',
+                    'hover:bg-tokyo-bg hover:text-tokyo-fg',
                     'transition-colors flex items-center gap-1'
                   )}
                 >
@@ -348,7 +348,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
               className={cn(
                 'px-4 py-2 rounded-md',
                 'bg-tokyo-bg-hl text-tokyo-fg',
-                'hover:bg-tokyo-bg hover:text-white',
+                'hover:bg-tokyo-bg hover:text-tokyo-fg',
                 'transition-colors'
               )}
             >
@@ -359,7 +359,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
               disabled={loading}
               className={cn(
                 'px-4 py-2 rounded-md',
-                'bg-tokyo-blue text-white',
+                'bg-tokyo-blue text-tokyo-on-accent',
                 'hover:bg-tokyo-blue/80',
                 'disabled:opacity-50 disabled:cursor-not-allowed',
                 'transition-colors'

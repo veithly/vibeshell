@@ -19,6 +19,7 @@ export default {
         'tokyo-green': 'var(--tokyo-green)',
         'tokyo-yellow': 'var(--tokyo-yellow)',
         'tokyo-blue': 'var(--tokyo-blue)',
+        'tokyo-on-accent': 'var(--tokyo-on-accent)',
         'tokyo-magenta': 'var(--tokyo-magenta)',
         'tokyo-cyan': 'var(--tokyo-cyan)',
         'tokyo-orange': 'var(--tokyo-orange)',

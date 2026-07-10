@@ -48,7 +48,7 @@ export function ServerItem({
         'hover:bg-tokyo-bg-hl hover:border-tokyo-selection',
         'focus:outline-none focus:ring-1 focus:ring-tokyo-blue',
         isSelected
-          ? 'bg-tokyo-selection border-tokyo-blue text-white'
+          ? 'bg-tokyo-selection border-tokyo-blue text-tokyo-fg'
           : 'border-transparent text-tokyo-fg'
       )}
       onClick={handleClick}
@@ -85,7 +85,7 @@ export function ServerItem({
           <span
             className={cn(
               'text-sm font-medium truncate',
-              isSelected ? 'text-white' : 'text-tokyo-fg'
+              isSelected ? 'text-tokyo-fg' : 'text-tokyo-fg'
             )}
           >
             {server.name}

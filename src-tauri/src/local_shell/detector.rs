@@ -276,8 +276,13 @@ fn get_default_shell_id() -> Option<String> {
         }
     }
 
-    // Default to bash if available
-    if which::which("bash").is_ok() {
+    // GUI apps on macOS may not inherit SHELL even though zsh is the system default.
+    #[cfg(target_os = "macos")]
+    if std::path::Path::new("/bin/zsh").exists() {
+        return Some("zsh".to_string());
+    }
+
+    if std::path::Path::new("/bin/bash").exists() || which::which("bash").is_ok() {
         Some("bash".to_string())
     } else {
         None

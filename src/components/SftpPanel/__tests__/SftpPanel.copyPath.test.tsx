@@ -29,7 +29,7 @@ describe('SftpPanel path copy', () => {
     });
 
     safeInvokeMock.mockReset();
-    safeInvokeMock.mockImplementation((command: string) => {
+    safeInvokeMock.mockImplementation((command: string, args?: { request?: { path?: string } }) => {
       if (command === 'sftp_init') {
         return Promise.resolve({ success: true, data: true });
       }
@@ -37,9 +37,55 @@ describe('SftpPanel path copy', () => {
         return Promise.resolve({ success: true, data: '/var/www' });
       }
       if (command === 'sftp_list_dir') {
+        if (args?.request?.path === '/var/www/src') {
+          return Promise.resolve({
+            success: true,
+            data: [
+              {
+                name: 'components',
+                path: '/var/www/src/components',
+                isDirectory: true,
+                size: 0,
+                modifiedAt: 1_700_000_000,
+                permissions: 'drwxr-xr-x',
+              },
+              {
+                name: 'index.ts',
+                path: '/var/www/src/index.ts',
+                isDirectory: false,
+                size: 64,
+                modifiedAt: 1_700_000_000,
+                permissions: '-rw-r--r--',
+              },
+            ],
+          });
+        }
+        if (args?.request?.path === '/var/www/src/components') {
+          return Promise.resolve({
+            success: true,
+            data: [
+              {
+                name: 'Button.tsx',
+                path: '/var/www/src/components/Button.tsx',
+                isDirectory: false,
+                size: 128,
+                modifiedAt: 1_700_000_000,
+                permissions: '-rw-r--r--',
+              },
+            ],
+          });
+        }
         return Promise.resolve({
           success: true,
           data: [
+            {
+              name: 'src',
+              path: '/var/www/src',
+              isDirectory: true,
+              size: 0,
+              modifiedAt: 1_700_000_000,
+              permissions: 'drwxr-xr-x',
+            },
             {
               name: 'app.log',
               path: '/var/www/app.log',
@@ -77,5 +123,60 @@ describe('SftpPanel path copy', () => {
     await waitFor(() => {
       expect(writeTextMock).toHaveBeenCalledWith('/var/www');
     });
+  });
+
+  it('puts the address on its own row and collapses secondary actions in a narrow sidebar', async () => {
+    render(<SftpPanel sessionId="session-1" defaultCollapsed={false} dock="right" />);
+
+    await screen.findByText('app.log');
+    const toolbar = screen.getByTestId('sftp-toolbar');
+    const addressBar = screen.getByTestId('sftp-address-bar');
+    expect(toolbar.contains(addressBar)).toBe(false);
+    expect(screen.getByTitle('Home')).toBeInTheDocument();
+    expect(screen.getByTitle('Upload file')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('More actions'));
+    expect(await screen.findByText('Upload folder')).toBeInTheDocument();
+    expect(screen.getByText('Sync current folder')).toBeInTheDocument();
+  });
+
+  it('docks on the right and expands nested paths as Finder-style columns', async () => {
+    const { container } = render(
+      <SftpPanel sessionId="session-1" defaultCollapsed={false} dock="right" />
+    );
+
+    await screen.findByText('app.log');
+    expect(container.firstElementChild).toHaveStyle({ width: '420px', height: '100%' });
+
+    fireEvent.click(screen.getByTitle('Column view'));
+    expect(container.firstElementChild).toHaveStyle({ width: '680px', height: '100%' });
+
+    fireEvent.click(screen.getByTitle('src'));
+    await screen.findByText('components');
+    expect(container.querySelectorAll('[data-sftp-column]')).toHaveLength(2);
+
+    fireEvent.click(screen.getByTitle('components'));
+    await screen.findByText('Button.tsx');
+    expect(container.querySelectorAll('[data-sftp-column]')).toHaveLength(3);
+
+    fireEvent.click(screen.getByTitle('Icon view'));
+    expect(screen.getByTitle('Button.tsx')).toHaveClass('aspect-square');
+  });
+
+  it('keeps fullscreen interactive when the panel header is clicked', async () => {
+    render(<SftpPanel sessionId="session-1" defaultCollapsed={false} dock="right" />);
+
+    await screen.findByText('app.log');
+    fireEvent.click(screen.getByLabelText('Enter fullscreen'));
+
+    const panel = screen.getByTestId('sftp-panel');
+    expect(panel).toHaveStyle({ width: '100%', height: '100%' });
+    expect(panel).not.toHaveClass('pointer-events-none');
+
+    fireEvent.click(screen.getByText('SFTP'));
+
+    expect(screen.getByLabelText('Exit fullscreen')).toBeInTheDocument();
+    expect(screen.getByTitle('Home')).toBeInTheDocument();
+    expect(panel).not.toHaveClass('pointer-events-none');
   });
 });

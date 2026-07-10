@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <clipPath id="prompt-shape">
+      <path d="M18 18h64v64H18z M30 31 52 50 30 69 37 76 67 50 37 24z" fill-rule="evenodd"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#prompt-shape)" stroke="currentColor" stroke-width="4" stroke-linecap="round">
+    <path d="M14 24h72M14 34h72M14 44h72M14 54h72M14 64h72M14 74h72"/>
+  </g>
+</svg>

@@ -18,7 +18,7 @@ export function SnippetManagerDialog({ isOpen, onClose }: SnippetManagerDialogPr
       <div className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-2xl mx-4 h-[70vh] flex flex-col overflow-hidden">
         {/* Close button */}
         <button
-          className="absolute top-2 right-2 z-10 p-1 rounded-md text-tokyo-comment hover:text-white hover:bg-tokyo-bg-hl transition-colors"
+          className="absolute top-2 right-2 z-10 p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
           onClick={onClose}
         >
           <X className="w-5 h-5" />

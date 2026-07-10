@@ -44,6 +44,7 @@
 
   "session": {
     "newSession": "新建会话",
+    "newConnection": "新建连接",
     "noActiveSession": "暂无活跃会话",
     "noActiveSessionDesc": "连接到服务器或创建新会话以开始使用。",
     "closeSession": "关闭会话",
@@ -54,7 +55,17 @@
     "startRecording": "开始录制",
     "stopRecording": "停止录制",
     "recording": "正在录制会话",
-    "localShell": "本地终端"
+    "localShell": "本地终端",
+    "splitTerminal": "分栏终端",
+    "arrangeRows": "按行排列分栏",
+    "arrangeColumns": "按列排列分栏",
+    "closeSplits": "收起分栏",
+    "removePane": "从分栏中移除 {{name}}",
+    "splitLimitTitle": "已达到分栏上限",
+    "splitLimitMessage": "一个页面最多同时显示四个终端分栏。",
+    "creatingPane": "正在创建终端分栏",
+    "splitFailedTitle": "无法创建终端分栏",
+    "splitFailedMessage": "本地终端启动失败，请重试。"
   },
 
   "server": {
@@ -103,6 +114,11 @@
   },
 
   "connect": {
+    "launcherTitle": "打开连接",
+    "searchConnections": "搜索服务器和本地终端",
+    "listView": "列表视图",
+    "iconsView": "图标视图",
+    "noShells": "未找到本地终端",
     "connectToServer": "连接到服务器",
     "connecting": "连接中...",
     "connect": "连接",

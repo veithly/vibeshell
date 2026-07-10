@@ -4,24 +4,23 @@
 
 @layer base {
   :root {
-    /* Tokyo Night Color Palette */
-    --tokyo-bg: #1a1b26;
-    --tokyo-bg-dark: #16161e;
-    --tokyo-bg-hl: #292e42;
-    --tokyo-fg: #a9b1d6;
-    --tokyo-fg-dark: #565f89;
-    --tokyo-selection: #33467c;
-    --tokyo-comment: #565f89;
-    --tokyo-red: #f7768e;
-    --tokyo-green: #9ece6a;
-    --tokyo-yellow: #e0af68;
-    --tokyo-blue: #7aa2f7;
-    --tokyo-magenta: #bb9af7;
-    --tokyo-cyan: #7dcfff;
-    --tokyo-orange: #ff9e64;
+    --tokyo-bg: #ffffff;
+    --tokyo-bg-dark: #f7f7f5;
+    --tokyo-bg-hl: #e7e7e3;
+    --tokyo-fg: #171717;
+    --tokyo-fg-dark: #73736e;
+    --tokyo-selection: #e7e7e3;
+    --tokyo-comment: #73736e;
+    --tokyo-red: #c93f4b;
+    --tokyo-green: #25845b;
+    --tokyo-yellow: #a56a12;
+    --tokyo-blue: #6d4aff;
+    --tokyo-on-accent: #ffffff;
+    --tokyo-magenta: #8f45b5;
+    --tokyo-cyan: #148f91;
+    --tokyo-orange: #b45f28;
 
-    /* Font settings */
-    font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   }
 
   body {
@@ -32,6 +31,17 @@
     color: var(--tokyo-fg);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    color: var(--tokyo-fg);
+    letter-spacing: 0;
+    text-wrap: balance;
   }
 
   button,
@@ -72,36 +82,11 @@
 
 @layer components {
   .app-shell {
-    background:
-      radial-gradient(circle at 22% -18%, var(--tokyo-selection) 0, transparent 26rem),
-      radial-gradient(circle at 88% 8%, var(--tokyo-bg-hl) 0, transparent 22rem),
-      linear-gradient(180deg, var(--tokyo-bg-dark) 0%, var(--tokyo-bg) 32%, var(--tokyo-bg-dark) 100%);
-  }
-
-  .app-sidebar {
-    box-shadow:
-      inset -1px 0 0 var(--tokyo-bg),
-      inset 0 1px 0 var(--tokyo-bg-hl);
+    background: linear-gradient(180deg, var(--tokyo-bg-dark) 0%, var(--tokyo-bg) 18%, var(--tokyo-bg) 100%);
   }
 
   .main-workspace {
-    background:
-      radial-gradient(circle at 50% 0, var(--tokyo-selection) 0, transparent 19rem),
-      linear-gradient(180deg, var(--tokyo-bg) 0%, var(--tokyo-bg-dark) 100%);
-  }
-
-  .main-workspace::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background-image:
-      linear-gradient(var(--tokyo-bg-hl) 1px, transparent 1px),
-      linear-gradient(90deg, var(--tokyo-bg-hl) 1px, transparent 1px);
-    background-size: 48px 48px;
-    -webkit-mask-image: linear-gradient(180deg, transparent 0, black 16%, black 58%, transparent 100%);
-    mask-image: linear-gradient(180deg, transparent 0, black 16%, black 58%, transparent 100%);
-    opacity: 0.18;
+    background: var(--tokyo-bg);
   }
 
   .titlebar-shell {
@@ -110,7 +95,7 @@
   }
 
   .titlebar-brand {
-    @apply flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border border-tokyo-bg-hl bg-tokyo-bg text-tokyo-blue;
+    @apply flex h-6 w-6 flex-shrink-0 items-center justify-center overflow-hidden rounded-md;
   }
 
   .titlebar-session {
@@ -118,13 +103,51 @@
     max-width: min(36vw, 26rem);
   }
 
-  .window-control {
-    @apply h-full w-11 flex items-center justify-center text-tokyo-comment transition-colors duration-150;
-    @apply hover:bg-tokyo-bg-hl hover:text-tokyo-fg focus:outline-none focus:ring-1 focus:ring-inset focus:ring-tokyo-blue;
+  .window-controls-macos {
+    @apply flex h-full flex-shrink-0 items-center gap-2 pl-3;
   }
 
-  .window-control-danger {
-    @apply hover:bg-tokyo-red hover:text-white;
+  .window-control-macos {
+    @apply flex h-3 w-3 items-center justify-center rounded-full border border-tokyo-bg-hl focus:outline-none focus:ring-2 focus:ring-tokyo-cyan;
+  }
+
+  .window-control-macos svg {
+    @apply h-2 w-2 opacity-0 transition-opacity;
+    stroke-width: 3;
+  }
+
+  .window-controls-macos:hover .window-control-macos svg,
+  .window-control-macos:focus-visible svg {
+    @apply opacity-70;
+  }
+
+  .macos-close { @apply bg-tokyo-red text-tokyo-bg-dark; }
+  .macos-minimize { @apply bg-tokyo-yellow text-tokyo-bg-dark; }
+  .macos-maximize { @apply bg-tokyo-green text-tokyo-bg-dark; }
+
+  .window-controls-desktop {
+    @apply flex h-full flex-shrink-0 items-center;
+  }
+
+  .window-control-desktop {
+    @apply flex h-full w-11 items-center justify-center text-tokyo-comment transition-colors duration-150;
+    @apply hover:bg-tokyo-bg-hl hover:text-tokyo-fg focus:outline-none focus:ring-1 focus:ring-inset focus:ring-tokyo-cyan;
+  }
+
+  .window-control-desktop svg {
+    @apply h-3.5 w-3.5;
+  }
+
+  .window-controls-desktop.is-linux {
+    @apply gap-1 pr-2;
+  }
+
+  .window-controls-desktop.is-linux .window-control-desktop {
+    @apply h-7 w-7 rounded-full border border-tokyo-bg-hl bg-tokyo-bg;
+  }
+
+  .window-control-close:hover {
+    @apply bg-tokyo-red text-white;
   }
 
   .kbd-chip {
@@ -133,8 +156,8 @@
 
   .session-tabbar {
     box-shadow:
-      inset 0 -1px 0 var(--tokyo-bg),
-      inset 0 1px 0 var(--tokyo-bg-hl);
+      inset 0 -1px 0 var(--tokyo-bg-hl),
+      0 1px 8px color-mix(in srgb, var(--tokyo-fg) 5%, transparent);
   }
 
   .session-rail {
@@ -152,7 +175,8 @@
     display: block;
     width: 2px;
     border-radius: 999px;
-    background: var(--tokyo-blue);
+    background: var(--tokyo-cyan);
+    opacity: 0.45;
   }
 
   .session-rail-bars i:nth-child(1) {
@@ -162,11 +186,13 @@
   .session-rail-bars i:nth-child(2) {
     height: 9px;
     background: var(--tokyo-cyan);
+    opacity: 1;
   }
 
   .session-rail-bars i:nth-child(3) {
     height: 7px;
-    background: var(--tokyo-green);
+    background: var(--tokyo-cyan);
+    opacity: 0.7;
   }
 
   .session-rail-count {
@@ -175,35 +201,10 @@
   }
 
   .terminal-card {
-    @apply overflow-hidden rounded-xl border border-tokyo-bg-hl bg-tokyo-bg;
+    @apply overflow-hidden rounded-lg border border-tokyo-bg-hl bg-tokyo-bg;
     box-shadow:
-      inset 0 1px 0 var(--tokyo-selection),
-      inset 0 0 0 1px var(--tokyo-bg-dark),
-      0 8px 0 var(--tokyo-bg-dark);
-  }
-
-  .terminal-card::before,
-  .terminal-card::after {
-    content: "";
-    position: absolute;
-    z-index: 2;
-    width: 14px;
-    height: 14px;
-    pointer-events: none;
-  }
-
-  .terminal-card::before {
-    top: 8px;
-    left: 8px;
-    border-top: 1px solid var(--tokyo-blue);
-    border-left: 1px solid var(--tokyo-blue);
-  }
-
-  .terminal-card::after {
-    right: 8px;
-    bottom: 8px;
-    border-right: 1px solid var(--tokyo-cyan);
-    border-bottom: 1px solid var(--tokyo-cyan);
+      inset 0 1px 0 color-mix(in srgb, var(--tokyo-fg) 5%, transparent),
+      0 8px 24px color-mix(in srgb, var(--tokyo-fg) 7%, transparent);
   }
 
   .terminal-viewport {
@@ -218,77 +219,6 @@
     pointer-events: none;
     border-radius: inherit;
     box-shadow: inset 0 0 0 1px var(--tokyo-bg);
-  }
-
-  .empty-session-panel {
-    @apply relative w-full max-w-md overflow-hidden rounded-2xl border border-tokyo-bg-hl bg-tokyo-bg-dark px-8 py-9;
-    box-shadow:
-      inset 0 1px 0 var(--tokyo-selection),
-      0 8px 0 var(--tokyo-bg-dark);
-  }
-
-  .empty-session-panel::before,
-  .empty-session-panel::after {
-    content: "";
-    position: absolute;
-    pointer-events: none;
-  }
-
-  .empty-session-panel::before {
-    inset: 0;
-    background:
-      linear-gradient(135deg, transparent 0%, transparent 48%, var(--tokyo-bg-hl) 48%, var(--tokyo-bg-hl) 52%, transparent 52%, transparent 100%);
-    opacity: 0.18;
-  }
-
-  .empty-session-panel::after {
-    right: 14px;
-    bottom: 14px;
-    width: 30px;
-    height: 30px;
-    border-right: 1px solid var(--tokyo-cyan);
-    border-bottom: 1px solid var(--tokyo-cyan);
-  }
-
-  .empty-session-console {
-    @apply absolute left-4 top-4 flex items-center gap-1 text-[10px] text-tokyo-comment;
-  }
-
-  .empty-session-console span {
-    display: block;
-    width: 6px;
-    height: 6px;
-    border-radius: 999px;
-    background: var(--tokyo-bg-hl);
-  }
-
-  .empty-session-console span:nth-child(1) {
-    background: var(--tokyo-red);
-  }
-
-  .empty-session-console span:nth-child(2) {
-    background: var(--tokyo-yellow);
-  }
-
-  .empty-session-console span:nth-child(3) {
-    background: var(--tokyo-green);
-  }
-
-  .empty-session-console strong {
-    margin-left: 0.25rem;
-    color: var(--tokyo-comment);
-    font-weight: 600;
-    letter-spacing: 0;
-  }
-
-  .empty-session-glyph {
-    box-shadow:
-      inset 0 1px 0 var(--tokyo-selection),
-      0 0 0 1px var(--tokyo-bg);
-  }
-
-  .empty-session-actions {
-    @apply relative z-10 flex flex-wrap items-center justify-center gap-2;
   }
 
   .server-signal {
@@ -312,10 +242,76 @@
     background: var(--tokyo-green);
   }
 
+  .workspace-action {
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-transparent px-2.5 text-xs font-medium text-tokyo-comment;
+    @apply transition-colors duration-150 hover:border-tokyo-bg-hl hover:bg-tokyo-bg hover:text-tokyo-fg;
+    @apply focus:outline-none focus:ring-1 focus:ring-tokyo-blue;
+  }
+
+  .workspace-action.is-active {
+    @apply border-tokyo-bg-hl bg-tokyo-selection text-tokyo-fg;
+  }
+
+  .icon-button {
+    @apply inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-tokyo-comment;
+    @apply transition-colors duration-150 hover:bg-tokyo-bg-hl hover:text-tokyo-fg;
+    @apply focus:outline-none focus:ring-1 focus:ring-tokyo-blue;
+  }
+
+  .icon-button.is-active {
+    @apply bg-tokyo-selection text-tokyo-fg;
+  }
+
+  .icon-button:disabled {
+    @apply cursor-wait opacity-60;
+  }
+
+  .tooltip-button {
+    position: relative;
+  }
+
+  .tooltip-button::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 7px);
+    right: 0;
+    z-index: 70;
+    width: max-content;
+    max-width: 220px;
+    padding: 5px 8px;
+    border: 1px solid var(--tokyo-bg-hl);
+    border-radius: 5px;
+    background: var(--tokyo-fg);
+    color: var(--tokyo-bg);
+    font-size: 11px;
+    line-height: 1.25;
+    letter-spacing: 0;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-3px);
+    transition: opacity 120ms ease, transform 120ms ease;
+    transition-delay: 300ms;
+  }
+
+  .tooltip-button:hover::after,
+  .tooltip-button:focus-visible::after {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .connection-marquee-track {
+    animation: connection-marquee 28s linear infinite;
+  }
+
+  .connection-marquee:hover .connection-marquee-track {
+    animation-play-state: paused;
+  }
+
   /* Sidebar action button styles */
   .sidebar-action-btn {
     @apply flex items-center gap-2 w-full px-3 py-2 rounded-md text-sm text-tokyo-fg transition-colors duration-150;
-    @apply hover:bg-tokyo-bg-hl hover:text-white;
+    @apply hover:bg-tokyo-bg-hl hover:text-tokyo-fg;
   }
 
   /* Tab styles */
@@ -330,6 +326,15 @@
 }
 
 @layer utilities {
+  @keyframes connection-marquee {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-50%);
+    }
+  }
+
   /* Toast slide-in animation */
   @keyframes slide-in-right {
     from {

@@ -57,7 +57,7 @@ export type CursorStyle = 'block' | 'underline' | 'bar';
 /**
  * Available color themes.
  */
-export type ThemeName = 'tokyo-night' | 'dracula' | 'one-dark' | 'nord';
+export type ThemeName = 'paper-white' | 'warm-ivory' | 'ink-black' | 'violet-black' | 'cyan-black';
 
 /**
  * Terminal-related settings.
@@ -149,7 +149,7 @@ export const defaultSettings: AppSettings = {
     scrollbackLines: 10000,
   },
   appearance: {
-    theme: 'tokyo-night',
+    theme: 'paper-white',
     windowOpacity: 1.0,
   },
   sshDefaults: {
@@ -266,6 +266,34 @@ interface SettingsStore {
 
 const SETTINGS_KEY = 'vibeshell_settings';
 
+const LEGACY_THEME_MAP: Record<string, ThemeName> = {
+  'tokyo-night': 'violet-black',
+  dracula: 'violet-black',
+  'one-dark': 'ink-black',
+  nord: 'cyan-black',
+};
+
+const themeNames = new Set<ThemeName>([
+  'paper-white',
+  'warm-ivory',
+  'ink-black',
+  'violet-black',
+  'cyan-black',
+]);
+
+function normalizeAppearanceSettings(value: unknown): AppearanceSettings {
+  const raw = value && typeof value === 'object' ? value as Partial<AppearanceSettings> : {};
+  const storedTheme = typeof raw.theme === 'string' ? raw.theme : '';
+  const theme = themeNames.has(storedTheme as ThemeName)
+    ? storedTheme as ThemeName
+    : LEGACY_THEME_MAP[storedTheme] ?? defaultSettings.appearance.theme;
+  const opacity = typeof raw.windowOpacity === 'number' && Number.isFinite(raw.windowOpacity)
+    ? Math.min(1, Math.max(0.5, raw.windowOpacity))
+    : defaultSettings.appearance.windowOpacity;
+
+  return { theme, windowOpacity: opacity };
+}
+
 /**
  * Load settings from localStorage (fallback for when Tauri store is not available).
  */
@@ -277,7 +305,7 @@ function loadSettingsFromStorage(): AppSettings {
       // Merge with defaults to handle new settings added in updates
       return {
         terminal: { ...defaultSettings.terminal, ...parsed.terminal },
-        appearance: { ...defaultSettings.appearance, ...parsed.appearance },
+        appearance: normalizeAppearanceSettings(parsed.appearance),
         sshDefaults: { ...defaultSettings.sshDefaults, ...parsed.sshDefaults },
         serverStatus: { ...defaultSettings.serverStatus, ...parsed.serverStatus },
         aiPrediction: normalizeAiPredictionSettings(parsed.aiPrediction),
@@ -310,7 +338,7 @@ async function loadSettings(): Promise<AppSettings> {
       // Merge with defaults to handle new settings added in updates
       return {
         terminal: { ...defaultSettings.terminal, ...settings.terminal },
-        appearance: { ...defaultSettings.appearance, ...settings.appearance },
+        appearance: normalizeAppearanceSettings(settings.appearance),
         sshDefaults: { ...defaultSettings.sshDefaults, ...settings.sshDefaults },
         serverStatus: { ...defaultSettings.serverStatus, ...settings.serverStatus },
         aiPrediction: normalizeAiPredictionSettings(settings.aiPrediction),
@@ -595,56 +623,74 @@ export interface ThemeDefinition {
     fg: string;
     fgDark: string;
     accent: string;
+    onAccent: string;
   };
 }
 
 export const themes: ThemeDefinition[] = [
   {
-    name: 'tokyo-night',
-    displayName: 'Tokyo Night',
+    name: 'paper-white',
+    displayName: 'Paper White',
     colors: {
-      bg: '#1a1b26',
-      bgDark: '#16161e',
-      bgHl: '#292e42',
-      fg: '#a9b1d6',
-      fgDark: '#565f89',
-      accent: '#7aa2f7',
+      bg: '#ffffff',
+      bgDark: '#f7f7f5',
+      bgHl: '#e7e7e3',
+      fg: '#171717',
+      fgDark: '#73736e',
+      accent: '#6d4aff',
+      onAccent: '#ffffff',
     },
   },
   {
-    name: 'dracula',
-    displayName: 'Dracula',
+    name: 'warm-ivory',
+    displayName: 'Warm Ivory',
     colors: {
-      bg: '#282a36',
-      bgDark: '#21222c',
-      bgHl: '#44475a',
-      fg: '#f8f8f2',
-      fgDark: '#6272a4',
-      accent: '#bd93f9',
+      bg: '#f7f3ea',
+      bgDark: '#eee8dd',
+      bgHl: '#ded5c6',
+      fg: '#181714',
+      fgDark: '#746e64',
+      accent: '#5d3fd3',
+      onAccent: '#ffffff',
     },
   },
   {
-    name: 'one-dark',
-    displayName: 'One Dark',
+    name: 'ink-black',
+    displayName: 'Ink Black',
     colors: {
-      bg: '#282c34',
-      bgDark: '#21252b',
-      bgHl: '#3e4451',
-      fg: '#abb2bf',
-      fgDark: '#5c6370',
-      accent: '#61afef',
+      bg: '#0b0b0c',
+      bgDark: '#050506',
+      bgHl: '#1c1c1f',
+      fg: '#f5f5f4',
+      fgDark: '#85858c',
+      accent: '#a78bfa',
+      onAccent: '#0b0b0c',
     },
   },
   {
-    name: 'nord',
-    displayName: 'Nord',
+    name: 'violet-black',
+    displayName: 'Violet Black',
     colors: {
-      bg: '#2e3440',
-      bgDark: '#242933',
-      bgHl: '#3b4252',
-      fg: '#eceff4',
-      fgDark: '#4c566a',
-      accent: '#88c0d0',
+      bg: '#100d16',
+      bgDark: '#09070d',
+      bgHl: '#282032',
+      fg: '#f4efff',
+      fgDark: '#958aa6',
+      accent: '#9b72ff',
+      onAccent: '#100d16',
+    },
+  },
+  {
+    name: 'cyan-black',
+    displayName: 'Cyan Black',
+    colors: {
+      bg: '#071112',
+      bgDark: '#04090a',
+      bgHl: '#112729',
+      fg: '#e9f8f7',
+      fgDark: '#7b9998',
+      accent: '#2dd4bf',
+      onAccent: '#071112',
     },
   },
 ];

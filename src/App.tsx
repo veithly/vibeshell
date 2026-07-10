@@ -1,13 +1,17 @@
-import { useCallback, useState, useRef, useEffect, useMemo, memo, lazy, Suspense } from 'react';
+import { useCallback, useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Plus,
   Zap,
   FolderOpen,
   Settings as SettingsIcon,
   ArrowLeft,
   Terminal as TerminalIcon,
   ArrowRightLeft,
+  Columns2,
+  Rows2,
+  PanelRightClose,
+  Loader2,
+  X,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { safeInvoke } from './lib/tauri';
@@ -20,7 +24,6 @@ import { SessionTabs } from './components/SessionTabs';
 import { TitleBar } from './components/TitleBar';
 import { SftpPanel, SftpPanelHandle } from './components/SftpPanel';
 import { ServerStatus } from './components/ServerStatus';
-import { ServerList } from './components/ServerList';
 import { AddServerDialog } from './components/AddServerDialog';
 import { EditServerDialog } from './components/EditServerDialog';
 import { ConnectDialog } from './components/ConnectDialog';
@@ -33,49 +36,15 @@ import { SnippetManagerDialog } from './components/SnippetManager/SnippetManager
 import { TunnelPanelDialog } from './components/TunnelPanel/TunnelPanelDialog';
 import { useServerStore, type Server } from './stores/serverStore';
 import type { TerminalHandle } from './components/Terminal';
+import {
+  MAX_TERMINAL_PANES,
+  addTerminalPane,
+  removeTerminalPane,
+  syncTerminalPanes,
+} from './lib/splitPanes';
 
 const Settings = lazy(() => import('./components/Settings').then((mod) => ({ default: mod.Settings })));
 const Terminal = lazy(() => import('./components/Terminal').then((mod) => ({ default: mod.Terminal })));
-
-interface SidebarActionProps {
-  icon: React.ReactNode;
-  label: string;
-  shortcut?: string;
-  variant?: 'default' | 'primary';
-  onClick?: () => void;
-}
-
-const SidebarAction = memo(function SidebarAction({ icon, label, shortcut, variant = 'default', onClick }: SidebarActionProps) {
-  return (
-    <button
-      className={cn(
-        'group flex items-center gap-2.5 w-full min-h-9 px-2.5 py-2 rounded-lg border text-sm',
-        'transition-all duration-150 ease-out',
-        'focus:outline-none focus:ring-1 focus:ring-tokyo-blue',
-        variant === 'primary'
-          ? 'border-tokyo-blue bg-tokyo-selection text-tokyo-fg hover:bg-tokyo-bg-hl hover:text-white'
-          : 'border-transparent text-tokyo-fg hover:border-tokyo-bg-hl hover:bg-tokyo-bg-hl hover:text-white'
-      )}
-      onClick={onClick}
-    >
-      <span
-        className={cn(
-          'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
-          variant === 'primary'
-            ? 'bg-tokyo-bg-hl text-tokyo-blue'
-            : 'bg-tokyo-bg text-tokyo-comment group-hover:text-tokyo-fg'
-        )}
-        aria-hidden="true"
-      >
-        {icon}
-      </span>
-      <span className="flex-1 truncate text-left">{label}</span>
-      {shortcut && (
-        <span className="kbd-chip">{shortcut}</span>
-      )}
-    </button>
-  );
-});
 
 function App() {
   const { t } = useTranslation();
@@ -89,13 +58,15 @@ function App() {
     connectWithCredentials,
     fetchSessions,
     syncRemoteSessions,
+    createLocalShellSession,
   } = useSessionStore();
   const { currentView, goToMain, goToSettings } = useNavigationStore();
-  const { warning: notifyWarning } = useNotificationStore();
+  const { warning: notifyWarning, error: notifyError } = useNotificationStore();
   const { settings, initializeSettings } = useSettingsStore();
   const { checkForUpdates, markVersionNotified } = useUpdateStore();
   const servers = useServerStore((state) => state.servers);
   const fetchServers = useServerStore((state) => state.fetchServers);
+  const fetchGroups = useServerStore((state) => state.fetchGroups);
 
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
   const [isConnectOpen, setIsConnectOpen] = useState(false);
@@ -104,17 +75,27 @@ function App() {
   const [isSelectServerOpen, setIsSelectServerOpen] = useState(false);
   const [isSnippetManagerOpen, setIsSnippetManagerOpen] = useState(false);
   const [isTunnelPanelOpen, setIsTunnelPanelOpen] = useState(false);
+  const [isSftpOpen, setIsSftpOpen] = useState(false);
   const [serverToConnect, setServerToConnect] = useState<Server | null>(null);
   const [connectForceNew, setConnectForceNew] = useState(false);
   const [serverToEdit, setServerToEdit] = useState<Server | null>(null);
   const [sessionToClose, setSessionToClose] = useState<string | null>(null);
+  const [terminalPaneIds, setTerminalPaneIds] = useState<string[]>([]);
+  const [splitOrientation, setSplitOrientation] = useState<'columns' | 'rows'>('columns');
+  const [isCreatingTerminalPane, setIsCreatingTerminalPane] = useState(false);
 
   const terminalRef = useRef<TerminalHandle>(null);
   const sftpPanelRef = useRef<SftpPanelHandle>(null);
+  const sessionBootstrapRef = useRef<Promise<void> | null>(null);
+  const terminalPaneCreationRef = useRef(false);
 
   useEffect(() => {
     initializeSettings();
   }, [initializeSettings]);
+
+  useEffect(() => {
+    void Promise.all([fetchServers(), fetchGroups()]);
+  }, [fetchServers, fetchGroups]);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,16 +125,23 @@ function App() {
   }, [checkForUpdates, markVersionNotified, notifyWarning, t]);
 
   useEffect(() => {
-    fetchSessions();
+    if (!sessionBootstrapRef.current) {
+      sessionBootstrapRef.current = (async () => {
+        await fetchSessions();
+        if (useSessionStore.getState().sessions.length === 0) {
+          await createLocalShellSession(undefined, 80, 24);
+        }
+      })();
+    }
 
     const intervalId = window.setInterval(() => {
-      syncRemoteSessions();
+      void syncRemoteSessions();
     }, 2000);
 
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [fetchSessions, syncRemoteSessions]);
+  }, [createLocalShellSession, fetchSessions, syncRemoteSessions]);
 
   useEffect(() => {
     const currentTheme = themes.find(t => t.name === settings.appearance.theme);
@@ -168,6 +156,11 @@ function App() {
     root.style.setProperty('--tokyo-comment', currentTheme.colors.fgDark);
     root.style.setProperty('--tokyo-selection', currentTheme.colors.bgHl);
     root.style.setProperty('--tokyo-blue', currentTheme.colors.accent);
+    root.style.setProperty('--tokyo-on-accent', currentTheme.colors.onAccent);
+    root.dataset.theme = currentTheme.name;
+    root.style.colorScheme = currentTheme.name === 'paper-white' || currentTheme.name === 'warm-ivory'
+      ? 'light'
+      : 'dark';
 
     console.log('[App] Applied theme:', currentTheme.name);
   }, [settings.appearance.theme]);
@@ -240,6 +233,20 @@ function App() {
     () => sessions.find((s) => s.id === activeSessionId),
     [sessions, activeSessionId]
   );
+
+  const visiblePaneIds = useMemo(
+    () => syncTerminalPanes(terminalPaneIds, sessions.map((session) => session.id), activeSessionId),
+    [activeSessionId, sessions, terminalPaneIds]
+  );
+
+  useEffect(() => {
+    setTerminalPaneIds((current) => {
+      const next = syncTerminalPanes(current, sessions.map((session) => session.id), activeSessionId);
+      return current.length === next.length && current.every((id, index) => id === next[index])
+        ? current
+        : next;
+    });
+  }, [activeSessionId, sessions]);
 
   const handleConnected = useCallback((sessionId: string) => {
     console.log('[App] handleConnected called with sessionId:', sessionId);
@@ -344,6 +351,61 @@ function App() {
     setIsSelectServerOpen(true);
   }, []);
 
+  const handleAddTerminalPane = useCallback(async () => {
+    if (terminalPaneCreationRef.current) return;
+
+    const storeState = useSessionStore.getState();
+    const basePanes = syncTerminalPanes(
+      terminalPaneIds,
+      storeState.sessions.map((session) => session.id),
+      storeState.activeSessionId
+    );
+    if (basePanes.length >= MAX_TERMINAL_PANES) {
+      notifyWarning(t('session.splitLimitTitle'), t('session.splitLimitMessage'));
+      return;
+    }
+
+    terminalPaneCreationRef.current = true;
+    setIsCreatingTerminalPane(true);
+
+    try {
+      const sourceSession = storeState.sessions.find((session) => session.id === storeState.activeSessionId);
+      const shellId = sourceSession?.sessionType === 'local' ? sourceSession.serverId : undefined;
+      const session = await createLocalShellSession(shellId, 80, 24);
+      if (!session) return;
+
+      setTerminalPaneIds((current) => {
+        const latestSessions = useSessionStore.getState().sessions.map((item) => item.id);
+        return addTerminalPane(
+          syncTerminalPanes(current, latestSessions, storeState.activeSessionId),
+          session.id
+        );
+      });
+      setActiveSession(session.id);
+    } catch (error) {
+      console.error('[App] Failed to create terminal pane:', error);
+      notifyError(
+        t('session.splitFailedTitle'),
+        error instanceof Error ? error.message : t('session.splitFailedMessage')
+      );
+    } finally {
+      terminalPaneCreationRef.current = false;
+      setIsCreatingTerminalPane(false);
+    }
+  }, [createLocalShellSession, notifyError, notifyWarning, setActiveSession, t, terminalPaneIds]);
+
+  const handleRemoveTerminalPane = useCallback((sessionId: string) => {
+    const nextActiveSessionId = visiblePaneIds.find((id) => id !== sessionId) ?? null;
+    setTerminalPaneIds((current) => removeTerminalPane(current, sessionId));
+    if (activeSessionId === sessionId && nextActiveSessionId) {
+      setActiveSession(nextActiveSessionId);
+    }
+  }, [activeSessionId, setActiveSession, visiblePaneIds]);
+
+  const handleCollapseTerminalPanes = useCallback(() => {
+    if (activeSessionId) setTerminalPaneIds([activeSessionId]);
+  }, [activeSessionId]);
+
   const handleNewSessionForServer = useCallback((server: Server) => {
     handleConnect(server, { forceNew: true });
   }, [handleConnect]);
@@ -375,16 +437,15 @@ function App() {
       return;
     }
 
-    sftpPanelRef.current?.expand();
+    sftpPanelRef.current?.toggle();
   }, [activeSession, notifyWarning]);
+
+  const handleSftpCollapsedChange = useCallback((collapsed: boolean) => {
+    setIsSftpOpen(!collapsed);
+  }, []);
 
   const handleData = useCallback((_data: string) => {
   }, []);
-
-  const handleExpandSftp = useCallback(() => {
-    console.log('Expand SFTP panel to full view clicked');
-    notifyWarning('Coming Soon', 'Full SFTP file manager view is under development.');
-  }, [notifyWarning]);
 
   const handleConfirmCloseSession = useCallback(async () => {
     if (!sessionToClose) return;
@@ -421,7 +482,7 @@ function App() {
           <button
             className={cn(
               'flex items-center gap-2 px-3 py-1.5 rounded-lg border border-transparent',
-              'text-tokyo-fg hover:text-white hover:bg-tokyo-bg-hl',
+              'text-tokyo-fg hover:text-tokyo-fg hover:bg-tokyo-bg-hl',
               'hover:border-tokyo-selection transition-colors duration-150',
               'focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
             )}
@@ -453,154 +514,147 @@ function App() {
         <Notifications />
 
         <div className="flex-1 flex overflow-hidden">
-          <aside className="app-sidebar hidden w-64 flex-shrink-0 flex-col border-r border-tokyo-bg-hl bg-tokyo-bg-dark md:flex">
-            <div className="flex-1 overflow-hidden">
-              <ServerList
-                onConnect={handleConnect}
-                onAddServer={handleAddServer}
-                onEditServer={handleEditServer}
-                connectedServerIds={connectedServerIds}
-                onNewSession={handleNewSessionForServer}
-              />
-            </div>
-
-            <div className="border-t border-tokyo-bg-hl p-2 space-y-1.5">
-              <div className="px-2 py-1 text-xs font-medium text-tokyo-comment">
-                {t('common.actions')}
-              </div>
-              <SidebarAction
-                icon={<Plus className="w-4 h-4" />}
-                label={t('sidebar.addServer')}
-                shortcut="Ctrl+N"
-                variant="primary"
-                onClick={handleAddServer}
-              />
-              <SidebarAction
-                icon={<Zap className="w-4 h-4" />}
-                label={t('sidebar.quickCmd')}
-                shortcut="Ctrl+K"
-                onClick={handleQuickCommand}
-              />
-              <SidebarAction
-                icon={<FolderOpen className="w-4 h-4" />}
-                label={t('sidebar.sftp')}
-                onClick={handleOpenSftp}
-              />
-              <SidebarAction
-                icon={<ArrowRightLeft className="w-4 h-4" />}
-                label={t('sidebar.tunnels')}
-                onClick={handleOpenTunnels}
-              />
-              <SidebarAction
-                icon={<TerminalIcon className="w-4 h-4" />}
-                label={t('sidebar.snippets')}
-                onClick={handleOpenSnippets}
-              />
-              <SidebarAction
-                icon={<SettingsIcon className="w-4 h-4" />}
-                label={t('sidebar.settings')}
-                shortcut="Ctrl+,"
-                onClick={goToSettings}
-              />
-            </div>
-          </aside>
-
-          <main className="main-workspace flex-1 flex flex-col min-w-0 relative">
+          <main className="main-workspace flex-1 flex flex-col min-w-0 relative overflow-x-hidden w-full max-w-full">
             <SessionTabs
               onNewSession={handleNewSession}
               onReconnectSession={handleReconnectSession}
+              rightActions={(
+                <div className="flex flex-shrink-0 items-center gap-0.5 border-l border-tokyo-bg-hl pl-1.5">
+                  <button className="icon-button tooltip-button" data-tooltip={`${t('sidebar.quickCmd')} (Ctrl+K)`} onClick={handleQuickCommand} aria-label={t('sidebar.quickCmd')}>
+                    <Zap className="h-4 w-4" />
+                  </button>
+                  <button className="icon-button tooltip-button" data-tooltip={t('sidebar.tunnels')} onClick={handleOpenTunnels} aria-label={t('sidebar.tunnels')}>
+                    <ArrowRightLeft className="h-4 w-4" />
+                  </button>
+                  <button className="icon-button tooltip-button" data-tooltip={t('sidebar.snippets')} onClick={handleOpenSnippets} aria-label={t('sidebar.snippets')}>
+                    <TerminalIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    className={cn('icon-button tooltip-button', isSftpOpen && 'is-active')}
+                    data-tooltip={t('sidebar.sftp')}
+                    onClick={handleOpenSftp}
+                    disabled={!activeSession}
+                    aria-pressed={isSftpOpen}
+                    aria-label={t('sidebar.sftp')}
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </button>
+                  <button
+                    className="icon-button tooltip-button"
+                    data-tooltip={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitTerminal')}
+                    onClick={() => { void handleAddTerminalPane(); }}
+                    disabled={isCreatingTerminalPane}
+                    aria-label={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitTerminal')}
+                  >
+                    {isCreatingTerminalPane
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <Columns2 className="h-4 w-4" />}
+                  </button>
+                  {visiblePaneIds.length > 1 && (
+                    <>
+                      <button
+                        className="icon-button tooltip-button"
+                        data-tooltip={splitOrientation === 'columns' ? t('session.arrangeRows') : t('session.arrangeColumns')}
+                        onClick={() => setSplitOrientation((current) => current === 'columns' ? 'rows' : 'columns')}
+                        aria-label={splitOrientation === 'columns' ? t('session.arrangeRows') : t('session.arrangeColumns')}
+                      >
+                        {splitOrientation === 'columns' ? <Rows2 className="h-4 w-4" /> : <Columns2 className="h-4 w-4" />}
+                      </button>
+                      <button
+                        className="icon-button tooltip-button"
+                        data-tooltip={t('session.closeSplits')}
+                        onClick={handleCollapseTerminalPanes}
+                        aria-label={t('session.closeSplits')}
+                      >
+                        <PanelRightClose className="h-4 w-4" />
+                      </button>
+                    </>
+                  )}
+                  <button className="icon-button tooltip-button" data-tooltip={`${t('sidebar.settings')} (Ctrl+,)`} onClick={goToSettings} aria-label={t('sidebar.settings')}>
+                    <SettingsIcon className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
             />
 
-            <div className="flex-1 min-h-0 flex flex-col">
-              {sessions.length > 0 ? (
-                <>
-                  <div className="flex-1 min-h-0 relative">
+            <div className="flex-1 min-h-0 flex">
+              <div className="flex min-w-0 flex-1 flex-col">
+                {sessions.length > 0 ? (
+                  <>
+                    <div
+                      className="relative grid min-h-0 flex-1 gap-2 p-2"
+                      style={splitOrientation === 'columns'
+                        ? { gridTemplateColumns: `repeat(${Math.max(1, visiblePaneIds.length)}, minmax(0, 1fr))` }
+                        : { gridTemplateRows: `repeat(${Math.max(1, visiblePaneIds.length)}, minmax(0, 1fr))` }}
+                    >
                     {sessions.map((session) => (
                       <div
                         key={session.id}
-                        className={
-                          session.id === activeSessionId
-                            ? 'terminal-card absolute inset-2'
-                            : 'terminal-card absolute inset-2 invisible pointer-events-none'
-                        }
-                        style={
-                          session.id !== activeSessionId
-                            ? { height: 0, overflow: 'hidden' }
-                            : undefined
-                        }
+                        className={cn(
+                          'terminal-card min-h-0 min-w-0 flex-col',
+                          visiblePaneIds.includes(session.id)
+                            ? 'relative flex'
+                            : 'pointer-events-none invisible absolute h-0 w-0 overflow-hidden',
+                          visiblePaneIds.length > 1 && session.id === activeSessionId && 'border-tokyo-cyan'
+                        )}
+                        onMouseDown={() => {
+                          if (visiblePaneIds.includes(session.id) && session.id !== activeSessionId) {
+                            setActiveSession(session.id);
+                          }
+                        }}
                       >
-                        <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
-                          <Terminal
-                            ref={session.id === activeSessionId ? terminalRef : undefined}
-                            sessionId={session.id}
-                            onData={handleData}
-                          />
-                        </Suspense>
+                        {visiblePaneIds.length > 1 && visiblePaneIds.includes(session.id) && (
+                          <div className="flex h-7 flex-shrink-0 items-center gap-2 border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-2">
+                            <span className={cn(
+                              'h-1.5 w-1.5 rounded-full',
+                              session.id === activeSessionId ? 'bg-tokyo-cyan' : 'bg-tokyo-comment'
+                            )} />
+                            <span className="min-w-0 flex-1 truncate text-[11px] text-tokyo-fg">{session.serverName}</span>
+                            <button
+                              className="icon-button h-5 w-5"
+                              onMouseDown={(event) => event.stopPropagation()}
+                              onClick={() => handleRemoveTerminalPane(session.id)}
+                              aria-label={t('session.removePane', { name: session.serverName })}
+                              title={t('session.removePane', { name: session.serverName })}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        )}
+                        <div className="relative min-h-0 flex-1">
+                          <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
+                            <Terminal
+                              ref={session.id === activeSessionId ? terminalRef : undefined}
+                              sessionId={session.id}
+                              onData={handleData}
+                            />
+                          </Suspense>
+                        </div>
                       </div>
                     ))}
-                  </div>
-                  {activeSession && (
-                    <ServerStatus
-                      sessionId={activeSession.id}
-                      defaultCollapsed={!settings.serverStatus.defaultExpanded}
-                      defaultRefreshInterval={settings.serverStatus.refreshInterval}
-                    />
-                  )}
-                </>
-              ) : (
-                <div className="h-full flex items-center justify-center bg-tokyo-bg p-6">
-                  <div className="empty-session-panel text-center">
-                    <div className="empty-session-console" aria-hidden="true">
-                      <span />
-                      <span />
-                      <span />
-                      <strong>VSH</strong>
                     </div>
-                    <div className="empty-session-glyph mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-tokyo-bg-hl bg-tokyo-bg-dark text-tokyo-blue">
-                      <TerminalIcon className="h-7 w-7" aria-hidden="true" />
-                    </div>
-                    <p className="text-tokyo-fg text-lg font-semibold mb-2">{t('session.noActiveSession')}</p>
-                    <p className="text-tokyo-comment text-sm mb-6">
-                      {t('session.noActiveSessionDesc')}
-                    </p>
-                    <div className="empty-session-actions">
-                      <button
-                        className={cn(
-                          'inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg',
-                          'bg-tokyo-blue hover:bg-tokyo-cyan text-white',
-                          'transition-colors duration-150',
-                          'focus:outline-none focus:ring-2 focus:ring-tokyo-blue focus:ring-offset-2 focus:ring-offset-tokyo-bg'
-                        )}
-                        onClick={handleNewSession}
-                      >
-                        <Plus className="w-4 h-4" aria-hidden="true" />
-                        {t('session.newSession')}
-                      </button>
-                      <button
-                        className={cn(
-                          'inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border',
-                          'border-tokyo-bg-hl bg-tokyo-bg text-tokyo-fg hover:bg-tokyo-bg-hl hover:text-white',
-                          'transition-colors duration-150',
-                          'focus:outline-none focus:ring-2 focus:ring-tokyo-blue focus:ring-offset-2 focus:ring-offset-tokyo-bg'
-                        )}
-                        onClick={handleAddServer}
-                      >
-                        <Plus className="w-4 h-4" aria-hidden="true" />
-                        {t('sidebar.addServer')}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+                    {activeSession && (
+                      <ServerStatus
+                        sessionId={activeSession.id}
+                        defaultCollapsed={!settings.serverStatus.defaultExpanded}
+                        defaultRefreshInterval={settings.serverStatus.refreshInterval}
+                      />
+                    )}
+                  </>
+                ) : (
+                  <div className="h-full bg-tokyo-bg" aria-label={t('session.localShell')} />
+                )}
+              </div>
 
-            <SftpPanel
-              ref={sftpPanelRef}
-              sessionId={activeSession?.id}
-              sessionType={activeSession?.sessionType}
-              defaultCollapsed={true}
-              onExpand={handleExpandSftp}
-            />
+              <SftpPanel
+                ref={sftpPanelRef}
+                sessionId={activeSession?.id}
+                sessionType={activeSession?.sessionType}
+                defaultCollapsed={true}
+                dock="right"
+                onCollapsedChange={handleSftpCollapsedChange}
+              />
+            </div>
           </main>
         </div>
       </div>
@@ -641,6 +695,8 @@ function App() {
         onClose={() => setIsSelectServerOpen(false)}
         onSelectServer={handleConnect}
         onAddServer={handleAddServer}
+        onEditServer={handleEditServer}
+        onNewSession={handleNewSessionForServer}
         connectedServerIds={connectedServerIds}
       />
 

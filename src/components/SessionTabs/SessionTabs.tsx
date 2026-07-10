@@ -1,4 +1,4 @@
-﻿import { useState, useCallback, memo, useRef, useEffect } from 'react';
+﻿import { useState, useCallback, memo, useRef, useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle, RefreshCw } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -11,6 +11,8 @@ interface SessionTabsProps {
   onNewSession?: () => void;
   /** Callback when reconnecting a disconnected SSH session is requested */
   onReconnectSession?: (session: Session) => void;
+  /** Commands pinned to the right of the scrollable session strip. */
+  rightActions?: ReactNode;
 }
 
 /**
@@ -23,15 +25,15 @@ function getStateIndicator(state: SessionState, sessionType: SessionType = 'ssh'
     case 'connected':
       // Show different icon for local vs SSH
       if (sessionType === 'local') {
-        return <Monitor className="w-3 h-3 text-tokyo-blue" />;
+        return <Monitor className="w-3 h-3 text-tokyo-cyan" />;
       }
-      return <Wifi className="w-3 h-3 text-tokyo-green" />;
+      return <Wifi className="w-3 h-3 text-tokyo-cyan" />;
     case 'error':
       return <AlertCircle className="w-3 h-3 text-tokyo-red" />;
     case 'disconnected':
     default:
       if (sessionType === 'local') {
-        return <span className="w-2 h-2 rounded-full bg-tokyo-blue" />;
+        return <span className="w-2 h-2 rounded-full bg-tokyo-cyan" />;
       }
       return <span className="w-2 h-2 rounded-full bg-tokyo-comment" />;
   }
@@ -87,7 +89,7 @@ const SessionTab = memo(function SessionTab({
         'min-w-[120px] max-w-[220px]',
         'focus:outline-none focus:ring-1 focus:ring-tokyo-blue',
         isActive
-          ? 'bg-tokyo-bg border-tokyo-blue text-tokyo-fg'
+          ? 'bg-tokyo-bg border-tokyo-cyan text-tokyo-fg'
           : 'bg-transparent border-transparent text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl hover:border-tokyo-selection'
       )}
       onClick={onSelect}
@@ -213,7 +215,7 @@ function TabContextMenu({
                      flex items-center gap-2.5 cursor-pointer"
           onClick={() => { onReconnect(); onClose(); }}
         >
-          <RefreshCw className="w-3 h-3 text-tokyo-blue" />
+          <RefreshCw className="w-3 h-3 text-tokyo-cyan" />
           {t('session.reconnect')}
         </button>
       )}
@@ -247,7 +249,7 @@ function TabContextMenu({
 /**
  * Session tabs component displaying all active sessions
  */
-export function SessionTabs({ onNewSession, onReconnectSession }: SessionTabsProps) {
+export function SessionTabs({ onNewSession, onReconnectSession, rightActions }: SessionTabsProps) {
   const { t } = useTranslation();
   const { sessions, activeSessionId, setActiveSession, killSession, killLocalShellSession, removeSession } =
     useSessionStore();
@@ -320,44 +322,45 @@ export function SessionTabs({ onNewSession, onReconnectSession }: SessionTabsPro
 
   return (
     <>
-      <div className="session-tabbar flex h-11 items-center gap-1.5 px-2 bg-tokyo-bg-dark overflow-x-auto border-b border-tokyo-bg-hl">
-        <div className="session-rail" aria-hidden="true">
-          <span className="session-rail-bars">
-            <i />
-            <i />
-            <i />
-          </span>
-          <span className="session-rail-count">{sessions.length}</span>
+      <div className="session-tabbar flex h-11 items-center gap-1.5 border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+          <div className="session-rail" aria-hidden="true">
+            <span className="session-rail-bars">
+              <i />
+              <i />
+              <i />
+            </span>
+            <span className="session-rail-count">{sessions.length}</span>
+          </div>
+
+          {sessions.map((session) => (
+            <SessionTab
+              key={session.id}
+              session={session}
+              isActive={activeSessionId === session.id}
+              isRecording={isRecording(session.id)}
+              onSelect={() => handleSelectSession(session.id)}
+              onReconnect={() => handleReconnect(session)}
+              onClose={() => handleRequestClose(session)}
+              onContextMenu={(e) => handleContextMenu(e, session)}
+            />
+          ))}
+
+          <button
+            className={cn(
+              'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border border-transparent',
+              'bg-transparent text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg',
+              'hover:border-tokyo-selection transition-colors duration-150',
+              'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:ring-inset'
+            )}
+            onClick={onNewSession}
+            aria-label={t('session.newSession')}
+            title={t('session.newSession')}
+          >
+            <Plus className="w-4 h-4" />
+          </button>
         </div>
-
-        {/* Session Tabs */}
-        {sessions.map((session) => (
-          <SessionTab
-            key={session.id}
-            session={session}
-            isActive={activeSessionId === session.id}
-            isRecording={isRecording(session.id)}
-            onSelect={() => handleSelectSession(session.id)}
-            onReconnect={() => handleReconnect(session)}
-            onClose={() => handleRequestClose(session)}
-            onContextMenu={(e) => handleContextMenu(e, session)}
-          />
-        ))}
-
-        {/* New Session Button */}
-        <button
-          className={cn(
-            'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border border-transparent',
-            'bg-transparent text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg',
-            'hover:border-tokyo-selection transition-colors duration-150',
-            'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:ring-inset'
-          )}
-          onClick={onNewSession}
-          aria-label={t('session.newSession')}
-          title={t('session.newSession')}
-        >
-          <Plus className="w-4 h-4" />
-        </button>
+        {rightActions}
       </div>
 
       {/* Context Menu */}

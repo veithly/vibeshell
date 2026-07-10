@@ -131,24 +131,24 @@ function fuzzyMatch(pattern: string, text: string): FuzzyMatchResult {
 
 function loadHistory(): string[] {
   try {
-    const stored = localStorage.getItem(HISTORY_STORAGE_KEY);
+    const stored = globalThis.localStorage?.getItem(HISTORY_STORAGE_KEY);
     if (stored) {
       const parsed = JSON.parse(stored);
       if (Array.isArray(parsed)) {
         return parsed.slice(-MAX_HISTORY_SIZE);
       }
     }
-  } catch (error) {
-    console.warn('Failed to load command history:', error);
+  } catch {
+    // Completion still works without persisted history.
   }
   return [];
 }
 
 function saveHistory(history: string[]): void {
   try {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history.slice(-MAX_HISTORY_SIZE)));
-  } catch (error) {
-    console.warn('Failed to save command history:', error);
+    globalThis.localStorage?.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history.slice(-MAX_HISTORY_SIZE)));
+  } catch {
+    // Completion still works without persisted history.
   }
 }
 
@@ -383,7 +383,7 @@ export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [Com
     setItems(completions);
     setSelectedIndex(0);
     setPosition(pos);
-    setVisible(false);
+    setVisible(completions.length > 0);
     scheduleAiPrediction(input, completions);
   }, [generateCompletions, calculateLocalGhostText, scheduleAiPrediction, cancelAiPrediction]);
 

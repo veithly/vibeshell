@@ -62,7 +62,7 @@ function SettingsSection({ icon, title, description, children }: SettingsSection
     <section className="mb-8">
       <div className="flex items-center gap-3 mb-2">
         <span className="text-tokyo-blue">{icon}</span>
-        <h2 className="text-xl font-semibold text-white">{title}</h2>
+        <h2 className="text-xl font-semibold text-tokyo-fg">{title}</h2>
       </div>
       {description && <p className="text-tokyo-comment mb-4 ml-9">{description}</p>}
       <div className="ml-9 space-y-4">{children}</div>
@@ -374,7 +374,7 @@ function SecuritySection() {
           onClick={openManager}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg
                      bg-tokyo-bg-hl text-tokyo-fg text-sm
-                     hover:bg-tokyo-selection hover:text-white transition-colors"
+                     hover:bg-tokyo-selection hover:text-tokyo-fg transition-colors"
         >
           <Key className="w-4 h-4" />
           <span>{t('settings.manageHostKeys')}</span>
@@ -620,7 +620,7 @@ export function Settings() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold text-white mb-8">{t('settings.title')}</h1>
+      <h1 className="text-2xl font-bold text-tokyo-fg mb-8">{t('settings.title')}</h1>
 
       {/* ================================================================== */}
       {/* Terminal Settings Section */}
@@ -909,7 +909,7 @@ export function Settings() {
         <div className="flex justify-end">
           <button
             onClick={handleSaveUploadIgnores}
-            className="px-4 py-2 text-sm rounded-lg bg-tokyo-blue text-white
+            className="px-4 py-2 text-sm rounded-lg bg-tokyo-blue text-tokyo-on-accent
                        hover:bg-tokyo-blue/80 transition-colors"
           >
             {t('common.save')}
@@ -986,7 +986,7 @@ export function Settings() {
               <button
                 onClick={() => installVshellToPath()}
                 disabled={cliInstallLoading || !vshellStatus?.binaryExists}
-                className="inline-flex items-center gap-2 rounded-lg bg-tokyo-blue px-4 py-2 text-sm text-white
+                className="inline-flex items-center gap-2 rounded-lg bg-tokyo-blue px-4 py-2 text-sm text-tokyo-on-accent
                            transition-colors hover:bg-tokyo-blue/80
                            disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -997,7 +997,7 @@ export function Settings() {
                 onClick={handleCopyCliInstallCommand}
                 disabled={!vshellStatus?.installCommand}
                 className="inline-flex items-center gap-2 rounded-lg border border-tokyo-bg-hl px-4 py-2 text-sm text-tokyo-fg
-                           transition-colors hover:bg-tokyo-bg-hl hover:text-white
+                           transition-colors hover:bg-tokyo-bg-hl hover:text-tokyo-fg
                            disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {cliCommandCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
@@ -1066,7 +1066,7 @@ export function Settings() {
               onClick={() => fetchAiTools()}
               disabled={loading}
               className="px-4 py-2 text-sm rounded-lg border border-tokyo-bg-hl text-tokyo-fg
-                         hover:bg-tokyo-bg-hl hover:text-white transition-colors
+                         hover:bg-tokyo-bg-hl hover:text-tokyo-fg transition-colors
                          disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? t('settings.refreshing') : t('settings.refreshStatus')}
@@ -1087,7 +1087,7 @@ export function Settings() {
           <div className="flex items-start gap-4">
             <div className="text-4xl text-tokyo-blue font-bold">{'>'}_</div>
             <div className="flex-1">
-              <h3 className="text-xl font-bold text-white">{t('settings.appTitle')}</h3>
+              <h3 className="text-xl font-bold text-tokyo-fg">{t('settings.appTitle')}</h3>
               <p className="text-tokyo-comment mt-1">{t('settings.appSubtitle')}</p>
 
               <div className="mt-4 space-y-2">
@@ -1117,7 +1117,7 @@ export function Settings() {
                       disabled={updateChecking || updateInstalling}
                       className="inline-flex items-center gap-2 px-3 py-2 rounded-lg
                                  bg-tokyo-bg-hl text-tokyo-fg text-sm
-                                 hover:bg-tokyo-selection hover:text-white transition-colors
+                                 hover:bg-tokyo-selection hover:text-tokyo-fg transition-colors
                                  disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <RotateCcw className={`w-4 h-4 ${updateChecking ? 'animate-spin' : ''}`} />
@@ -1130,7 +1130,7 @@ export function Settings() {
                       onClick={handleUpdateAction}
                       disabled={updateInstalling}
                       className="inline-flex items-center gap-2 px-3 py-2 rounded-lg
-                                 bg-tokyo-blue text-white text-sm
+                                 bg-tokyo-blue text-tokyo-on-accent text-sm
                                  hover:bg-tokyo-blue/80 transition-colors
                                  disabled:opacity-50 disabled:cursor-not-allowed"
                     >
@@ -1154,7 +1154,7 @@ export function Settings() {
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-lg
                              bg-tokyo-bg-hl text-tokyo-fg text-sm
-                             hover:bg-tokyo-selection hover:text-white transition-colors"
+                             hover:bg-tokyo-selection hover:text-tokyo-fg transition-colors"
                 >
                   <Github className="w-4 h-4" />
                   <span>GitHub</span>

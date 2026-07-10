@@ -44,6 +44,7 @@
 
   "session": {
     "newSession": "New Session",
+    "newConnection": "New connection",
     "noActiveSession": "No Active Session",
     "noActiveSessionDesc": "Connect to a server or create a new session to get started.",
     "closeSession": "Close Session",
@@ -54,7 +55,17 @@
     "startRecording": "Start Recording",
     "stopRecording": "Stop Recording",
     "recording": "Recording session",
-    "localShell": "Local Shell"
+    "localShell": "Local Shell",
+    "splitTerminal": "Split terminal",
+    "arrangeRows": "Arrange panes in rows",
+    "arrangeColumns": "Arrange panes in columns",
+    "closeSplits": "Close split layout",
+    "removePane": "Remove {{name}} from split",
+    "splitLimitTitle": "Split limit reached",
+    "splitLimitMessage": "Up to four terminal panes can be shown at once.",
+    "creatingPane": "Creating terminal pane",
+    "splitFailedTitle": "Could not create terminal pane",
+    "splitFailedMessage": "The local terminal failed to start. Please try again."
   },
 
   "server": {
@@ -103,6 +114,11 @@
   },
 
   "connect": {
+    "launcherTitle": "Open a connection",
+    "searchConnections": "Search servers and shells",
+    "listView": "List view",
+    "iconsView": "Icon view",
+    "noShells": "No local shells found",
     "connectToServer": "Connect to Server",
     "connecting": "Connecting...",
     "connect": "Connect",

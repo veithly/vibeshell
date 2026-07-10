@@ -60,7 +60,7 @@ export default function SnippetManager() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
         <div className="flex items-center gap-2">
           <Terminal className="w-4 h-4 text-tokyo-magenta" />
-          <span className="text-sm font-semibold text-white">Command Snippets</span>
+          <span className="text-sm font-semibold text-tokyo-fg">Command Snippets</span>
           <span className="text-xs text-tokyo-comment px-1.5 py-0.5 rounded-full bg-tokyo-bg-hl">
             {snippets.length}
           </span>
@@ -150,7 +150,7 @@ export default function SnippetManager() {
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-white">{snippet.name}</span>
+                    <span className="text-sm font-medium text-tokyo-fg">{snippet.name}</span>
                     {snippet.category && (
                       <span className="px-1.5 py-0.5 text-[10px] rounded-md bg-tokyo-magenta/10 text-tokyo-magenta font-medium">
                         {snippet.category}

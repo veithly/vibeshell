@@ -363,7 +363,7 @@ export function ServerList({
             <div className="mx-2 my-4 p-3 rounded-lg bg-tokyo-bg border border-tokyo-red">
               <p className="text-sm text-tokyo-red">{error}</p>
               <button
-                className="mt-2 text-xs text-tokyo-red hover:text-white underline underline-offset-4"
+                className="mt-2 text-xs text-tokyo-red hover:text-tokyo-fg underline underline-offset-4"
                 onClick={clearError}
               >
                 Dismiss
@@ -385,7 +385,7 @@ export function ServerList({
                 className={cn(
                   'flex items-center gap-2 px-4 py-2 rounded-md',
                   'bg-tokyo-blue hover:bg-tokyo-cyan',
-                  'text-sm font-medium text-white',
+                  'text-sm font-medium text-tokyo-on-accent',
                   'transition-colors duration-150',
                   'focus:outline-none focus:ring-2 focus:ring-tokyo-blue focus:ring-offset-2 focus:ring-offset-tokyo-bg-dark'
                 )}

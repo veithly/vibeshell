@@ -399,7 +399,7 @@ export function PreviewModal({
           <div className="flex items-center gap-3 min-w-0">
             <FileIcon filename={fileName} isDirectory={false} size="lg" />
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold text-white truncate">{fileName}</h2>
+              <h2 className="text-lg font-semibold text-tokyo-fg truncate">{fileName}</h2>
               <div className="flex items-center gap-2 text-sm text-tokyo-comment">
                 <span>{formatFileSize(fileSize)}</span>
                 {content?.truncated && (
@@ -419,7 +419,7 @@ export function PreviewModal({
                   onClick={handleCopy}
                   className={cn(
                     'p-2 rounded-md transition-colors',
-                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white'
+                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg'
                   )}
                   title="Copy content"
                 >
@@ -434,7 +434,7 @@ export function PreviewModal({
                     onClick={handleStartEdit}
                     className={cn(
                       'p-2 rounded-md transition-colors',
-                      'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white'
+                      'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg'
                     )}
                     title="Edit file"
                   >
@@ -451,7 +451,7 @@ export function PreviewModal({
                   onClick={handleCancelEdit}
                   className={cn(
                     'px-3 py-1 rounded-md text-sm transition-colors',
-                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white'
+                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg'
                   )}
                 >
                   Cancel
@@ -460,7 +460,7 @@ export function PreviewModal({
                   onClick={handleSave}
                   disabled={!hasChanges || isSaving}
                   className={cn(
-                    'bg-tokyo-blue text-white rounded px-3 py-1 text-sm',
+                    'bg-tokyo-blue text-tokyo-on-accent rounded px-3 py-1 text-sm',
                     'flex items-center gap-1.5',
                     'disabled:opacity-50 disabled:cursor-not-allowed',
                     'hover:bg-tokyo-blue/80 transition-colors'
@@ -484,7 +484,7 @@ export function PreviewModal({
                   disabled={zoom <= 0.25}
                   className={cn(
                     'p-2 rounded-md transition-colors',
-                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white',
+                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg',
                     'disabled:opacity-50 disabled:cursor-not-allowed'
                   )}
                   title="Zoom out (-)"
@@ -499,7 +499,7 @@ export function PreviewModal({
                   disabled={zoom >= 5}
                   className={cn(
                     'p-2 rounded-md transition-colors',
-                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white',
+                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg',
                     'disabled:opacity-50 disabled:cursor-not-allowed'
                   )}
                   title="Zoom in (+)"
@@ -510,7 +510,7 @@ export function PreviewModal({
                   onClick={handleRotate}
                   className={cn(
                     'p-2 rounded-md transition-colors',
-                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white'
+                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg'
                   )}
                   title="Rotate (R)"
                 >
@@ -520,7 +520,7 @@ export function PreviewModal({
                   onClick={handleResetView}
                   className={cn(
                     'p-2 rounded-md transition-colors',
-                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white'
+                    'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg'
                   )}
                   title="Reset view (0)"
                 >
@@ -537,7 +537,7 @@ export function PreviewModal({
                 onClick={onDownload}
                 className={cn(
                   'p-2 rounded-md transition-colors',
-                  'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white'
+                  'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg'
                 )}
                 title="Download file"
               >
@@ -550,7 +550,7 @@ export function PreviewModal({
               onClick={() => setIsFullscreen(!isFullscreen)}
               className={cn(
                 'p-2 rounded-md transition-colors',
-                'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white'
+                'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg'
               )}
               title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
             >
@@ -566,7 +566,7 @@ export function PreviewModal({
               onClick={handleClose}
               className={cn(
                 'p-2 rounded-md transition-colors',
-                'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-white'
+                'hover:bg-tokyo-bg-hl text-tokyo-comment hover:text-tokyo-fg'
               )}
               title="Close (Esc)"
             >

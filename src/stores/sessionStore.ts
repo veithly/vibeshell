@@ -473,53 +473,44 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (!result.success) return;
 
     const backendSessions = result.data;
-    const { sessions: localSessions, activeSessionId } = get();
     const backendById = new Map(backendSessions.map((session) => [session.id, session]));
 
-    const localSshIds = new Set(
-      localSessions.filter((s) => s.sessionType === 'ssh').map((s) => s.id)
-    );
-
-    // Merge: keep local-shell sessions + update existing SSH + add new CLI sessions.
-    // If an SSH session no longer exists in the backend, drop it instead of keeping a
-    // disconnected zombie tab around in the GUI.
-    let changed = false;
-    const merged = localSessions
-      .flatMap((s) => {
-        if (s.sessionType !== 'ssh') return [s];
-        const backend = backendById.get(s.id);
+    // Merge against the latest state after the async IPC call so a local shell
+    // created while session_list is in flight cannot be overwritten.
+    set((state) => {
+      const localSshIds = new Set(
+        state.sessions.filter((session) => session.sessionType === 'ssh').map((session) => session.id)
+      );
+      let changed = false;
+      const merged = state.sessions.flatMap((session) => {
+        if (session.sessionType !== 'ssh') return [session];
+        const backend = backendById.get(session.id);
         if (!backend) {
           changed = true;
           return [];
         }
-        if (backend.state !== s.state) {
+        if (backend.state !== session.state) {
           changed = true;
-          return [{ ...s, state: backend.state }];
+          return [{ ...session, state: backend.state }];
         }
-        return [s];
+        return [session];
       });
 
-    const newSessions = backendSessions
-      .filter((info) => !localSshIds.has(info.id))
-      .map(mapSessionInfo);
+      const newSessions = backendSessions
+        .filter((info) => !localSshIds.has(info.id))
+        .map(mapSessionInfo);
+      if (newSessions.length > 0) {
+        changed = true;
+        merged.push(...newSessions);
+      }
 
-    if (newSessions.length > 0) {
-      changed = true;
-      merged.push(...newSessions);
-    }
+      const nextActiveSessionId =
+        state.activeSessionId && merged.some((session) => session.id === state.activeSessionId)
+          ? state.activeSessionId
+          : (merged[0]?.id ?? null);
 
-    const nextActiveSessionId =
-      activeSessionId && merged.some((session) => session.id === activeSessionId)
-        ? activeSessionId
-        : (merged[0]?.id ?? null);
-
-    if (!changed && nextActiveSessionId === activeSessionId) {
-      return;
-    }
-
-    set({
-      sessions: merged,
-      activeSessionId: nextActiveSessionId,
+      if (!changed && nextActiveSessionId === state.activeSessionId) return state;
+      return { sessions: merged, activeSessionId: nextActiveSessionId };
     });
   },
 
