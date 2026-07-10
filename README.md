@@ -23,17 +23,26 @@ VibeShell is a modern desktop terminal for people and AI agents working on the s
 
 If you have ever asked an AI coding agent to deploy, inspect logs, edit a remote config, or move files over SSH, VibeShell gives it a real, reusable, observable workspace instead of a pile of brittle one-off shell commands.
 
-> The screenshots in this README use sanitized demo servers and reserved documentation addresses. No real hostnames, IPs, credentials, or customer data are shown.
+> The screenshots in this README are rendered with Playwright from VibeShell's real React components using sanitized demo servers. They use reserved example domains only; no real hostnames, IPs, credentials, or customer data are shown.
 
 ## Screenshots
 
-| Terminal + server status | AI tool integrations |
+| Server launcher | Split terminal workspace |
 | --- | --- |
-| ![Terminal workspace with sanitized demo sessions](docs/assets/screenshots/terminal-workspace.png) | ![AI integrations and MCP tools](docs/assets/screenshots/ai-integrations.png) |
+| ![Icon view with three sanitized demo servers](docs/assets/screenshots/server-launcher.png) | ![Three shell panes in the VibeShell workspace](docs/assets/screenshots/terminal-workspace.png) |
 
-| SFTP workflow | SSH tunnels |
+| Finder-style SFTP | Theme system |
 | --- | --- |
-| ![SFTP file manager with sanitized demo paths](docs/assets/screenshots/sftp-workflow.png) | ![SSH tunnel manager with sanitized demo routes](docs/assets/screenshots/tunnel-manager.png) |
+| ![Three-column SFTP file manager with sanitized demo paths](docs/assets/screenshots/sftp-workflow.png) | ![Five high-contrast themes in English settings](docs/assets/screenshots/theme-system.png) |
+
+### New In 1.0
+
+- **Split shells, one workspace**: open up to four terminal panes and switch between row and column layouts without leaving the active session.
+- **Finder-style SFTP browsing**: traverse multiple path levels in a column view, switch to an icon view, preview files in place, and expand or collapse the complete SFTP workspace.
+- **A quieter native shell**: VibeShell opens directly into a local terminal, keeps SSH, SFTP, split, and settings actions in a compact icon toolbar, and reveals labels through hover tooltips.
+- **Five contrast-safe themes**: Paper White, Warm Ivory, Ink Black, Violet Black, and Cyan Black keep titles, controls, terminal text, and hover states readable on both light and dark surfaces.
+- **Platform-aware window motion**: macOS uses native traffic-light and fullscreen behavior, while Windows and Linux receive controls shaped for their platform conventions.
+- **Smarter command interaction**: Zsh starts as an interactive login shell, ghost-text completion stays close to the cursor, and a mouse click can reposition the terminal input cursor.
 
 ## Why It Exists
 
@@ -51,11 +60,22 @@ VibeShell is designed around that new workflow:
 ### Terminal Workspace
 
 - Multi-tab SSH sessions and local shell sessions.
+- Up to four shell panes with horizontal and vertical split layouts.
+- Direct-to-terminal startup with no empty landing screen.
 - Smooth terminal rendering with xterm.js and WebGL support.
-- Session status panel for CPU, memory, disk, load, and network metrics.
-- Ghost-text completions for common terminal commands.
+- Mouse-based input cursor placement for faster command editing.
+- Interactive login-shell startup and ghost-text completions for common terminal commands.
+- Compact icon toolbar with hover tooltips and responsive overflow behavior.
 - Command snippets with search, tags, copy, and insert actions.
 - Terminal session recording for audit, replay, and handoff.
+
+### Native UI And Themes
+
+- Platform-specific window controls for macOS, Windows, and Linux.
+- Native macOS fullscreen transitions that preserve close and minimize behavior.
+- Paper White, Warm Ivory, Ink Black, Violet Black, and Cyan Black themes.
+- WCAG AA-tested text contrast across the five built-in themes.
+- Responsive actions that keep common icons visible and fold secondary actions into a compact menu.
 
 ### SSH, SFTP, And Tunnels
 
@@ -64,7 +84,9 @@ VibeShell is designed around that new workflow:
 - Host key verification with trusted fingerprint management.
 - Jump host / ProxyJump support for bastion access.
 - SSH agent forwarding.
-- SFTP browser with preview, upload, download, rename, delete, mkdir, recursive upload, and sync flows.
+- Finder-style SFTP column browsing plus an icon view for scanning folders visually.
+- Expandable SFTP workspace with a dedicated address row and responsive action menu.
+- File preview, upload, download, rename, delete, mkdir, recursive upload, and sync flows.
 - Local forward, remote forward, and dynamic SOCKS5 tunnels.
 
 ### AI Agents
