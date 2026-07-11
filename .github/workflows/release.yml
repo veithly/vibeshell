@@ -384,6 +384,24 @@ jobs:
                 cp "$file" "$upload"
               fi
 
+              if [[ "${{ matrix.platform }}" == "macos-latest" && "$file" == *.app.tar.gz ]]; then
+                if [[ "${{ matrix.args }}" == *"aarch64"* ]]; then
+                  upload="VibeShell-${VERSION}-macos-arm64.app.tar.gz"
+                else
+                  upload="VibeShell-${VERSION}-macos-x64.app.tar.gz"
+                fi
+                cp "$file" "$upload"
+              fi
+
+              if [[ "${{ matrix.platform }}" == "macos-latest" && "$file" == *.app.tar.gz.sig ]]; then
+                if [[ "${{ matrix.args }}" == *"aarch64"* ]]; then
+                  upload="VibeShell-${VERSION}-macos-arm64.app.tar.gz.sig"
+                else
+                  upload="VibeShell-${VERSION}-macos-x64.app.tar.gz.sig"
+                fi
+                cp "$file" "$upload"
+              fi
+
               uploads+=("$upload")
             done < <(find "$bundle_dir" -type f \( \
               -name "*.AppImage" -o \
