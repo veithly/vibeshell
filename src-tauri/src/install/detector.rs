@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-const SKILL_DIR_NAMES: [&str; 2] = ["vshell", "vibeshell"];
+const SKILL_DIR_NAMES: [&str; 2] = ["vibeshell", "vshell"];
 
 /// Represents an AI coding tool that can have the VibeShell skill installed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_skill_dir_names_include_current_and_legacy_names() {
-        assert!(SKILL_DIR_NAMES.contains(&"vshell"));
         assert!(SKILL_DIR_NAMES.contains(&"vibeshell"));
+        assert!(SKILL_DIR_NAMES.contains(&"vshell"));
     }
 }

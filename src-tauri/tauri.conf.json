@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "node node_modules/vite/bin/vite.js",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "node node_modules/typescript/bin/tsc && node node_modules/vite/bin/vite.js build && node scripts/build-vshell-sidecar.js",
+    "beforeBuildCommand": "node node_modules/typescript/bin/tsc && node node_modules/vite/bin/vite.js build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -31,9 +31,6 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "externalBin": [
-      "binaries/vshell"
-    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,16 +41,7 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "both",
-        "installerHooks": "nsis-hooks.nsh"
-      },
-      "wix": {
-        "fragmentPaths": [
-          "wix-path-fragment.wxs"
-        ],
-        "componentGroupRefs": [
-          "VshellPathEnvGroup"
-        ]
+        "installMode": "both"
       }
     }
   },

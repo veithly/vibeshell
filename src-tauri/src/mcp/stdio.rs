@@ -95,10 +95,7 @@ pub async fn run_stdio(
     database: Arc<Database>,
     session_manager: Arc<SessionManager>,
 ) -> Result<()> {
-    let state = McpState {
-        database,
-        session_manager,
-    };
+    let state = McpState::new(database, session_manager);
 
     let stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();

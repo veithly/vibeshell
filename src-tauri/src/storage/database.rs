@@ -17,13 +17,18 @@ pub struct Database {
 impl Database {
     pub fn new() -> Result<Self> {
         let db_path = Self::get_db_path()?;
+        Self::new_at(db_path)
+    }
+
+    pub fn new_at(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let db_path = path.as_ref();
 
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(&db_path)?;
+        let conn = Connection::open(db_path)?;
         let db = Self {
             conn: Mutex::new(conn),
         };

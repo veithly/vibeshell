@@ -34,6 +34,7 @@ argon2 = "0.5"
 rand = "0.8"
 base64 = "0.21"
 sha2 = "0.10"
+subtle = "2"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 russh = "0.44"
@@ -44,11 +45,15 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["sync", "io-std", "io-util", "rt-multi-thread"] }
 interprocess = "2"
 axum = "0.7"
-tower = "0.4"
+tower = { version = "0.5", features = ["util"] }
 portable-pty = "0.8"
 which = "7"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
 
 [features]
 default = ["custom-protocol"]

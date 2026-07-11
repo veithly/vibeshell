@@ -47,6 +47,9 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
         session_attach_tool(),
         session_detach_tool(),
         session_kill_tool(),
+        session_send_input_tool(),
+        session_read_tool(),
+        session_resize_tool(),
         // === Command Execution Tools ===
         exec_tool(),
         remote_rg_tool(),
@@ -240,7 +243,7 @@ fn session_list_tool() -> ToolDefinition {
 fn session_create_tool() -> ToolDefinition {
     ToolDefinition::new(
         "session_create",
-        "Create a new SSH session and connect to a configured server using saved credentials. Returns session info with a session_id that can be used for exec and SFTP operations. The server must have saved credentials in VibeShell.",
+        "Connect to a configured server using saved credentials and return a shared GUI session. Reuses the earliest connected session unless force_new is true.",
         json!({
             "type": "object",
             "properties": {
@@ -251,6 +254,11 @@ fn session_create_tool() -> ToolDefinition {
                 "server_name": {
                     "type": "string",
                     "description": "Server name to connect to (used if server_id not provided)"
+                },
+                "force_new": {
+                    "type": "boolean",
+                    "description": "Create a parallel session instead of reusing a connected session",
+                    "default": false
                 }
             },
             "additionalProperties": false
@@ -311,6 +319,92 @@ fn session_kill_tool() -> ToolDefinition {
                     "default": false
                 }
             },
+            "additionalProperties": false
+        }),
+    )
+}
+
+fn session_send_input_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "session_send_input",
+        "Send text or named keys to the shared terminal PTY. The command and resulting output are visible in the VibeShell GUI.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID receiving terminal input"
+                },
+                "data": {
+                    "type": "string",
+                    "description": "Literal terminal input"
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["enter", "tab", "escape", "backspace", "ctrl-c", "ctrl-d", "ctrl-z", "up", "down", "left", "right"]
+                    },
+                    "description": "Named terminal keys appended after data"
+                },
+                "append_enter": {
+                    "type": "boolean",
+                    "description": "Append Enter after data and named keys",
+                    "default": false
+                }
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+fn session_read_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "session_read",
+        "Read the latest buffered output from the shared terminal. Returns at most 64 KiB and does not consume the GUI output.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID to inspect"
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65536,
+                    "default": 65536,
+                    "description": "Maximum number of trailing output bytes"
+                }
+            },
+            "required": ["session_id"],
+            "additionalProperties": false
+        }),
+    )
+}
+
+fn session_resize_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "session_resize",
+        "Resize the shared terminal PTY.",
+        json!({
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Session ID to resize"
+                },
+                "cols": {
+                    "type": "integer",
+                    "minimum": 1
+                },
+                "rows": {
+                    "type": "integer",
+                    "minimum": 1
+                }
+            },
+            "required": ["session_id", "cols", "rows"],
             "additionalProperties": false
         }),
     )
@@ -801,7 +895,7 @@ mod tests {
         let tools = get_tool_definitions();
 
         // Verify we have all expected tools
-        assert_eq!(tools.len(), 25);
+        assert_eq!(tools.len(), 28);
 
         // Check that all tools have non-empty names and descriptions
         for tool in &tools {
@@ -816,6 +910,9 @@ mod tests {
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(tool_names.contains(&"server_list"));
         assert!(tool_names.contains(&"session_create"));
+        assert!(tool_names.contains(&"session_send_input"));
+        assert!(tool_names.contains(&"session_read"));
+        assert!(tool_names.contains(&"session_resize"));
         assert!(tool_names.contains(&"exec"));
         assert!(tool_names.contains(&"rg"));
         assert!(tool_names.contains(&"sftp_ls"));

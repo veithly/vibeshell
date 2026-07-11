@@ -58,7 +58,7 @@ Desktop.ini
 # ============================================
 src-tauri/target/
 src-tauri/gen/
-# Sidecar binaries (built by CI, stubs created by build.rs)
+# Legacy standalone CLI build artifacts are not bundled with the desktop app.
 src-tauri/binaries/vshell*
 !src-tauri/binaries/.gitkeep
 

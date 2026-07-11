@@ -26,22 +26,13 @@ export interface AiTool {
   vibeshellInstalled: boolean;
 }
 
-/**
- * Status of the bundled vshell CLI and PATH installation.
- */
-export interface VshellStatus {
-  /** Resolved path to the bundled/preferred vshell binary */
-  binaryPath: string;
-  /** Whether the resolved binary exists and is executable */
-  binaryExists: boolean;
-  /** First vshell found through PATH, if any */
-  pathEntry: string | null;
-  /** Whether `vshell` can be resolved from PATH */
-  pathInstalled: boolean;
-  /** Whether the PATH entry resolves to the bundled/preferred binary */
-  pathMatchesBinary: boolean;
-  /** Manual command users can run if automatic installation is not possible */
-  installCommand: string;
+/** Status of the Agent Gateway hosted by the VibeShell GUI. */
+export interface AgentGatewayStatus {
+  running: boolean;
+  endpoint: string | null;
+  manifestPath: string;
+  pid: number | null;
+  protocolVersion: string;
 }
 
 /**
@@ -200,8 +191,8 @@ interface SettingsStore {
   // AI Tools state
   /** List of detected AI tools */
   aiTools: AiTool[];
-  /** Bundled CLI and PATH installation status */
-  vshellStatus: VshellStatus | null;
+  /** Built-in Agent Gateway status */
+  gatewayStatus: AgentGatewayStatus | null;
   /** Current application version from the backend package metadata */
   appVersion: string | null;
   /** Whether app version lookup has completed */
@@ -218,10 +209,6 @@ interface SettingsStore {
   loading: boolean;
   /** ID of the tool currently being installed/uninstalled (null if none) */
   loadingToolId: string | null;
-  /** Whether the CLI PATH installation is running */
-  cliInstallLoading: boolean;
-  /** Last CLI installation result message */
-  cliInstallMessage: string | null;
   /** Error message if any operation fails */
   error: string | null;
   /** Whether settings have been loaded from storage */
@@ -230,12 +217,10 @@ interface SettingsStore {
   // AI Tools actions
   /** Fetch all AI tools and their installation status */
   fetchAiTools: () => Promise<void>;
-  /** Fetch bundled CLI and PATH status */
-  fetchVshellStatus: () => Promise<void>;
+  /** Fetch built-in Agent Gateway status */
+  fetchGatewayStatus: () => Promise<void>;
   /** Fetch current app version */
   fetchAppVersion: () => Promise<void>;
-  /** Add vshell to the user's system PATH */
-  installVshellToPath: () => Promise<void>;
   /** Install VibeShell to a specific AI tool */
   installTo: (toolId: string) => Promise<void>;
   /** Uninstall VibeShell from a specific AI tool */
@@ -398,15 +383,13 @@ async function saveUploadIgnoreConfig(config: UploadIgnoreConfig): Promise<Uploa
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   // Initial state
   aiTools: [],
-  vshellStatus: null,
+  gatewayStatus: null,
   appVersion: null,
   appVersionLoaded: false,
   settings: { ...defaultSettings },
   uploadIgnoreConfig: { ...defaultUploadIgnoreConfig },
   loading: false,
   loadingToolId: null,
-  cliInstallLoading: false,
-  cliInstallMessage: null,
   error: null,
   initialized: false,
 
@@ -427,10 +410,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
   },
 
-  fetchVshellStatus: async () => {
+  fetchGatewayStatus: async () => {
     try {
-      const status = await invokeOrThrow<VshellStatus>('get_vshell_status');
-      set({ vshellStatus: status });
+      const status = await invokeOrThrow<AgentGatewayStatus>('get_agent_gateway_status');
+      set({ gatewayStatus: status });
     } catch (error) {
       set({
         error: error instanceof Error ? error.message : String(error),
@@ -445,21 +428,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     } catch (error) {
       console.warn('Failed to fetch app version:', error);
       set({ appVersion: null, appVersionLoaded: true });
-    }
-  },
-
-  installVshellToPath: async () => {
-    set({ cliInstallLoading: true, cliInstallMessage: null, error: null });
-    try {
-      const message = await invokeOrThrow<string>('add_vshell_to_path');
-      set({ cliInstallMessage: message, cliInstallLoading: false });
-      await get().fetchVshellStatus();
-    } catch (error) {
-      set({
-        error: error instanceof Error ? error.message : String(error),
-        cliInstallLoading: false,
-      });
-      await get().fetchVshellStatus();
     }
   },
 

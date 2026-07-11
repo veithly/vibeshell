@@ -11,8 +11,6 @@ mod ipc_support;
 mod session_alias;
 mod terminal;
 
-use std::sync::Arc;
-
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use command_input::CommandInputArgs;
@@ -192,10 +190,6 @@ enum Commands {
 
     /// Kill/terminate session(s)
     Kill(KillArgs),
-
-    /// Start skill server for AI tool integration
-    #[command(alias = "mcp-server")]
-    SkillServer(SkillServerArgs),
 
     /// Manage the headless background service used by terminal workflows
     #[command(long_about = "Inspect or start the VibeShell headless daemon.\n\n\
@@ -387,17 +381,6 @@ struct KillArgs {
 }
 
 #[derive(Args)]
-struct SkillServerArgs {
-    /// Use stdio transport (stdin/stdout JSON-RPC) — required by Claude Code, Codex, Cursor
-    #[arg(long)]
-    stdio: bool,
-
-    /// Port to listen on (HTTP mode, ignored when --stdio is set)
-    #[arg(long, default_value = "3000")]
-    port: u16,
-}
-
-#[derive(Args)]
 struct DaemonArgs {
     #[command(subcommand)]
     command: DaemonCommand,
@@ -523,13 +506,6 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Some(Commands::SkillServer(args)) => {
-            if args.stdio {
-                run_skill_server_stdio()
-            } else {
-                run_skill_server(args.port)
-            }
-        }
         Some(Commands::Daemon(args)) => match args.command {
             DaemonCommand::Start => daemon::start_background(),
             DaemonCommand::Run => daemon::run_foreground(),
@@ -548,44 +524,6 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
-}
-
-/// Run the skill server on the specified port (HTTP mode)
-fn run_skill_server(port: u16) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-
-    rt.block_on(async {
-        let database =
-            Arc::new(vibeshell_core::Database::new().expect("Failed to initialize database"));
-        let session_manager = Arc::new(vibeshell_core::SessionManager::new(database.clone()));
-
-        let server = vibeshell_core::McpServer::new(database, session_manager);
-
-        eprintln!("Starting VibeShell Skill Server (HTTP)...");
-        eprintln!("Use Ctrl+C to stop the server.");
-
-        server.run(port).await
-    })?;
-
-    Ok(())
-}
-
-/// Run the skill server in stdio mode (stdin/stdout JSON-RPC).
-///
-/// This is the standard transport for Claude Code, Codex CLI, Cursor, etc.
-/// The server reads JSON-RPC requests from stdin and writes responses to stdout.
-fn run_skill_server_stdio() -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-
-    rt.block_on(async {
-        let database =
-            Arc::new(vibeshell_core::Database::new().expect("Failed to initialize database"));
-        let session_manager = Arc::new(vibeshell_core::SessionManager::new(database.clone()));
-
-        vibeshell_core::mcp::stdio::run_stdio(database, session_manager).await
-    })?;
-
-    Ok(())
 }
 
 #[cfg(test)]

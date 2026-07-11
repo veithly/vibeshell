@@ -126,14 +126,14 @@ jobs:
           ## VibeShell ${{ steps.bump.outputs.tag_name }}
 
           ### Downloads
-          | Platform | Installer | CLI Only |
-          |----------|-----------|----------|
-          | Windows x64 | `.exe` / `.msi` | `vshell-windows-x64.exe` |
-          | macOS (Apple Silicon) | `.dmg` | `vshell-macos-arm64` |
-          | macOS (Intel) | `.dmg` | `vshell-macos-x64` |
-          | Linux x64 | `.deb` / `.AppImage` | `vshell-linux-x64` |
+          | Platform | Installer |
+          |----------|-----------|
+          | Windows x64 | `.exe` / `.msi` |
+          | macOS (Apple Silicon) | `.dmg` |
+          | macOS (Intel) | `.dmg` |
+          | Linux x64 | `.deb` / `.AppImage` |
 
-          > **Note:** The desktop installer includes `vshell` CLI and adds it to your PATH automatically.
+          > **Note:** Agent access is provided by the authenticated Gateway built into the visible VibeShell desktop app.
 
           See [commit history](https://github.com/${{ github.repository }}/commits/${{ steps.bump.outputs.tag_name }}) for full changes.
           EOF
@@ -362,56 +362,11 @@ jobs:
           VERSION="${{ needs.bump-and-release.outputs.version }}"
           TAG_NAME="${{ needs.bump-and-release.outputs.tag_name }}"
           TARGET="${{ matrix.target }}"
-          EXT=""
-
-          if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
-            EXT=".exe"
-          fi
-
-          binary_candidates=(
-            "target/${TARGET}/release/vshell${EXT}"
-            "target/release/vshell${EXT}"
-          )
-          BINARY=""
-          for candidate in "${binary_candidates[@]}"; do
-            if [ -f "$candidate" ]; then
-              BINARY="$candidate"
-              break
-            fi
-          done
-
           bundle_dirs=(
             "target/${TARGET}/release/bundle"
             "target/release/bundle"
           )
-
-          # Determine platform-friendly name
-          case "${{ matrix.platform }}" in
-            windows-latest)
-              DEST="vshell-${VERSION}-windows-x64.exe"
-              ;;
-            macos-latest)
-              if [[ "${{ matrix.args }}" == *"aarch64"* ]]; then
-                DEST="vshell-${VERSION}-macos-arm64"
-              else
-                DEST="vshell-${VERSION}-macos-x64"
-              fi
-              ;;
-            ubuntu-22.04)
-              DEST="vshell-${VERSION}-linux-x64"
-              ;;
-          esac
-
-          if [ -n "$BINARY" ]; then
-            cp "$BINARY" "$DEST"
-            chmod +x "$DEST" 2>/dev/null || true
-          else
-            echo "vshell binary not found. Checked:"
-            printf '  %s\n' "${binary_candidates[@]}"
-            exit 1
-          fi
-
-          uploads=("$DEST")
+          uploads=()
           for bundle_dir in "${bundle_dirs[@]}"; do
             if [ ! -d "$bundle_dir" ]; then
               continue
@@ -443,7 +398,7 @@ jobs:
             \) -print0)
           done
 
-          if [ "${#uploads[@]}" -lt 2 ]; then
+          if [ "${#uploads[@]}" -lt 1 ]; then
             echo "No desktop installer artifacts found. Checked bundle dirs:"
             printf '  %s\n' "${bundle_dirs[@]}"
             find target -maxdepth 5 -type f 2>/dev/null | sort || true

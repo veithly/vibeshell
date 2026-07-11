@@ -62,7 +62,7 @@ Set-Location $repoRoot
 
 Write-Host "============================================"
 Write-Host " VibeShell Installer Build (Windows)"
-Write-Host " Builds: vibeshell (GUI) + vshell (CLI)"
+Write-Host " Builds: VibeShell desktop app with Agent Gateway"
 Write-Host " Output: NSIS (.exe) and MSI (.msi)"
 Write-Host "============================================"
 
@@ -100,60 +100,16 @@ foreach ($name in @("CC", "CXX", "CI", "STATIC_VCRUNTIME")) {
 }
 
 # ── 0. Kill stale processes that may lock build outputs ───────────────
-Run-Step "Killing stale vshell / vibeshell processes..." {
-  foreach ($name in @("vshell", "vibeshell")) {
-    $procs = @(Get-Process -Name $name -ErrorAction SilentlyContinue)
-    if ($procs.Count -gt 0) {
-      $procs | Stop-Process -Force -ErrorAction SilentlyContinue
-      Write-Host "  Killed $($procs.Count) $name process(es)"
-    }
+Run-Step "Killing stale VibeShell processes..." {
+  $procs = @(Get-Process -Name "vibeshell" -ErrorAction SilentlyContinue)
+  if ($procs.Count -gt 0) {
+    $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+    Write-Host "  Killed $($procs.Count) VibeShell process(es)"
   }
   Start-Sleep -Milliseconds 500
 }
 
-# ── 1. Detect Rust target triple ──────────────────────────────────────
-Run-Step "Detecting Rust target triple..." {
-  $rustcOutput = & rustc -vV 2>&1
-  $hostLine = ($rustcOutput | Where-Object { $_ -match "^host:" }) -replace "host:\s*", ""
-  $script:targetTriple = $hostLine.Trim()
-
-  if ([string]::IsNullOrEmpty($script:targetTriple)) {
-    throw "Could not detect Rust target triple from 'rustc -vV'"
-  }
-
-  Write-Host "  Target: $script:targetTriple"
-}
-
-# ── 2. Build vshell CLI ───────────────────────────────────────────────
-Run-Step "Building vshell CLI (release)..." {
-  & cargo build --release --package vshell
-  if ($LASTEXITCODE -ne 0) {
-    throw "vshell CLI build failed with exit code $LASTEXITCODE."
-  }
-}
-
-# ── 3. Copy CLI binary to Tauri sidecar location ─────────────────────
-Run-Step "Copying vshell CLI to sidecar location..." {
-  $binDir = Join-Path $repoRoot "src-tauri\binaries"
-  if (-not (Test-Path $binDir)) {
-    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-  }
-
-  $src = Join-Path $repoRoot "target\release\vshell.exe"
-  $dest = Join-Path $binDir "vshell-$script:targetTriple.exe"
-
-  if (-not (Test-Path $src)) {
-    throw "vshell CLI binary not found at: $src"
-  }
-
-  Copy-Item -Path $src -Destination $dest -Force
-  Write-Host "  $src -> $dest"
-
-  $fileSize = (Get-Item $dest).Length
-  Write-Host "  Size: $([math]::Round($fileSize / 1MB, 2)) MB"
-}
-
-# ── 4. Build Tauri installers (NSIS + MSI) ────────────────────────────
+# ── 1. Build Tauri installers (NSIS + MSI) ────────────────────────────
 Run-Step "Building NSIS and MSI bundles with Tauri..." {
   & npx tauri build --bundles nsis --bundles msi
   if ($LASTEXITCODE -ne 0) {
@@ -161,7 +117,7 @@ Run-Step "Building NSIS and MSI bundles with Tauri..." {
   }
 }
 
-# ── 5. Report output ─────────────────────────────────────────────────
+# ── 2. Report output ─────────────────────────────────────────────────
 $bundleDirs = @(
   (Join-Path $repoRoot "target\release\bundle"),
   (Join-Path $repoRoot "src-tauri\target\release\bundle")
@@ -194,5 +150,4 @@ if (Test-Path $msiDir) {
 }
 
 Write-Host ""
-Write-Host "Both installers include vibeshell (GUI) + vshell (CLI)."
-Write-Host "vshell will be added to user PATH on installation."
+Write-Host "Both installers include the VibeShell GUI and built-in Agent Gateway."

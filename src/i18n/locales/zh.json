@@ -57,12 +57,13 @@
     "recording": "正在录制会话",
     "localShell": "本地终端",
     "splitTerminal": "分栏终端",
+    "arrangeGrid": "按网格排列分栏",
     "arrangeRows": "按行排列分栏",
     "arrangeColumns": "按列排列分栏",
     "closeSplits": "收起分栏",
     "removePane": "从分栏中移除 {{name}}",
     "splitLimitTitle": "已达到分栏上限",
-    "splitLimitMessage": "一个页面最多同时显示四个终端分栏。",
+    "splitLimitMessage": "一个页面最多同时显示九个终端分栏。",
     "creatingPane": "正在创建终端分栏",
     "splitFailedTitle": "无法创建终端分栏",
     "splitFailedMessage": "本地终端启动失败，请重试。"
@@ -131,6 +132,13 @@
     "keyLoaded": "密钥已加载: {{path}}"
   },
 
+  "agentActivity": {
+    "title": "Agent 活动",
+    "connected": "就绪",
+    "close": "关闭 Agent 活动",
+    "empty": "暂无 Agent 活动",
+    "ready": "Gateway 已就绪"
+  },
   "settings": {
     "title": "设置",
 
@@ -202,7 +210,7 @@
     "respectGitignore": "遵循 .gitignore",
     "respectGitignoreDesc": "应用上传目录及其子目录中的 .gitignore 规则。",
     "uploadExcludePatterns": "上传排除规则",
-    "uploadExcludePatternsDesc": "每行一个规则。VibeShell 和 vshell 的目录上传/同步都会使用。",
+    "uploadExcludePatternsDesc": "每行一个规则。VibeShell 的目录上传和同步会使用这些规则。",
 
     "security": "安全",
     "securityDesc": "管理 SSH 主机密钥验证和安全设置。",
@@ -219,20 +227,18 @@
     "inProgress": "进行中",
     "deleteRecording": "删除录制",
 
-    "cli": "CLI",
-    "cliDesc": "安装随 VibeShell 打包的 vshell 命令，让终端和 AI 工具可以从 PATH 中找到它。",
-    "cliBundledPath": "随 App 打包的 vshell",
-    "cliPathStatus": "系统 PATH",
-    "cliPathInstalled": "可用",
-    "cliPathMissing": "未安装",
-    "cliPathDifferent": "当前 PATH 中优先找到的是另一个 vshell。重新安装可让 PATH 指向此版本的 VibeShell。",
-    "cliInstallToPath": "安装到 PATH",
-    "cliInstalling": "安装中...",
-    "cliCopyInstallCommand": "复制命令",
-    "cliBinaryMissing": "随 App 打包的 vshell 缺失或不可执行。请重新构建 App，确保 CLI sidecar 被包含。",
+    "gateway": "Agent Gateway",
+    "gatewayDesc": "Agent 直接连接当前 VibeShell 窗口，并与您共享 SSH 会话。",
+    "gatewayRunning": "Gateway 运行中",
+    "gatewayStopped": "Gateway 已停止",
+    "gatewaySharedGui": "Agent 操作使用当前可见工作区。",
+    "gatewayRefresh": "刷新 Gateway 状态",
+    "gatewayEndpoint": "本地端点",
+    "gatewayManifest": "发现清单",
+    "gatewayProtocol": "MCP 协议",
 
     "skills": "技能",
-    "skillsDesc": "将 VibeShell 作为技能安装到您的 AI 编程工具中，以获取 SSH 和 SFTP 访问权限。",
+    "skillsDesc": "为 AI 编程工具安装 Gateway 使用说明，直接访问 SSH 和 SFTP。",
     "detectingTools": "正在检测支持的 AI 工具...",
     "noToolsDetected": "未检测到支持的 AI 工具。",
     "supportedTools": "支持的工具：Claude Code、Cursor、Codex、Open Code",

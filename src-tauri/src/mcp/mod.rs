@@ -3,12 +3,14 @@
 //! This module implements an MCP server that exposes VibeShell's SSH/SFTP
 //! functionality as tools for AI assistants.
 //!
-//! Two transport modes are supported:
-//! - **HTTP** (`server.rs`) — axum-based JSON-RPC server on a local port
-//! - **Stdio** (`stdio.rs`) — stdin/stdout JSON-RPC for AI tool integration (Claude Code, Codex, Cursor, etc.)
+//! The desktop GUI hosts an authenticated HTTP Gateway on an ephemeral loopback
+//! port and publishes per-launch discovery metadata. The stdio transport remains
+//! in the core library for compatibility with direct embedders.
 
+pub mod gateway;
 pub mod server;
 pub mod stdio;
 pub mod tools;
 
+pub use gateway::{gateway_manifest_path, AgentGateway, AgentGatewayStatus};
 pub use server::McpServer;

@@ -57,12 +57,13 @@
     "recording": "Recording session",
     "localShell": "Local Shell",
     "splitTerminal": "Split terminal",
+    "arrangeGrid": "Arrange panes in a grid",
     "arrangeRows": "Arrange panes in rows",
     "arrangeColumns": "Arrange panes in columns",
     "closeSplits": "Close split layout",
     "removePane": "Remove {{name}} from split",
     "splitLimitTitle": "Split limit reached",
-    "splitLimitMessage": "Up to four terminal panes can be shown at once.",
+    "splitLimitMessage": "Up to nine terminal panes can be shown at once.",
     "creatingPane": "Creating terminal pane",
     "splitFailedTitle": "Could not create terminal pane",
     "splitFailedMessage": "The local terminal failed to start. Please try again."
@@ -131,6 +132,13 @@
     "keyLoaded": "Key loaded: {{path}}"
   },
 
+  "agentActivity": {
+    "title": "Agent activity",
+    "connected": "Ready",
+    "close": "Close Agent activity",
+    "empty": "No Agent activity",
+    "ready": "Gateway ready"
+  },
   "settings": {
     "title": "Settings",
 
@@ -202,7 +210,7 @@
     "respectGitignore": "Respect .gitignore",
     "respectGitignoreDesc": "Apply .gitignore rules from the uploaded directory and its subdirectories.",
     "uploadExcludePatterns": "Upload Exclude Patterns",
-    "uploadExcludePatternsDesc": "One pattern per line. Used by VibeShell and vshell directory upload/sync.",
+    "uploadExcludePatternsDesc": "One pattern per line. Used by VibeShell directory upload and sync.",
 
     "security": "Security",
     "securityDesc": "Manage SSH host key verification and security settings.",
@@ -219,20 +227,18 @@
     "inProgress": "In progress",
     "deleteRecording": "Delete recording",
 
-    "cli": "CLI",
-    "cliDesc": "Install the bundled vshell command so terminals and AI tools can find it in PATH.",
-    "cliBundledPath": "Bundled vshell",
-    "cliPathStatus": "System PATH",
-    "cliPathInstalled": "Available",
-    "cliPathMissing": "Not installed",
-    "cliPathDifferent": "Another vshell is currently first in PATH. Install again to point PATH at this VibeShell build.",
-    "cliInstallToPath": "Install to PATH",
-    "cliInstalling": "Installing...",
-    "cliCopyInstallCommand": "Copy Command",
-    "cliBinaryMissing": "The bundled vshell binary is missing or not executable. Rebuild the app so the CLI sidecar is included.",
+    "gateway": "Agent Gateway",
+    "gatewayDesc": "Agents connect directly to this VibeShell window and share its SSH sessions with you.",
+    "gatewayRunning": "Gateway running",
+    "gatewayStopped": "Gateway stopped",
+    "gatewaySharedGui": "Agent actions use this visible workspace.",
+    "gatewayRefresh": "Refresh Gateway status",
+    "gatewayEndpoint": "Local endpoint",
+    "gatewayManifest": "Discovery manifest",
+    "gatewayProtocol": "MCP protocol",
 
     "skills": "Skills",
-    "skillsDesc": "Install VibeShell as a skill to your AI coding tools for SSH and SFTP access.",
+    "skillsDesc": "Install Gateway instructions for direct SSH and SFTP access from your AI coding tools.",
     "detectingTools": "Detecting supported AI tools...",
     "noToolsDetected": "No supported AI tools detected on your system.",
     "supportedTools": "Supported tools: Claude Code, Cursor, Codex, Open Code",

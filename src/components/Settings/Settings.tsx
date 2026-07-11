@@ -36,9 +36,8 @@ import {
   Sparkles,
   Eye,
   EyeOff,
-  Copy,
-  Check,
-  Link,
+  Bot,
+  RefreshCw,
 } from 'lucide-react';
 import { useRecordingStore } from '../../stores/recordingStore';
 import type { Recording } from '../../types/tunnel';
@@ -474,22 +473,19 @@ export function Settings() {
   const { t, i18n } = useTranslation();
   const {
     aiTools,
-    vshellStatus,
+    gatewayStatus,
     appVersion,
     appVersionLoaded,
     settings,
     uploadIgnoreConfig,
     loading,
     loadingToolId,
-    cliInstallLoading,
-    cliInstallMessage,
     error,
     initialized,
     fetchAiTools,
-    fetchVshellStatus,
+    fetchGatewayStatus,
     fetchAppVersion,
     initializeSettings,
-    installVshellToPath,
     installTo,
     uninstallFrom,
     updateTerminalSettings,
@@ -515,7 +511,6 @@ export function Settings() {
   } = useUpdateStore();
 
   const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [cliCommandCopied, setCliCommandCopied] = useState(false);
   const [uploadExcludeText, setUploadExcludeText] = useState(
     uploadIgnoreConfig.excludedPaths.join('\n')
   );
@@ -524,9 +519,9 @@ export function Settings() {
   useEffect(() => {
     initializeSettings();
     fetchAiTools();
-    fetchVshellStatus();
+    fetchGatewayStatus();
     fetchAppVersion();
-  }, [initializeSettings, fetchAiTools, fetchVshellStatus, fetchAppVersion]);
+  }, [initializeSettings, fetchAiTools, fetchGatewayStatus, fetchAppVersion]);
 
   useEffect(() => {
     setUploadExcludeText(uploadIgnoreConfig.excludedPaths.join('\n'));
@@ -538,14 +533,6 @@ export function Settings() {
 
   const handleUninstall = (toolId: string) => {
     uninstallFrom(toolId);
-  };
-
-  const handleCopyCliInstallCommand = async () => {
-    if (!vshellStatus?.installCommand) return;
-
-    await navigator.clipboard.writeText(vshellStatus.installCommand);
-    setCliCommandCopied(true);
-    window.setTimeout(() => setCliCommandCopied(false), 1600);
   };
 
   const handleResetSettings = () => {
@@ -928,87 +915,47 @@ export function Settings() {
       <RecordingSection />
 
       {/* ================================================================== */}
-      {/* CLI Section */}
+      {/* Agent Gateway Section */}
       {/* ================================================================== */}
       <SettingsSection
-        icon={<Link className="w-5 h-5" />}
-        title={t('settings.cli')}
-        description={t('settings.cliDesc')}
+        icon={<Bot className="w-5 h-5" />}
+        title={t('settings.gateway')}
+        description={t('settings.gatewayDesc')}
       >
-        <div className="rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark p-4">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div className="min-w-0 flex-1 space-y-3">
+        <div className="border-y border-tokyo-bg-hl bg-tokyo-bg-dark/50">
+          <div className="flex items-center justify-between gap-4 px-4 py-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className={`h-2 w-2 flex-shrink-0 rounded-full ${gatewayStatus?.running ? 'bg-tokyo-green' : 'bg-tokyo-red'}`} />
               <div>
-                <div className="text-sm font-medium text-tokyo-fg">{t('settings.cliBundledPath')}</div>
-                <div className="mt-1 break-all rounded-md bg-tokyo-bg px-3 py-2 font-mono text-xs text-tokyo-comment">
-                  {vshellStatus?.binaryPath ?? t('common.loading')}
+                <div className="text-sm font-medium text-tokyo-fg">
+                  {gatewayStatus?.running ? t('settings.gatewayRunning') : t('settings.gatewayStopped')}
                 </div>
+                <div className="text-xs text-tokyo-comment">{t('settings.gatewaySharedGui')}</div>
               </div>
-
-              <div>
-                <div className="text-sm font-medium text-tokyo-fg">{t('settings.cliPathStatus')}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs ${
-                      vshellStatus?.pathInstalled
-                        ? 'bg-tokyo-green/10 text-tokyo-green'
-                        : 'bg-tokyo-yellow/10 text-tokyo-yellow'
-                    }`}
-                  >
-                    {vshellStatus?.pathInstalled ? (
-                      <Check className="h-3 w-3" />
-                    ) : (
-                      <Link className="h-3 w-3" />
-                    )}
-                    {vshellStatus?.pathInstalled
-                      ? t('settings.cliPathInstalled')
-                      : t('settings.cliPathMissing')}
-                  </span>
-                  {vshellStatus?.pathEntry && (
-                    <span className="break-all font-mono text-xs text-tokyo-comment">
-                      {vshellStatus.pathEntry}
-                    </span>
-                  )}
-                </div>
-                {vshellStatus?.pathInstalled && !vshellStatus.pathMatchesBinary && (
-                  <p className="mt-2 text-xs text-tokyo-yellow">{t('settings.cliPathDifferent')}</p>
-                )}
-              </div>
-
-              {cliInstallMessage && (
-                <div className="rounded-md border border-tokyo-green/30 bg-tokyo-green/10 px-3 py-2 text-sm text-tokyo-green">
-                  {cliInstallMessage}
-                </div>
-              )}
             </div>
-
-            <div className="flex flex-shrink-0 flex-wrap gap-2 md:justify-end">
-              <button
-                onClick={() => installVshellToPath()}
-                disabled={cliInstallLoading || !vshellStatus?.binaryExists}
-                className="inline-flex items-center gap-2 rounded-lg bg-tokyo-blue px-4 py-2 text-sm text-tokyo-on-accent
-                           transition-colors hover:bg-tokyo-blue/80
-                           disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Link className="h-4 w-4" />
-                {cliInstallLoading ? t('settings.cliInstalling') : t('settings.cliInstallToPath')}
-              </button>
-              <button
-                onClick={handleCopyCliInstallCommand}
-                disabled={!vshellStatus?.installCommand}
-                className="inline-flex items-center gap-2 rounded-lg border border-tokyo-bg-hl px-4 py-2 text-sm text-tokyo-fg
-                           transition-colors hover:bg-tokyo-bg-hl hover:text-tokyo-fg
-                           disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {cliCommandCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                {cliCommandCopied ? t('common.copied') : t('settings.cliCopyInstallCommand')}
-              </button>
-            </div>
+            <button
+              className="icon-button tooltip-button"
+              data-tooltip={t('settings.gatewayRefresh')}
+              onClick={() => fetchGatewayStatus()}
+              aria-label={t('settings.gatewayRefresh')}
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
           </div>
-
-          {!vshellStatus?.binaryExists && (
-            <p className="mt-3 text-sm text-tokyo-red">{t('settings.cliBinaryMissing')}</p>
-          )}
+          <dl className="divide-y divide-tokyo-bg-hl border-t border-tokyo-bg-hl text-sm">
+            <div className="grid gap-1 px-4 py-3 sm:grid-cols-[9rem_minmax(0,1fr)]">
+              <dt className="text-tokyo-comment">{t('settings.gatewayEndpoint')}</dt>
+              <dd className="break-all font-mono text-xs text-tokyo-fg">{gatewayStatus?.endpoint ?? t('common.loading')}</dd>
+            </div>
+            <div className="grid gap-1 px-4 py-3 sm:grid-cols-[9rem_minmax(0,1fr)]">
+              <dt className="text-tokyo-comment">{t('settings.gatewayManifest')}</dt>
+              <dd className="break-all font-mono text-xs text-tokyo-fg">{gatewayStatus?.manifestPath ?? t('common.loading')}</dd>
+            </div>
+            <div className="grid gap-1 px-4 py-3 sm:grid-cols-[9rem_minmax(0,1fr)]">
+              <dt className="text-tokyo-comment">{t('settings.gatewayProtocol')}</dt>
+              <dd className="font-mono text-xs text-tokyo-fg">{gatewayStatus?.protocolVersion ?? t('common.loading')}</dd>
+            </div>
+          </dl>
         </div>
       </SettingsSection>
 

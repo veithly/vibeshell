@@ -46,7 +46,7 @@ If you have ever asked an AI coding agent to deploy, inspect logs, edit a remote
 
 ## Why It Exists
 
-Traditional SSH clients assume a single human is typing everything. AI coding agents changed that: now the operator, the CLI, and the assistant all need to see enough context to act safely.
+Traditional SSH clients assume a single human is typing everything. AI coding agents changed that: now the operator and assistant need to share enough visible context to act safely.
 
 VibeShell is designed around that new workflow:
 
@@ -91,14 +91,14 @@ VibeShell is designed around that new workflow:
 
 ### AI Agents
 
-VibeShell includes an MCP server plus a skill installer for AI coding tools. The installer detects tools such as Claude Code, Codex, Cursor, Open Code, Gemini CLI, Windsurf, Roo Code, Continue, Kiro, Trae, OpenHands, and more, then installs a VibeShell skill so the agent knows how to use the workspace.
+VibeShell includes an authenticated Agent Gateway plus a skill installer for AI coding tools. The Gateway runs inside the visible desktop app, shares the user's sessions, and can be launched on demand by the installed skill. The installer detects tools such as Claude Code, Codex, Cursor, Open Code, Gemini CLI, Windsurf, Roo Code, Continue, Kiro, Trae, OpenHands, and more.
 
-The MCP layer currently exposes 25 tools, including:
+The Gateway currently exposes 28 MCP tools, including:
 
 | Area | Tools |
 | --- | --- |
 | Server inventory | `server_list`, `server_add`, `server_get`, `server_update`, `server_delete` |
-| Sessions | `session_list`, `session_create`, `session_attach`, `session_detach`, `session_kill` |
+| Sessions | `session_list`, `session_create`, `session_attach`, `session_detach`, `session_kill`, `session_send_input`, `session_read`, `session_resize` |
 | Remote commands | `exec`, `rg` |
 | SFTP | `sftp_ls`, `sftp_upload`, `sftp_upload_directory`, `sftp_sync_directory`, `sftp_download`, `sftp_mkdir`, `sftp_rm`, `sftp_mv`, `sftp_read`, `sftp_write` |
 | File editing | `get_content`, `edit_file`, `add_file` |
@@ -131,24 +131,23 @@ VibeShell
 │  ├─ SQLite storage and encrypted credentials
 │  ├─ SSH tunnel manager
 │  ├─ local shell manager
-│  └─ MCP HTTP + stdio transports
-└─ vshell CLI
-   ├─ SSH/SFTP/session commands
-   └─ headless service and AI-tool installer
+│  ├─ authenticated Agent Gateway with per-launch discovery
+│  └─ MCP tools sharing the GUI session manager
+└─ AI-tool skill installer
 ```
 
 ## Install
 
 Download the latest installer from [GitHub Releases](https://github.com/veithly/vibeshell/releases).
 
-| Platform | Desktop app | CLI sidecar |
-| --- | --- | --- |
-| Windows x64 | `.exe` / `.msi` | `vshell-windows-x64.exe` |
-| macOS Apple Silicon | `.dmg` | `vshell-macos-arm64` |
-| macOS Intel | `.dmg` | `vshell-macos-x64` |
-| Linux x64 | `.deb` / `.AppImage` / `.rpm` | `vshell-linux-x64` |
+| Platform | Desktop app |
+| --- | --- |
+| Windows x64 | `.exe` / `.msi` |
+| macOS Apple Silicon | `.dmg` |
+| macOS Intel | `.dmg` |
+| Linux x64 | `.deb` / `.AppImage` / `.rpm` |
 
-The desktop installer bundles `vshell`, so terminal-native workflows and AI-tool integrations can use the same VibeShell workspace.
+The desktop installer contains the Gateway directly. AI tools launch or focus VibeShell and operate the same sessions shown in the GUI without installing a CLI or modifying `PATH`.
 
 ## Build From Source
 
@@ -183,7 +182,7 @@ npm run build
 cargo check
 cargo test
 
-# Desktop app; release CI builds and copies the vshell sidecar first.
+# Desktop app with built-in Agent Gateway.
 npx tauri build
 ```
 
@@ -193,7 +192,7 @@ Windows installer packaging:
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/build-msi.ps1 -NoPause
 ```
 
-The Windows packaging script builds the `vshell` CLI in release mode, copies it to the Tauri sidecar location, and produces NSIS and MSI installers.
+The Windows packaging script produces NSIS and MSI installers with the built-in Agent Gateway.
 
 ## CI And Release
 
@@ -219,7 +218,7 @@ src-tauri/src/ssh/      SSH client and host fingerprints
 src-tauri/src/sftp/     SFTP operations and sync helpers
 src-tauri/src/mcp/      MCP tools and transports
 src-tauri/src/install/  AI tool detection and skill installer
-cli/                    vshell CLI companion
+cli/                    optional standalone CLI source for legacy workflows
 docs/                   Design notes, plans, and README screenshots
 ```
 

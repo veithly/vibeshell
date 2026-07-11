@@ -8,10 +8,12 @@ import {
   Terminal as TerminalIcon,
   ArrowRightLeft,
   Columns2,
+  LayoutGrid,
   Rows2,
   PanelRightClose,
   Loader2,
   X,
+  Bot,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { safeInvoke } from './lib/tauri';
@@ -31,6 +33,7 @@ import { SelectServerDialog } from './components/SelectServerDialog';
 import { QuickCommandDialog } from './components/QuickCommandDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Notifications } from './components/Notifications';
+import { AgentActivityPanel } from './components/AgentActivityPanel';
 import { FingerprintVerificationDialog, FingerprintManagerDialog } from './components/FingerprintDialog';
 import { SnippetManagerDialog } from './components/SnippetManager/SnippetManagerDialog';
 import { TunnelPanelDialog } from './components/TunnelPanel/TunnelPanelDialog';
@@ -39,8 +42,10 @@ import type { TerminalHandle } from './components/Terminal';
 import {
   MAX_TERMINAL_PANES,
   addTerminalPane,
+  getTerminalGridTracks,
   removeTerminalPane,
   syncTerminalPanes,
+  type TerminalPaneLayout,
 } from './lib/splitPanes';
 
 const Settings = lazy(() => import('./components/Settings').then((mod) => ({ default: mod.Settings })));
@@ -76,12 +81,13 @@ function App() {
   const [isSnippetManagerOpen, setIsSnippetManagerOpen] = useState(false);
   const [isTunnelPanelOpen, setIsTunnelPanelOpen] = useState(false);
   const [isSftpOpen, setIsSftpOpen] = useState(false);
+  const [isAgentActivityOpen, setIsAgentActivityOpen] = useState(false);
   const [serverToConnect, setServerToConnect] = useState<Server | null>(null);
   const [connectForceNew, setConnectForceNew] = useState(false);
   const [serverToEdit, setServerToEdit] = useState<Server | null>(null);
   const [sessionToClose, setSessionToClose] = useState<string | null>(null);
   const [terminalPaneIds, setTerminalPaneIds] = useState<string[]>([]);
-  const [splitOrientation, setSplitOrientation] = useState<'columns' | 'rows'>('columns');
+  const [terminalPaneLayout, setTerminalPaneLayout] = useState<TerminalPaneLayout>('grid');
   const [isCreatingTerminalPane, setIsCreatingTerminalPane] = useState(false);
 
   const terminalRef = useRef<TerminalHandle>(null);
@@ -237,6 +243,11 @@ function App() {
   const visiblePaneIds = useMemo(
     () => syncTerminalPanes(terminalPaneIds, sessions.map((session) => session.id), activeSessionId),
     [activeSessionId, sessions, terminalPaneIds]
+  );
+
+  const terminalGridTracks = useMemo(
+    () => getTerminalGridTracks(terminalPaneLayout, visiblePaneIds.length),
+    [terminalPaneLayout, visiblePaneIds.length]
   );
 
   useEffect(() => {
@@ -437,12 +448,29 @@ function App() {
       return;
     }
 
+    if (!isSftpOpen) {
+      setIsAgentActivityOpen(false);
+    }
     sftpPanelRef.current?.toggle();
-  }, [activeSession, notifyWarning]);
+  }, [activeSession, isSftpOpen, notifyWarning]);
+
+  const handleOpenAgentActivity = useCallback(() => {
+    setIsAgentActivityOpen((current) => {
+      const next = !current;
+      if (next && isSftpOpen) {
+        sftpPanelRef.current?.toggle();
+      }
+      return next;
+    });
+  }, [isSftpOpen]);
 
   const handleSftpCollapsedChange = useCallback((collapsed: boolean) => {
     setIsSftpOpen(!collapsed);
   }, []);
+
+  const handleGatewaySessionsChanged = useCallback(() => {
+    void syncRemoteSessions();
+  }, [syncRemoteSessions]);
 
   const handleData = useCallback((_data: string) => {
   }, []);
@@ -530,6 +558,15 @@ function App() {
                     <TerminalIcon className="h-4 w-4" />
                   </button>
                   <button
+                    className={cn('icon-button tooltip-button', isAgentActivityOpen && 'is-active')}
+                    data-tooltip={t('agentActivity.title')}
+                    onClick={handleOpenAgentActivity}
+                    aria-pressed={isAgentActivityOpen}
+                    aria-label={t('agentActivity.title')}
+                  >
+                    <Bot className="h-4 w-4" />
+                  </button>
+                  <button
                     className={cn('icon-button tooltip-button', isSftpOpen && 'is-active')}
                     data-tooltip={t('sidebar.sftp')}
                     onClick={handleOpenSftp}
@@ -553,12 +590,31 @@ function App() {
                   {visiblePaneIds.length > 1 && (
                     <>
                       <button
-                        className="icon-button tooltip-button"
-                        data-tooltip={splitOrientation === 'columns' ? t('session.arrangeRows') : t('session.arrangeColumns')}
-                        onClick={() => setSplitOrientation((current) => current === 'columns' ? 'rows' : 'columns')}
-                        aria-label={splitOrientation === 'columns' ? t('session.arrangeRows') : t('session.arrangeColumns')}
+                        className={cn('icon-button tooltip-button', terminalPaneLayout === 'grid' && 'is-active')}
+                        data-tooltip={t('session.arrangeGrid')}
+                        onClick={() => setTerminalPaneLayout('grid')}
+                        aria-label={t('session.arrangeGrid')}
+                        aria-pressed={terminalPaneLayout === 'grid'}
                       >
-                        {splitOrientation === 'columns' ? <Rows2 className="h-4 w-4" /> : <Columns2 className="h-4 w-4" />}
+                        <LayoutGrid className="h-4 w-4" />
+                      </button>
+                      <button
+                        className={cn('icon-button tooltip-button', terminalPaneLayout === 'columns' && 'is-active')}
+                        data-tooltip={t('session.arrangeColumns')}
+                        onClick={() => setTerminalPaneLayout('columns')}
+                        aria-label={t('session.arrangeColumns')}
+                        aria-pressed={terminalPaneLayout === 'columns'}
+                      >
+                        <Columns2 className="h-4 w-4" />
+                      </button>
+                      <button
+                        className={cn('icon-button tooltip-button', terminalPaneLayout === 'rows' && 'is-active')}
+                        data-tooltip={t('session.arrangeRows')}
+                        onClick={() => setTerminalPaneLayout('rows')}
+                        aria-label={t('session.arrangeRows')}
+                        aria-pressed={terminalPaneLayout === 'rows'}
+                      >
+                        <Rows2 className="h-4 w-4" />
                       </button>
                       <button
                         className="icon-button tooltip-button"
@@ -583,9 +639,10 @@ function App() {
                   <>
                     <div
                       className="relative grid min-h-0 flex-1 gap-2 p-2"
-                      style={splitOrientation === 'columns'
-                        ? { gridTemplateColumns: `repeat(${Math.max(1, visiblePaneIds.length)}, minmax(0, 1fr))` }
-                        : { gridTemplateRows: `repeat(${Math.max(1, visiblePaneIds.length)}, minmax(0, 1fr))` }}
+                      style={{
+                        gridTemplateColumns: `repeat(${terminalGridTracks.columns}, minmax(0, 1fr))`,
+                        gridTemplateRows: `repeat(${terminalGridTracks.rows}, minmax(0, 1fr))`,
+                      }}
                     >
                     {sessions.map((session) => (
                       <div
@@ -653,6 +710,11 @@ function App() {
                 defaultCollapsed={true}
                 dock="right"
                 onCollapsedChange={handleSftpCollapsedChange}
+              />
+              <AgentActivityPanel
+                open={isAgentActivityOpen}
+                onClose={() => setIsAgentActivityOpen(false)}
+                onSessionsChanged={handleGatewaySessionsChanged}
               />
             </div>
           </main>

@@ -6,9 +6,18 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use axum::{
+    extract::{Request, State},
+    http::{header, HeaderValue, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use subtle::ConstantTimeEq;
+use uuid::Uuid;
 
 use crate::remote_tools::{build_remote_rg_command, RemoteSearchOptions};
 use crate::session::SessionManager;
@@ -26,7 +35,7 @@ use crate::storage::Database;
 use super::tools::get_tool_definitions;
 
 /// MCP protocol version
-const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
 /// Server name for MCP identification
 const SERVER_NAME: &str = "vibeshell";
@@ -41,6 +50,50 @@ pub struct McpState {
     pub database: Arc<Database>,
     /// Session manager for SSH sessions
     pub session_manager: Arc<SessionManager>,
+    activity_emitter: Option<Arc<dyn Fn(AgentActivityEvent) + Send + Sync>>,
+}
+
+impl McpState {
+    pub fn new(database: Arc<Database>, session_manager: Arc<SessionManager>) -> Self {
+        Self {
+            database,
+            session_manager,
+            activity_emitter: None,
+        }
+    }
+
+    pub fn with_activity_emitter(
+        mut self,
+        emitter: Arc<dyn Fn(AgentActivityEvent) + Send + Sync>,
+    ) -> Self {
+        self.activity_emitter = Some(emitter);
+        self
+    }
+
+    fn emit_activity(&self, event: AgentActivityEvent) {
+        if let Some(emitter) = &self.activity_emitter {
+            emitter(event);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentActivityEvent {
+    pub id: String,
+    pub tool: String,
+    pub summary: String,
+    pub status: AgentActivityStatus,
+    pub session_id: Option<String>,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentActivityStatus {
+    Started,
+    Succeeded,
+    Failed,
 }
 
 /// MCP Server
@@ -52,28 +105,71 @@ impl McpServer {
     /// Create a new MCP server with the given database and session manager
     pub fn new(database: Arc<Database>, session_manager: Arc<SessionManager>) -> Self {
         Self {
-            state: McpState {
-                database,
-                session_manager,
-            },
+            state: McpState::new(database, session_manager),
         }
     }
 
-    /// Run the MCP server on the specified port
-    pub async fn run(&self, port: u16) -> Result<()> {
-        let app = Router::new()
+    pub fn with_activity_emitter(
+        mut self,
+        emitter: Arc<dyn Fn(AgentActivityEvent) + Send + Sync>,
+    ) -> Self {
+        self.state = self.state.with_activity_emitter(emitter);
+        self
+    }
+
+    pub fn router(&self, bearer_token: String) -> Router {
+        Router::new()
+            .route("/health", get(handle_health))
             .route("/", post(handle_jsonrpc))
             .route("/mcp", post(handle_jsonrpc))
-            .with_state(self.state.clone());
-
-        let addr = format!("127.0.0.1:{}", port);
-        println!("MCP server listening on http://{}", addr);
-
-        let listener = tokio::net::TcpListener::bind(&addr).await?;
-        axum::serve(listener, app).await?;
-
-        Ok(())
+            .with_state(self.state.clone())
+            .layer(middleware::from_fn_with_state(
+                Arc::new(bearer_token),
+                require_bearer_token,
+            ))
     }
+}
+
+async fn require_bearer_token(
+    State(expected): State<Arc<String>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let provided = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+
+    let authorized = provided
+        .map(|token| bool::from(token.as_bytes().ct_eq(expected.as_bytes())))
+        .unwrap_or(false);
+
+    if !authorized {
+        let mut response = (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn handle_health() -> Json<Value> {
+    Json(json!({
+        "status": "ok",
+        "server": SERVER_NAME,
+        "version": SERVER_VERSION,
+        "protocolVersion": MCP_PROTOCOL_VERSION
+    }))
 }
 
 // === JSON-RPC 2.0 Types ===
@@ -164,6 +260,8 @@ async fn handle_jsonrpc(
     // Route to appropriate handler
     let result = match request.method.as_str() {
         "initialize" => handle_initialize(request.params).await,
+        "notifications/initialized" => Ok(json!({})),
+        "ping" => Ok(json!({})),
         "tools/list" => handle_tools_list().await,
         "tools/call" => handle_tools_call(&state, request.params).await,
         _ => Err((
@@ -221,25 +319,95 @@ async fn handle_tools_call(
         .ok_or((INVALID_PARAMS, "Missing tool name".to_string()))?;
 
     let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
+    let activity_id = Uuid::new_v4().to_string();
+    let summary = activity_summary(name, &arguments);
+    let session_id = arguments
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+
+    state.emit_activity(AgentActivityEvent {
+        id: activity_id.clone(),
+        tool: name.to_string(),
+        summary: summary.clone(),
+        status: AgentActivityStatus::Started,
+        session_id: session_id.clone(),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+    });
 
     // Execute the tool
     let result = execute_tool(state, name, &arguments).await;
 
     match result {
-        Ok(content) => Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": content
-            }]
-        })),
-        Err(err) => Ok(json!({
-            "content": [{
-                "type": "text",
-                "text": format!("Error: {}", err)
-            }],
-            "isError": true
-        })),
+        Ok(content) => {
+            state.emit_activity(AgentActivityEvent {
+                id: activity_id,
+                tool: name.to_string(),
+                summary,
+                status: AgentActivityStatus::Succeeded,
+                session_id,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+            });
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": content
+                }]
+            }))
+        }
+        Err(err) => {
+            state.emit_activity(AgentActivityEvent {
+                id: activity_id,
+                tool: name.to_string(),
+                summary,
+                status: AgentActivityStatus::Failed,
+                session_id,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+            });
+            Ok(json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Error: {}", err)
+                }],
+                "isError": true
+            }))
+        }
     }
+}
+
+fn activity_summary(name: &str, args: &Value) -> String {
+    let detail = match name {
+        "exec" => args.get("command").and_then(Value::as_str),
+        "session_create" => args
+            .get("server_name")
+            .or_else(|| args.get("server_id"))
+            .and_then(Value::as_str),
+        "session_send_input" => args.get("data").and_then(Value::as_str),
+        "sftp_ls" | "sftp_mkdir" | "sftp_rm" | "sftp_read" | "sftp_write" | "get_content"
+        | "edit_file" | "add_file" => args.get("path").and_then(Value::as_str),
+        "sftp_upload" | "sftp_upload_directory" | "sftp_sync_directory" => args
+            .get("remote_path")
+            .or_else(|| args.get("local_path"))
+            .and_then(Value::as_str),
+        "sftp_download" => args
+            .get("remote_path")
+            .or_else(|| args.get("local_path"))
+            .and_then(Value::as_str),
+        "sftp_mv" => args.get("source").and_then(Value::as_str),
+        "rg" => args.get("pattern").and_then(Value::as_str),
+        _ => args.get("session_id").and_then(Value::as_str),
+    };
+
+    let Some(detail) = detail else {
+        return name.replace('_', " ");
+    };
+    let detail = detail.replace(['\r', '\n'], " ");
+    let detail = if detail.chars().count() > 160 {
+        format!("{}...", detail.chars().take(157).collect::<String>())
+    } else {
+        detail
+    };
+    format!("{}: {}", name.replace('_', " "), detail)
 }
 
 // === Tool Execution ===
@@ -268,6 +436,9 @@ async fn execute_tool(state: &McpState, name: &str, args: &Value) -> Result<Stri
         "session_attach" => tool_session_attach(state, args).await,
         "session_detach" => tool_session_detach(state, args).await,
         "session_kill" => tool_session_kill(state, args).await,
+        "session_send_input" => tool_session_send_input(state, args).await,
+        "session_read" => tool_session_read(state, args).await,
+        "session_resize" => tool_session_resize(state, args).await,
 
         // Command Execution
         "exec" => tool_exec(state, args).await,
@@ -477,6 +648,22 @@ async fn tool_session_create(state: &McpState, args: &Value) -> Result<String, S
         return Err("Either 'server_id' or 'server_name' must be provided".to_string());
     };
 
+    let force_new = args
+        .get("force_new")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    if !force_new {
+        if let Some(session) = state
+            .session_manager
+            .find_reusable_by_server_name(&server_name)
+            .await
+        {
+            return serde_json::to_string_pretty(&session.get_info().await)
+                .map_err(|error| error.to_string());
+        }
+    }
+
     // Look up saved credentials for this server
     let cred = state
         .database
@@ -504,10 +691,14 @@ async fn tool_session_create(state: &McpState, args: &Value) -> Result<String, S
         }
     };
 
-    // Create session with actual SSH connection (no PTY needed for exec/SFTP)
+    // Create a real terminal session so the GUI and Agent share the same PTY.
     let session = state
         .session_manager
-        .create_with_credentials(&server_name, ssh_cred, None)
+        .create_with_credentials(
+            &server_name,
+            ssh_cred,
+            Some(crate::ssh::PtyConfig::default()),
+        )
         .await
         .map_err(|e| format!("Failed to connect to '{}': {}", server_name, e))?;
 
@@ -581,6 +772,124 @@ async fn tool_session_kill(state: &McpState, args: &Value) -> Result<String, Str
 
         Ok(format!("Session '{}' terminated", session_id))
     }
+}
+
+async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<String, String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or("Missing required field: session_id")?;
+    let mut data = args
+        .get("data")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .as_bytes()
+        .to_vec();
+
+    if let Some(keys) = args.get("keys").and_then(Value::as_array) {
+        for key in keys {
+            let key = key.as_str().ok_or("keys must contain strings")?;
+            data.extend_from_slice(named_key_bytes(key)?);
+        }
+    }
+
+    if args
+        .get("append_enter")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        data.push(b'\r');
+    }
+
+    if data.is_empty() {
+        return Err("Provide data, keys, or append_enter=true".to_string());
+    }
+
+    let session = state
+        .session_manager
+        .get(session_id)
+        .await
+        .ok_or("Session not found")?;
+    session
+        .send_input(data.clone())
+        .await
+        .map_err(|error| format!("Failed to send terminal input: {}", error))?;
+
+    Ok(format!(
+        "Sent {} byte(s) to session '{}'",
+        data.len(),
+        session_id
+    ))
+}
+
+fn named_key_bytes(key: &str) -> Result<&'static [u8], String> {
+    match key.to_ascii_lowercase().as_str() {
+        "enter" => Ok(b"\r"),
+        "tab" => Ok(b"\t"),
+        "escape" | "esc" => Ok(b"\x1b"),
+        "backspace" => Ok(b"\x7f"),
+        "ctrl-c" => Ok(b"\x03"),
+        "ctrl-d" => Ok(b"\x04"),
+        "ctrl-z" => Ok(b"\x1a"),
+        "up" => Ok(b"\x1b[A"),
+        "down" => Ok(b"\x1b[B"),
+        "right" => Ok(b"\x1b[C"),
+        "left" => Ok(b"\x1b[D"),
+        _ => Err(format!("Unsupported named key: {}", key)),
+    }
+}
+
+async fn tool_session_read(state: &McpState, args: &Value) -> Result<String, String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or("Missing required field: session_id")?;
+    let max_bytes = args
+        .get("max_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(65_536)
+        .clamp(1, 65_536) as usize;
+    let session = state
+        .session_manager
+        .get(session_id)
+        .await
+        .ok_or("Session not found")?;
+
+    let output = session.replay_output().await.concat();
+    let start = output.len().saturating_sub(max_bytes);
+    Ok(String::from_utf8_lossy(&output[start..]).into_owned())
+}
+
+async fn tool_session_resize(state: &McpState, args: &Value) -> Result<String, String> {
+    let session_id = args
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or("Missing required field: session_id")?;
+    let cols = args
+        .get("cols")
+        .and_then(Value::as_u64)
+        .ok_or("Missing required field: cols")? as u32;
+    let rows = args
+        .get("rows")
+        .and_then(Value::as_u64)
+        .ok_or("Missing required field: rows")? as u32;
+    if cols == 0 || rows == 0 {
+        return Err("cols and rows must be greater than zero".to_string());
+    }
+
+    let session = state
+        .session_manager
+        .get(session_id)
+        .await
+        .ok_or("Session not found")?;
+    session
+        .resize_pty(cols, rows)
+        .await
+        .map_err(|error| format!("Failed to resize terminal: {}", error))?;
+    Ok(format!(
+        "Resized session '{}' to {}x{}",
+        session_id, cols, rows
+    ))
 }
 
 // === Command Execution Tool Implementation ===
@@ -1293,6 +1602,19 @@ fn replace_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use std::time::Duration;
+    use tower::ServiceExt;
+
+    fn protected_health_router(token: &str) -> Router {
+        Router::new()
+            .route("/health", get(handle_health))
+            .layer(middleware::from_fn_with_state(
+                Arc::new(token.to_string()),
+                require_bearer_token,
+            ))
+    }
 
     #[test]
     fn test_jsonrpc_response_success() {
@@ -1330,5 +1652,85 @@ mod tests {
         assert!(result["tools"].is_array());
         let tools = result["tools"].as_array().unwrap();
         assert!(!tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn gateway_rejects_missing_bearer_token() {
+        let response = protected_health_router("secret")
+            .oneshot(HttpRequest::get("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn gateway_rejects_wrong_bearer_token() {
+        let response = protected_health_router("secret")
+            .oneshot(
+                HttpRequest::get("/health")
+                    .header(header::AUTHORIZATION, "Bearer incorrect")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn gateway_accepts_matching_bearer_token_without_caching() {
+        let response = protected_health_router("secret")
+            .oneshot(
+                HttpRequest::get("/health")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    }
+
+    #[tokio::test]
+    async fn gateway_tool_call_emits_started_and_succeeded_activity() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Arc::new(Database::new_at(temp.path().join("gateway.db")).unwrap());
+        let session_manager = Arc::new(SessionManager::new(database.clone()));
+        let (activity_tx, activity_rx) = std::sync::mpsc::channel();
+        let emitter = Arc::new(move |event| {
+            activity_tx.send(event).unwrap();
+        });
+        let app = McpServer::new(database, session_manager)
+            .with_activity_emitter(emitter)
+            .router("secret".to_string());
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "session_list",
+                "arguments": {}
+            }
+        });
+
+        let response = app
+            .oneshot(
+                HttpRequest::post("/mcp")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(request.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let started = activity_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let completed = activity_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(started.id, completed.id);
+        assert_eq!(started.tool, "session_list");
+        assert_eq!(started.status, AgentActivityStatus::Started);
+        assert_eq!(completed.status, AgentActivityStatus::Succeeded);
     }
 }
