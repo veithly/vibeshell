@@ -1,0 +1,319 @@
+[
+  {
+    "schemaVersion": 1,
+    "id": "server-performance",
+    "name": "Server Performance",
+    "description": "Live CPU, memory, disk, network, load and uptime metrics for the active host.",
+    "version": "1.0.0",
+    "author": "VibeShell",
+    "category": "monitoring",
+    "icon": "activity",
+    "permissions": ["local_system_read"],
+    "sessionTypes": ["ssh", "local"],
+    "defaultSettings": { "refreshInterval": "30s", "defaultExpanded": true },
+    "entry": { "type": "native", "view": "server-status" }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "docker-containers",
+    "name": "Docker Containers",
+    "description": "Inspect containers, images, live resource usage and recent container logs through the remote Docker CLI.",
+    "version": "1.0.0",
+    "author": "VibeShell",
+    "category": "containers",
+    "icon": "box",
+    "permissions": ["remote_exec"],
+    "sessionTypes": ["ssh"],
+    "entry": {
+      "type": "commands",
+      "actions": [
+        {
+          "id": "containers",
+          "name": "Containers",
+          "description": "List running and stopped containers.",
+          "program": "docker",
+          "args": ["ps", "--all", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"],
+          "output": { "kind": "table", "columns": ["ID", "Name", "Image", "Status", "Ports"] }
+        },
+        {
+          "id": "stats",
+          "name": "Live snapshot",
+          "description": "Capture one resource-usage snapshot for running containers.",
+          "program": "docker",
+          "args": ["stats", "--no-stream", "--format", "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"],
+          "output": { "kind": "table", "columns": ["Container", "CPU", "Memory", "Network", "Block I/O"] }
+        },
+        {
+          "id": "images",
+          "name": "Images",
+          "description": "List locally available Docker images.",
+          "program": "docker",
+          "args": ["images", "--format", "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}\t{{.CreatedSince}}"],
+          "output": { "kind": "table", "columns": ["Image", "ID", "Size", "Created"] }
+        },
+        {
+          "id": "logs",
+          "name": "Container logs",
+          "description": "Read the latest 200 log lines from a container.",
+          "program": "docker",
+          "args": ["logs", "--tail", "200", "{{input.container}}"],
+          "inputs": [{ "id": "container", "label": "Container name or ID", "placeholder": "api", "required": true }]
+        },
+        {
+          "id": "inspect",
+          "name": "Inspect container",
+          "description": "Return Docker's structured container metadata.",
+          "program": "docker",
+          "args": ["inspect", "{{input.container}}"],
+          "inputs": [{ "id": "container", "label": "Container name or ID", "placeholder": "api", "required": true }]
+        },
+        {
+          "id": "exec-command",
+          "name": "Run in container",
+          "description": "Run one non-interactive shell command inside a container.",
+          "program": "docker",
+          "args": ["exec", "{{input.container}}", "sh", "-lc", "{{input.command}}"],
+          "inputs": [
+            { "id": "container", "label": "Container name or ID", "placeholder": "api", "required": true },
+            { "id": "command", "label": "Command", "placeholder": "id", "required": true }
+          ],
+          "requiresConfirmation": true
+        }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "kubernetes-pods",
+    "name": "Kubernetes Pods",
+    "description": "Inspect cluster contexts, namespaces, pods, deployments and workload logs with kubectl.",
+    "version": "1.0.0",
+    "author": "VibeShell",
+    "category": "containers",
+    "icon": "boxes",
+    "permissions": ["remote_exec"],
+    "sessionTypes": ["ssh"],
+    "entry": {
+      "type": "commands",
+      "actions": [
+        { "id": "contexts", "name": "Contexts", "description": "Show available cluster contexts.", "program": "kubectl", "args": ["config", "get-contexts"] },
+        { "id": "pods", "name": "Pods", "description": "List pods across all namespaces.", "program": "kubectl", "args": ["get", "pods", "--all-namespaces", "-o", "wide"] },
+        { "id": "deployments", "name": "Deployments", "description": "List deployments across all namespaces.", "program": "kubectl", "args": ["get", "deployments", "--all-namespaces", "-o", "wide"] },
+        { "id": "events", "name": "Recent events", "description": "Show recent cluster events.", "program": "kubectl", "args": ["get", "events", "--all-namespaces", "--sort-by=.lastTimestamp"] },
+        {
+          "id": "pod-logs",
+          "name": "Pod logs",
+          "description": "Read the latest 200 log lines from a pod.",
+          "program": "kubectl",
+          "args": ["logs", "-n", "{{input.namespace}}", "{{input.pod}}", "--tail=200"],
+          "inputs": [
+            { "id": "namespace", "label": "Namespace", "placeholder": "default", "required": true },
+            { "id": "pod", "label": "Pod", "placeholder": "api-6f8c9d", "required": true }
+          ]
+        },
+        {
+          "id": "describe-pod",
+          "name": "Describe pod",
+          "description": "Show pod status, conditions, mounts and recent events.",
+          "program": "kubectl",
+          "args": ["describe", "pod", "-n", "{{input.namespace}}", "{{input.pod}}"],
+          "inputs": [
+            { "id": "namespace", "label": "Namespace", "placeholder": "default", "required": true },
+            { "id": "pod", "label": "Pod", "placeholder": "api-6f8c9d", "required": true }
+          ]
+        },
+        {
+          "id": "exec-command",
+          "name": "Run in Pod container",
+          "description": "Run one non-interactive shell command inside a selected Pod container.",
+          "program": "kubectl",
+          "args": ["exec", "-n", "{{input.namespace}}", "{{input.pod}}", "-c", "{{input.container}}", "--", "sh", "-lc", "{{input.command}}"],
+          "inputs": [
+            { "id": "namespace", "label": "Namespace", "placeholder": "default", "required": true },
+            { "id": "pod", "label": "Pod", "placeholder": "api-6f8c9d", "required": true },
+            { "id": "container", "label": "Container", "placeholder": "api", "required": true },
+            { "id": "command", "label": "Command", "placeholder": "id", "required": true }
+          ],
+          "requiresConfirmation": true
+        }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "database-inspector",
+    "name": "Database Inspector",
+    "description": "Read PostgreSQL, MySQL and SQLite metadata using credentials already configured on the remote server.",
+    "version": "1.0.0",
+    "author": "VibeShell",
+    "category": "data",
+    "icon": "database",
+    "permissions": ["remote_exec"],
+    "sessionTypes": ["ssh"],
+    "entry": {
+      "type": "commands",
+      "actions": [
+        { "id": "postgres-databases", "name": "PostgreSQL databases", "description": "List non-template PostgreSQL databases.", "program": "psql", "args": ["-Atqc", "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY datname;"] },
+        {
+          "id": "postgres-tables",
+          "name": "PostgreSQL tables",
+          "description": "List user tables in a PostgreSQL database.",
+          "program": "psql",
+          "args": ["-d", "{{input.database}}", "-Atqc", "SELECT schemaname || '.' || tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') ORDER BY 1;"],
+          "inputs": [{ "id": "database", "label": "Database", "placeholder": "app", "required": true }]
+        },
+        {
+          "id": "postgres-query",
+          "name": "PostgreSQL query",
+          "description": "Run one SQL statement using the remote psql authentication context.",
+          "program": "psql",
+          "args": ["-d", "{{input.database}}", "--pset", "pager=off", "--command", "{{input.query}}"],
+          "inputs": [
+            { "id": "database", "label": "Database", "placeholder": "app", "required": true },
+            { "id": "query", "label": "SQL", "placeholder": "SELECT now();", "required": true }
+          ],
+          "requiresConfirmation": true
+        },
+        { "id": "mysql-databases", "name": "MySQL databases", "description": "List databases visible to the configured MySQL client.", "program": "mysql", "args": ["--batch", "--skip-column-names", "--execute", "SHOW DATABASES;"] },
+        {
+          "id": "mysql-tables",
+          "name": "MySQL tables",
+          "description": "List tables in a MySQL database.",
+          "program": "mysql",
+          "args": ["--batch", "--skip-column-names", "{{input.database}}", "--execute", "SHOW TABLES;"],
+          "inputs": [{ "id": "database", "label": "Database", "placeholder": "app", "required": true }]
+        },
+        {
+          "id": "mysql-query",
+          "name": "MySQL query",
+          "description": "Run one SQL statement using the remote mysql authentication context.",
+          "program": "mysql",
+          "args": ["--table", "{{input.database}}", "--execute", "{{input.query}}"],
+          "inputs": [
+            { "id": "database", "label": "Database", "placeholder": "app", "required": true },
+            { "id": "query", "label": "SQL", "placeholder": "SELECT NOW();", "required": true }
+          ],
+          "requiresConfirmation": true
+        },
+        { "id": "sqlite-files", "name": "SQLite files", "description": "Find common SQLite database files below the remote login directory.", "program": "find", "args": [".", "-maxdepth", "4", "-type", "f", "(", "-name", "*.db", "-o", "-name", "*.sqlite", "-o", "-name", "*.sqlite3", ")"] },
+        {
+          "id": "sqlite-query",
+          "name": "SQLite query",
+          "description": "Open a SQLite file and run one SQL statement.",
+          "program": "sqlite3",
+          "args": ["-header", "-column", "{{input.path}}", "{{input.query}}"],
+          "inputs": [
+            { "id": "path", "label": "Database file", "placeholder": "./app.db", "required": true },
+            { "id": "query", "label": "SQL", "placeholder": "SELECT name FROM sqlite_master;", "required": true }
+          ],
+          "requiresConfirmation": true
+        }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "process-explorer",
+    "name": "Process Explorer",
+    "description": "Inspect active processes and resource consumption without interrupting the terminal.",
+    "version": "1.0.0",
+    "author": "VibeShell",
+    "category": "operations",
+    "icon": "cpu",
+    "permissions": ["remote_exec"],
+    "sessionTypes": ["ssh"],
+    "entry": {
+      "type": "commands",
+      "actions": [
+        { "id": "top-cpu", "name": "CPU usage", "description": "Sort processes by current CPU usage.", "program": "ps", "args": ["-eo", "pid,ppid,user,%cpu,%mem,etime,comm", "--sort=-%cpu"] },
+        { "id": "top-memory", "name": "Memory usage", "description": "Sort processes by current memory usage.", "program": "ps", "args": ["-eo", "pid,ppid,user,%mem,%cpu,rss,etime,comm", "--sort=-%mem"] }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "system-logs",
+    "name": "System Logs",
+    "description": "Read recent systemd journal entries and service logs from the active server.",
+    "version": "1.0.0",
+    "author": "VibeShell",
+    "category": "operations",
+    "icon": "file-text",
+    "permissions": ["remote_exec"],
+    "sessionTypes": ["ssh"],
+    "entry": {
+      "type": "commands",
+      "actions": [
+        { "id": "recent", "name": "Recent system log", "description": "Read the latest 200 journal entries.", "program": "journalctl", "args": ["--no-pager", "-n", "200"] },
+        {
+          "id": "service",
+          "name": "Service log",
+          "description": "Read the latest 200 entries for one systemd unit.",
+          "program": "journalctl",
+          "args": ["--no-pager", "-n", "200", "-u", "{{input.service}}"],
+          "inputs": [{ "id": "service", "label": "Service", "placeholder": "nginx.service", "required": true }]
+        }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "network-inspector",
+    "name": "Network Inspector",
+    "description": "Inspect listening sockets, routes and DNS configuration on the connected server.",
+    "version": "1.0.0",
+    "author": "VibeShell",
+    "category": "network",
+    "icon": "network",
+    "permissions": ["remote_exec"],
+    "sessionTypes": ["ssh"],
+    "entry": {
+      "type": "commands",
+      "actions": [
+        { "id": "sockets", "name": "Listening sockets", "description": "Show listening TCP and UDP sockets with owning processes.", "program": "ss", "args": ["-lntup"] },
+        { "id": "routes", "name": "Routes", "description": "Show the active IP routing table.", "program": "ip", "args": ["route", "show"] },
+        { "id": "addresses", "name": "Addresses", "description": "Show network interfaces and addresses.", "program": "ip", "args": ["address", "show"] },
+        { "id": "dns", "name": "DNS configuration", "description": "Show resolver configuration.", "program": "resolvectl", "args": ["status"] }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "disk-usage",
+    "name": "Disk Usage",
+    "description": "Inspect filesystems and directory usage before a full disk becomes an incident.",
+    "version": "1.0.0",
+    "author": "VibeShell",
+    "category": "monitoring",
+    "icon": "hard-drive",
+    "permissions": ["remote_exec"],
+    "sessionTypes": ["ssh"],
+    "entry": {
+      "type": "commands",
+      "actions": [
+        { "id": "filesystems", "name": "Filesystems", "description": "Show mounted filesystem capacity and usage.", "program": "df", "args": ["-P", "-h"] },
+        { "id": "current-directory", "name": "Current directory", "description": "Summarize first-level disk usage in the current directory.", "program": "du", "args": ["-h", "-d", "1", "."] }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "id": "git-workspace",
+    "name": "Git Workspace",
+    "description": "Inspect repository status, branches and recent commits in the remote login directory.",
+    "version": "1.0.0",
+    "author": "VibeShell",
+    "category": "developer",
+    "icon": "git-branch",
+    "permissions": ["remote_exec"],
+    "sessionTypes": ["ssh"],
+    "entry": {
+      "type": "commands",
+      "actions": [
+        { "id": "status", "name": "Status", "description": "Show branch and working tree state.", "program": "git", "args": ["status", "--short", "--branch"] },
+        { "id": "branches", "name": "Branches", "description": "Show local branches and upstream tracking.", "program": "git", "args": ["branch", "--verbose", "--verbose"] },
+        { "id": "history", "name": "Recent history", "description": "Show the latest 30 commits.", "program": "git", "args": ["log", "--oneline", "--decorate", "-n", "30"] }
+      ]
+    }
+  }
+]

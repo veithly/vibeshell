@@ -280,6 +280,93 @@
     }
   },
 
+  "plugins": {
+    "marketplace": "Plugin Marketplace",
+    "workspace": "Session plugins",
+    "registry": "Operations registry",
+    "installedCount": "{{count}} installed",
+    "categories": "Plugin categories",
+    "allCategories": "All plugins",
+    "search": "Search plugins, tools, and authors",
+    "importManifest": "Import manifest",
+    "loading": "Loading plugin catalog...",
+    "noResults": "No plugins match this view.",
+    "hostRendered": "Host-rendered plugins",
+    "hostRenderedDesc": "External plugins use validated manifests and never inject JavaScript into the terminal window.",
+    "install": "Install",
+    "uninstall": "Uninstall",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "uninstallConfirm": "Uninstall {{name}}?",
+    "externalEnableConfirm": "{{name}} is an unsigned local plugin. Enabling it allows its declared commands to run on connected servers. Continue?",
+    "actionConfirm": "Run {{name}} on the active server? Review the values before continuing.",
+    "noCompatiblePlugins": "No enabled plugins support this session.",
+    "openMarketplace": "Open marketplace",
+    "run": "Run",
+    "runAgain": "Run again",
+    "readyToRun": "Choose an action and run it against the active session.",
+    "outputTruncated": "Output truncated",
+    "tableRowsTruncated": "Showing first 1,000 rows",
+    "filter": {
+      "all": "All",
+      "installed": "Installed"
+    },
+    "source": {
+      "builtin": "Built-in",
+      "external": "Local unsigned"
+    },
+    "permission": {
+      "remote_exec": "Remote command",
+      "local_system_read": "System metrics"
+    },
+    "category": {
+      "monitoring": "Monitoring",
+      "containers": "Containers",
+      "data": "Data",
+      "operations": "Operations",
+      "network": "Network",
+      "developer": "Developer"
+    },
+    "catalog": {
+      "server-performance": {
+        "name": "Server Performance",
+        "description": "Live CPU, memory, disk, network, load and uptime metrics for the active host."
+      },
+      "docker-containers": {
+        "name": "Docker Containers",
+        "description": "Inspect containers, images, live resource usage and recent container logs through the remote Docker CLI."
+      },
+      "kubernetes-pods": {
+        "name": "Kubernetes Pods",
+        "description": "Inspect cluster contexts, namespaces, pods, deployments and workload logs with kubectl."
+      },
+      "database-inspector": {
+        "name": "Database Inspector",
+        "description": "Read PostgreSQL, MySQL and SQLite metadata using credentials already configured on the remote server."
+      },
+      "process-explorer": {
+        "name": "Process Explorer",
+        "description": "Inspect active processes and resource consumption without interrupting the terminal."
+      },
+      "system-logs": {
+        "name": "System Logs",
+        "description": "Read recent systemd journal entries and service logs from the active server."
+      },
+      "network-inspector": {
+        "name": "Network Inspector",
+        "description": "Inspect listening sockets, routes and DNS configuration on the connected server."
+      },
+      "disk-usage": {
+        "name": "Disk Usage",
+        "description": "Inspect filesystems and directory usage before a full disk becomes an incident."
+      },
+      "git-workspace": {
+        "name": "Git Workspace",
+        "description": "Inspect repository status, branches and recent commits in the remote login directory."
+      }
+    }
+  },
+
   "tunnel": {
     "title": "SSH Tunnels",
     "configCount": "{{configs}} configs · {{active}} active",

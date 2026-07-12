@@ -280,6 +280,93 @@
     }
   },
 
+  "plugins": {
+    "marketplace": "插件市场",
+    "workspace": "会话插件",
+    "registry": "运维工具目录",
+    "installedCount": "已安装 {{count}} 个",
+    "categories": "插件分类",
+    "allCategories": "全部插件",
+    "search": "搜索插件、工具或作者",
+    "importManifest": "导入 Manifest",
+    "loading": "正在加载插件目录...",
+    "noResults": "当前视图中没有匹配的插件。",
+    "hostRendered": "宿主渲染",
+    "hostRenderedDesc": "外挂插件使用经过校验的 Manifest，不会向终端窗口注入 JavaScript。",
+    "install": "安装",
+    "uninstall": "卸载",
+    "enabled": "已启用",
+    "disabled": "已停用",
+    "uninstallConfirm": "确定卸载 {{name}}？",
+    "externalEnableConfirm": "{{name}} 是未签名的本地插件。启用后，它声明的命令可以在已连接服务器上运行。是否继续？",
+    "actionConfirm": "确定在当前服务器运行“{{name}}”？继续前请检查输入内容。",
+    "noCompatiblePlugins": "没有已启用且支持当前会话的插件。",
+    "openMarketplace": "打开插件市场",
+    "run": "运行",
+    "runAgain": "再次运行",
+    "readyToRun": "选择一个操作，在当前会话中运行。",
+    "outputTruncated": "输出已截断",
+    "tableRowsTruncated": "仅显示前 1,000 行",
+    "filter": {
+      "all": "全部",
+      "installed": "已安装"
+    },
+    "source": {
+      "builtin": "内置",
+      "external": "本地未签名"
+    },
+    "permission": {
+      "remote_exec": "远程命令",
+      "local_system_read": "系统指标"
+    },
+    "category": {
+      "monitoring": "监控",
+      "containers": "容器",
+      "data": "数据",
+      "operations": "运维",
+      "network": "网络",
+      "developer": "开发"
+    },
+    "catalog": {
+      "server-performance": {
+        "name": "服务器性能",
+        "description": "查看当前主机的 CPU、内存、磁盘、网络、负载和运行时间实时指标。"
+      },
+      "docker-containers": {
+        "name": "Docker 容器",
+        "description": "通过远程 Docker CLI 查看容器、镜像、资源占用和最近日志。"
+      },
+      "kubernetes-pods": {
+        "name": "Kubernetes Pods",
+        "description": "使用 kubectl 查看集群上下文、命名空间、Pod、Deployment 和工作负载日志。"
+      },
+      "database-inspector": {
+        "name": "数据库检查器",
+        "description": "使用远程服务器已有的认证配置读取 PostgreSQL、MySQL 和 SQLite 元数据。"
+      },
+      "process-explorer": {
+        "name": "进程浏览器",
+        "description": "在不打断终端的情况下查看活动进程与资源占用。"
+      },
+      "system-logs": {
+        "name": "系统日志",
+        "description": "读取当前服务器最近的 systemd journal 和服务日志。"
+      },
+      "network-inspector": {
+        "name": "网络检查器",
+        "description": "查看已连接服务器的监听端口、路由和 DNS 配置。"
+      },
+      "disk-usage": {
+        "name": "磁盘用量",
+        "description": "检查文件系统和目录用量，提前发现磁盘容量问题。"
+      },
+      "git-workspace": {
+        "name": "Git 工作区",
+        "description": "查看远程登录目录中的仓库状态、分支和最近提交。"
+      }
+    }
+  },
+
   "tunnel": {
     "title": "SSH 隧道",
     "configCount": "{{configs}} 个配置 · {{active}} 个活跃",

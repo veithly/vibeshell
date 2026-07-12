@@ -398,3 +398,68 @@
 .xterm-viewport::-webkit-scrollbar-thumb:hover {
   background: var(--tokyo-comment);
 }
+
+@layer components {
+  .plugin-category-button {
+    @apply flex h-9 w-full items-center justify-between rounded-md px-2.5 text-left text-xs text-tokyo-comment transition-colors;
+  }
+
+  .plugin-category-button:hover {
+    @apply bg-tokyo-bg-hl text-tokyo-fg;
+  }
+
+  .plugin-category-button.is-active {
+    @apply bg-tokyo-bg text-tokyo-fg;
+    box-shadow: inset 2px 0 0 var(--tokyo-cyan);
+  }
+
+  .plugin-market-card {
+    border-radius: 8px;
+    box-shadow: 0 8px 20px color-mix(in srgb, var(--tokyo-fg) 5%, transparent);
+    transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+  }
+
+  .plugin-market-card:hover {
+    border-color: var(--tokyo-comment);
+    transform: translateY(-1px);
+    box-shadow: 0 12px 26px color-mix(in srgb, var(--tokyo-fg) 8%, transparent);
+  }
+
+  .plugin-toggle-input {
+    width: 30px;
+    height: 16px;
+    appearance: none;
+    cursor: pointer;
+    border: 1px solid var(--tokyo-bg-hl);
+    border-radius: 999px;
+    background: var(--tokyo-bg-hl);
+    position: relative;
+    transition: background-color 150ms ease, border-color 150ms ease;
+  }
+
+  .plugin-toggle-input::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--tokyo-bg);
+    transition: transform 150ms ease;
+  }
+
+  .plugin-toggle-input:checked {
+    border-color: var(--tokyo-green);
+    background: var(--tokyo-green);
+  }
+
+  .plugin-toggle-input:checked::after {
+    transform: translateX(14px);
+  }
+
+  .plugin-toggle-input:focus-visible {
+    outline: 2px solid var(--tokyo-cyan);
+    outline-offset: 2px;
+  }
+}

@@ -14,6 +14,8 @@ import {
   Loader2,
   X,
   Bot,
+  Blocks,
+  Store,
 } from 'lucide-react';
 import { cn } from './lib/utils';
 import { safeInvoke } from './lib/tauri';
@@ -25,7 +27,6 @@ import { UPDATE_CHECK_INTERVAL_MS, useUpdateStore } from './stores/updateStore';
 import { SessionTabs } from './components/SessionTabs';
 import { TitleBar } from './components/TitleBar';
 import { SftpPanel, SftpPanelHandle } from './components/SftpPanel';
-import { ServerStatus } from './components/ServerStatus';
 import { AddServerDialog } from './components/AddServerDialog';
 import { EditServerDialog } from './components/EditServerDialog';
 import { ConnectDialog } from './components/ConnectDialog';
@@ -38,6 +39,8 @@ import { FingerprintVerificationDialog, FingerprintManagerDialog } from './compo
 import { SnippetManagerDialog } from './components/SnippetManager/SnippetManagerDialog';
 import { TunnelPanelDialog } from './components/TunnelPanel/TunnelPanelDialog';
 import { useServerStore, type Server } from './stores/serverStore';
+import { usePluginStore } from './stores/pluginStore';
+import { SessionPluginDock } from './components/SessionPluginDock';
 import type { TerminalHandle } from './components/Terminal';
 import {
   MAX_TERMINAL_PANES,
@@ -49,6 +52,7 @@ import {
 } from './lib/splitPanes';
 
 const Settings = lazy(() => import('./components/Settings').then((mod) => ({ default: mod.Settings })));
+const PluginMarketplace = lazy(() => import('./components/PluginMarketplace').then((mod) => ({ default: mod.PluginMarketplace })));
 const Terminal = lazy(() => import('./components/Terminal').then((mod) => ({ default: mod.Terminal })));
 
 function App() {
@@ -65,13 +69,14 @@ function App() {
     syncRemoteSessions,
     createLocalShellSession,
   } = useSessionStore();
-  const { currentView, goToMain, goToSettings } = useNavigationStore();
+  const { currentView, goToMain, goToSettings, goToPlugins } = useNavigationStore();
   const { warning: notifyWarning, error: notifyError } = useNotificationStore();
   const { settings, initializeSettings } = useSettingsStore();
   const { checkForUpdates, markVersionNotified } = useUpdateStore();
   const servers = useServerStore((state) => state.servers);
   const fetchServers = useServerStore((state) => state.fetchServers);
   const fetchGroups = useServerStore((state) => state.fetchGroups);
+  const fetchPlugins = usePluginStore((state) => state.fetchPlugins);
 
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
   const [isConnectOpen, setIsConnectOpen] = useState(false);
@@ -82,6 +87,7 @@ function App() {
   const [isTunnelPanelOpen, setIsTunnelPanelOpen] = useState(false);
   const [isSftpOpen, setIsSftpOpen] = useState(false);
   const [isAgentActivityOpen, setIsAgentActivityOpen] = useState(false);
+  const [isPluginDockOpen, setIsPluginDockOpen] = useState(false);
   const [serverToConnect, setServerToConnect] = useState<Server | null>(null);
   const [connectForceNew, setConnectForceNew] = useState(false);
   const [serverToEdit, setServerToEdit] = useState<Server | null>(null);
@@ -98,6 +104,10 @@ function App() {
   useEffect(() => {
     initializeSettings();
   }, [initializeSettings]);
+
+  useEffect(() => {
+    void fetchPlugins();
+  }, [fetchPlugins]);
 
   useEffect(() => {
     void Promise.all([fetchServers(), fetchGroups()]);
@@ -496,13 +506,15 @@ function App() {
   }, []);
 
   const isSettingsView = currentView === 'settings';
+  const isPluginsView = currentView === 'plugins';
+  const isOverlayView = currentView !== 'main';
   const sessionToCloseObj = sessionToClose ? sessions.find((s) => s.id === sessionToClose) : null;
 
   return (
     <div className="app-shell h-screen flex flex-col bg-tokyo-bg">
       <div
         className="app-shell h-screen flex flex-col bg-tokyo-bg absolute inset-0 z-10"
-        style={{ display: isSettingsView ? 'flex' : 'none' }}
+        style={{ display: isOverlayView ? 'flex' : 'none' }}
       >
         <TitleBar />
         <Notifications />
@@ -519,7 +531,9 @@ function App() {
             <ArrowLeft className="w-4 h-4" />
             <span className="text-sm">{t('common.back')}</span>
           </button>
-          <h1 className="ml-4 text-tokyo-fg font-semibold">{t('settings.title')}</h1>
+          <h1 className="ml-4 text-tokyo-fg font-semibold">
+            {isPluginsView ? t('plugins.marketplace') : t('settings.title')}
+          </h1>
         </header>
         <div className="flex-1 overflow-y-auto bg-tokyo-bg">
           {isSettingsView && (
@@ -527,12 +541,17 @@ function App() {
               <Settings />
             </Suspense>
           )}
+          {isPluginsView && (
+            <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
+              <PluginMarketplace />
+            </Suspense>
+          )}
         </div>
       </div>
 
       <div
         className="h-full flex flex-col flex-1"
-        style={{ visibility: isSettingsView ? 'hidden' : 'visible' }}
+        style={{ visibility: isOverlayView ? 'hidden' : 'visible' }}
       >
         <TitleBar
           activeSessionName={activeSession?.serverName}
@@ -626,6 +645,24 @@ function App() {
                       </button>
                     </>
                   )}
+                  <button
+                    className={cn('icon-button tooltip-button', isPluginDockOpen && 'is-active')}
+                    data-tooltip={t('plugins.workspace')}
+                    onClick={() => setIsPluginDockOpen((open) => !open)}
+                    disabled={!activeSession}
+                    aria-pressed={isPluginDockOpen}
+                    aria-label={t('plugins.workspace')}
+                  >
+                    <Blocks className="h-4 w-4" />
+                  </button>
+                  <button
+                    className="icon-button tooltip-button"
+                    data-tooltip={t('plugins.marketplace')}
+                    onClick={goToPlugins}
+                    aria-label={t('plugins.marketplace')}
+                  >
+                    <Store className="h-4 w-4" />
+                  </button>
                   <button className="icon-button tooltip-button" data-tooltip={`${t('sidebar.settings')} (Ctrl+,)`} onClick={goToSettings} aria-label={t('sidebar.settings')}>
                     <SettingsIcon className="h-4 w-4" />
                   </button>
@@ -691,10 +728,12 @@ function App() {
                     ))}
                     </div>
                     {activeSession && (
-                      <ServerStatus
+                      <SessionPluginDock
                         sessionId={activeSession.id}
-                        defaultCollapsed={!settings.serverStatus.defaultExpanded}
-                        defaultRefreshInterval={settings.serverStatus.refreshInterval}
+                        sessionType={activeSession.sessionType}
+                        open={isPluginDockOpen}
+                        onClose={() => setIsPluginDockOpen(false)}
+                        onOpenMarketplace={goToPlugins}
                       />
                     )}
                   </>

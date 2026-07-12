@@ -8,7 +8,6 @@ import {
   type FontFamily,
   type CursorStyle,
   type ThemeName,
-  type ServerStatusRefreshInterval,
 } from '../../stores/settingsStore';
 import {
   getDefaultAiBaseUrl,
@@ -29,7 +28,6 @@ import {
   Github,
   Shield,
   Key,
-  Activity,
   Video,
   Trash2,
   FolderOpen,
@@ -491,7 +489,6 @@ export function Settings() {
     updateTerminalSettings,
     updateAppearanceSettings,
     updateSshDefaultSettings,
-    updateServerStatusSettings,
     updateAiPredictionSettings,
     updateUploadIgnoreConfig,
     resetSettings,
@@ -821,44 +818,6 @@ export function Settings() {
             value={settings.sshDefaults.defaultUsername}
             onChange={(defaultUsername) => updateSshDefaultSettings({ defaultUsername })}
             placeholder="e.g., root"
-          />
-        </SettingRow>
-      </SettingsSection>
-
-      {/* ================================================================== */}
-      {/* Server Status Monitoring Section */}
-      {/* ================================================================== */}
-      <SettingsSection
-        icon={<Activity className="w-5 h-5" />}
-        title={t('settings.serverStatus')}
-        description={t('settings.serverStatusDesc')}
-      >
-        <SettingRow label={t('settings.refreshInterval')} description={t('settings.refreshIntervalDesc')}>
-          <Select<ServerStatusRefreshInterval>
-            value={settings.serverStatus.refreshInterval}
-            options={[
-              { value: '5s', label: t('settings.refreshIntervalOptions.5s') },
-              { value: '10s', label: t('settings.refreshIntervalOptions.10s') },
-              { value: '30s', label: t('settings.refreshIntervalOptions.30s') },
-              { value: '1m', label: t('settings.refreshIntervalOptions.1m') },
-              { value: '5m', label: t('settings.refreshIntervalOptions.5m') },
-              { value: 'manual', label: t('settings.refreshIntervalOptions.manual') },
-            ]}
-            onChange={(refreshInterval) => updateServerStatusSettings({ refreshInterval })}
-          />
-        </SettingRow>
-
-        <SettingRow label={t('settings.autoExpandPanel')} description={t('settings.autoExpandPanelDesc')}>
-          <Toggle
-            checked={settings.serverStatus.defaultExpanded}
-            onChange={(defaultExpanded) => updateServerStatusSettings({ defaultExpanded })}
-          />
-        </SettingRow>
-
-        <SettingRow label={t('settings.showNetworkRates')} description={t('settings.showNetworkRatesDesc')}>
-          <Toggle
-            checked={settings.serverStatus.showNetworkRates}
-            onChange={(showNetworkRates) => updateServerStatusSettings({ showNetworkRates })}
           />
         </SettingRow>
       </SettingsSection>

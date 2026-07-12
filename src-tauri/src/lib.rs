@@ -6,6 +6,7 @@ pub mod ipc;
 pub mod local_shell;
 pub mod logging;
 pub mod mcp;
+pub mod plugins;
 pub mod remote_tools;
 pub mod session;
 pub mod sftp;
@@ -63,6 +64,13 @@ use commands::{
     pick_file_for_upload,
     // Dialog commands
     pick_ssh_key_file,
+    plugin_execute,
+    plugin_import,
+    plugin_install,
+    plugin_list,
+    plugin_set_enabled,
+    plugin_uninstall,
+    plugin_update_settings,
     read_ssh_key_file,
     save_credential,
     save_fingerprint,
@@ -206,6 +214,14 @@ pub fn run() {
             open_external_url,
             get_app_version,
             get_agent_gateway_status,
+            // Plugin marketplace commands
+            plugin_list,
+            plugin_install,
+            plugin_import,
+            plugin_uninstall,
+            plugin_set_enabled,
+            plugin_update_settings,
+            plugin_execute,
             // Session commands
             session_list,
             session_create,

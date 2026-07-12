@@ -3,7 +3,7 @@ import { create } from 'zustand';
 /**
  * Available views in the application
  */
-export type AppView = 'main' | 'settings';
+export type AppView = 'main' | 'settings' | 'plugins';
 
 /**
  * Navigation store state and actions
@@ -17,6 +17,8 @@ interface NavigationStore {
   goToMain: () => void;
   /** Go to settings view */
   goToSettings: () => void;
+  /** Open the plugin marketplace */
+  goToPlugins: () => void;
 }
 
 /**
@@ -35,5 +37,9 @@ export const useNavigationStore = create<NavigationStore>((set) => ({
 
   goToSettings: () => {
     set({ currentView: 'settings' });
+  },
+
+  goToPlugins: () => {
+    set({ currentView: 'plugins' });
   },
 }));

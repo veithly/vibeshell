@@ -7,11 +7,25 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::storage::models::{
-    AuthType, CommandSnippet, Recording, Server, TunnelConfig, TunnelType,
+    AuthType, CommandSnippet, PluginInstallation, Recording, Server, TunnelConfig, TunnelType,
 };
 
 pub struct Database {
     conn: Mutex<Connection>,
+}
+
+fn row_to_plugin_installation(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInstallation> {
+    Ok(PluginInstallation {
+        plugin_id: row.get(0)?,
+        version: row.get(1)?,
+        manifest_json: row.get(2)?,
+        source: row.get(3)?,
+        enabled: row.get::<_, i32>(4)? != 0,
+        granted_permissions_json: row.get(5)?,
+        settings_json: row.get(6)?,
+        installed_at: row.get(7)?,
+        updated_at: row.get(8)?,
+    })
 }
 
 impl Database {
@@ -111,6 +125,18 @@ impl Database {
                 description TEXT NOT NULL DEFAULT '',
                 tags TEXT NOT NULL DEFAULT '[]',
                 created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS plugin_installations (
+                plugin_id TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                manifest_json TEXT NOT NULL,
+                source TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                granted_permissions_json TEXT NOT NULL DEFAULT '[]',
+                settings_json TEXT NOT NULL DEFAULT '{}',
+                installed_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
         "#,
@@ -888,6 +914,92 @@ impl Database {
             Err(e) => Err(e.into()),
         }
     }
+
+    // === Plugin Operations ===
+
+    pub fn plugin_installation_list(&self) -> Result<Vec<PluginInstallation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT plugin_id, version, manifest_json, source, enabled, \
+             granted_permissions_json, settings_json, installed_at, updated_at \
+             FROM plugin_installations ORDER BY installed_at ASC",
+        )?;
+
+        let records = stmt
+            .query_map([], row_to_plugin_installation)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(records)
+    }
+
+    pub fn plugin_installation_get(&self, plugin_id: &str) -> Result<Option<PluginInstallation>> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT plugin_id, version, manifest_json, source, enabled, \
+             granted_permissions_json, settings_json, installed_at, updated_at \
+             FROM plugin_installations WHERE plugin_id = ?1",
+            [plugin_id],
+            row_to_plugin_installation,
+        );
+
+        match result {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn plugin_installation_upsert(&self, installation: &PluginInstallation) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            r#"INSERT INTO plugin_installations
+               (plugin_id, version, manifest_json, source, enabled,
+                granted_permissions_json, settings_json, installed_at, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+               ON CONFLICT(plugin_id) DO UPDATE SET
+                 version = excluded.version,
+                 manifest_json = excluded.manifest_json,
+                 source = excluded.source,
+                 enabled = excluded.enabled,
+                 granted_permissions_json = excluded.granted_permissions_json,
+                 settings_json = excluded.settings_json,
+                 updated_at = excluded.updated_at"#,
+            rusqlite::params![
+                installation.plugin_id,
+                installation.version,
+                installation.manifest_json,
+                installation.source,
+                installation.enabled as i32,
+                installation.granted_permissions_json,
+                installation.settings_json,
+                installation.installed_at,
+                installation.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn plugin_installation_update_settings(
+        &self,
+        plugin_id: &str,
+        settings_json: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE plugin_installations SET settings_json = ?2, updated_at = ?3 WHERE plugin_id = ?1",
+            rusqlite::params![plugin_id, settings_json, Utc::now().timestamp()],
+        )?;
+        Ok(())
+    }
+
+    pub fn plugin_installation_delete(&self, plugin_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM plugin_installations WHERE plugin_id = ?1",
+            [plugin_id],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1066,5 +1178,48 @@ mod tests {
         ));
         // Default fallback
         assert!(matches!(string_to_auth_type("unknown"), AuthType::Password));
+    }
+
+    #[test]
+    fn test_plugin_installation_lifecycle() {
+        let db = test_db();
+        let now = Utc::now().timestamp();
+        let installation = PluginInstallation {
+            plugin_id: "example.plugin".to_string(),
+            version: "1.0.0".to_string(),
+            manifest_json: r#"{"schemaVersion":1}"#.to_string(),
+            source: "external".to_string(),
+            enabled: false,
+            granted_permissions_json: "[]".to_string(),
+            settings_json: "{}".to_string(),
+            installed_at: now,
+            updated_at: now,
+        };
+
+        db.plugin_installation_upsert(&installation).unwrap();
+        let stored = db
+            .plugin_installation_get("example.plugin")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, installation);
+
+        let mut enabled = stored;
+        enabled.enabled = true;
+        db.plugin_installation_upsert(&enabled).unwrap();
+        db.plugin_installation_update_settings("example.plugin", r#"{"rows":50}"#)
+            .unwrap();
+        let updated = db
+            .plugin_installation_get("example.plugin")
+            .unwrap()
+            .unwrap();
+        assert!(updated.enabled);
+        assert_eq!(updated.settings_json, r#"{"rows":50}"#);
+        assert_eq!(db.plugin_installation_list().unwrap().len(), 1);
+
+        db.plugin_installation_delete("example.plugin").unwrap();
+        assert!(db
+            .plugin_installation_get("example.plugin")
+            .unwrap()
+            .is_none());
     }
 }

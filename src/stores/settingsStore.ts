@@ -91,23 +91,6 @@ export interface SshDefaultSettings {
 }
 
 /**
- * Server status monitoring refresh interval options.
- */
-export type ServerStatusRefreshInterval = '5s' | '10s' | '30s' | '1m' | '5m' | 'manual';
-
-/**
- * Server status monitoring settings.
- */
-export interface ServerStatusSettings {
-  /** Refresh interval for server status monitoring */
-  refreshInterval: ServerStatusRefreshInterval;
-  /** Whether the status panel is expanded by default */
-  defaultExpanded: boolean;
-  /** Whether to show network transfer rates */
-  showNetworkRates: boolean;
-}
-
-/**
  * Global ignore rules for recursive SFTP uploads and syncs.
  */
 export interface UploadIgnoreConfig {
@@ -124,7 +107,6 @@ export interface AppSettings {
   terminal: TerminalSettings;
   appearance: AppearanceSettings;
   sshDefaults: SshDefaultSettings;
-  serverStatus: ServerStatusSettings;
   aiPrediction: AiPredictionSettings;
 }
 
@@ -148,11 +130,6 @@ export const defaultSettings: AppSettings = {
     connectionTimeout: 30,
     keepaliveInterval: 60,
     defaultUsername: '',
-  },
-  serverStatus: {
-    refreshInterval: '30s',
-    defaultExpanded: false,
-    showNetworkRates: true,
   },
   aiPrediction: { ...defaultAiPredictionSettings },
 };
@@ -235,8 +212,6 @@ interface SettingsStore {
   updateAppearanceSettings: (settings: Partial<AppearanceSettings>) => Promise<void>;
   /** Update SSH default settings */
   updateSshDefaultSettings: (settings: Partial<SshDefaultSettings>) => Promise<void>;
-  /** Update server status settings */
-  updateServerStatusSettings: (settings: Partial<ServerStatusSettings>) => Promise<void>;
   /** Update AI command prediction settings */
   updateAiPredictionSettings: (settings: Partial<AiPredictionSettings>) => Promise<void>;
   /** Update global recursive upload ignore config */
@@ -292,7 +267,6 @@ function loadSettingsFromStorage(): AppSettings {
         terminal: { ...defaultSettings.terminal, ...parsed.terminal },
         appearance: normalizeAppearanceSettings(parsed.appearance),
         sshDefaults: { ...defaultSettings.sshDefaults, ...parsed.sshDefaults },
-        serverStatus: { ...defaultSettings.serverStatus, ...parsed.serverStatus },
         aiPrediction: normalizeAiPredictionSettings(parsed.aiPrediction),
       };
     }
@@ -325,7 +299,6 @@ async function loadSettings(): Promise<AppSettings> {
         terminal: { ...defaultSettings.terminal, ...settings.terminal },
         appearance: normalizeAppearanceSettings(settings.appearance),
         sshDefaults: { ...defaultSettings.sshDefaults, ...settings.sshDefaults },
-        serverStatus: { ...defaultSettings.serverStatus, ...settings.serverStatus },
         aiPrediction: normalizeAiPredictionSettings(settings.aiPrediction),
       };
     }
@@ -517,20 +490,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       sshDefaults: {
         ...currentSettings.sshDefaults,
         ...sshUpdates,
-      },
-    };
-
-    set({ settings: newSettings });
-    await saveSettings(newSettings);
-  },
-
-  updateServerStatusSettings: async (serverStatusUpdates: Partial<ServerStatusSettings>) => {
-    const currentSettings = get().settings;
-    const newSettings: AppSettings = {
-      ...currentSettings,
-      serverStatus: {
-        ...currentSettings.serverStatus,
-        ...serverStatusUpdates,
       },
     };
 

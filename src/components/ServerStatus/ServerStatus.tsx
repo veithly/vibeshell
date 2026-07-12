@@ -202,6 +202,8 @@ interface ServerStatusProps {
   maxHeight?: number;
   /** Callback when panel is collapsed/expanded */
   onToggle?: (collapsed: boolean) => void;
+  /** Callback when the refresh interval changes (for persistence) */
+  onRefreshIntervalChange?: (interval: RefreshInterval) => void;
 }
 
 export function ServerStatus({
@@ -212,6 +214,7 @@ export function ServerStatus({
   minHeight = 120,
   maxHeight = 500,
   onToggle,
+  onRefreshIntervalChange,
 }: ServerStatusProps) {
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [panelHeight, setPanelHeight] = useState(defaultHeight);
@@ -351,7 +354,8 @@ export function ServerStatus({
     // Clear previous network stats when changing interval
     prevNetworkRef.current.clear();
     setNetworkRates(new Map());
-  }, []);
+    onRefreshIntervalChange?.(interval);
+  }, [onRefreshIntervalChange]);
 
   if (!sessionId) {
     return null;

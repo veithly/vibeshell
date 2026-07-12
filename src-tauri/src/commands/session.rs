@@ -8,6 +8,7 @@ use crate::ipc::{IpcClient, IpcMessage, IpcSessionInfo};
 use crate::local_shell::LocalShellManager;
 use crate::session::{Session, SessionInfo, SessionManager, SshCredential};
 use crate::ssh::PtyConfig;
+use crate::storage::Database;
 
 use super::SftpState;
 
@@ -1244,8 +1245,14 @@ pub async fn get_server_status(
     manager: State<'_, Arc<SessionManager>>,
     local_shell_manager: State<'_, Arc<LocalShellManager>>,
     access_state: State<'_, Arc<SessionAccessState>>,
+    db: State<'_, Arc<Database>>,
     request: SessionIdRequest,
 ) -> Result<ServerStatus, String> {
+    db.plugin_installation_get("server-performance")
+        .map_err(|error| error.to_string())?
+        .filter(|installation| installation.source == "builtin" && installation.enabled)
+        .ok_or_else(|| "Server Performance plugin is not enabled".to_string())?;
+
     // Local shell sessions are not SSH-backed; collect metrics directly from this machine.
     if local_shell_manager
         .get_session(&request.session_id)

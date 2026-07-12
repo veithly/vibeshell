@@ -148,3 +148,22 @@ pub struct CommandSnippet {
     pub created_at: i64,
     pub updated_at: i64,
 }
+
+// =============================================================================
+// Plugin Models
+// =============================================================================
+
+/// Persisted installation state. Manifests and settings are kept as JSON so
+/// the storage layer does not need to understand the versioned plugin schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginInstallation {
+    pub plugin_id: String,
+    pub version: String,
+    pub manifest_json: String,
+    pub source: String,
+    pub enabled: bool,
+    pub granted_permissions_json: String,
+    pub settings_json: String,
+    pub installed_at: i64,
+    pub updated_at: i64,
+}

@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "example.system-info",
+  "name": "System Info",
+  "description": "Small external plugin example for inspecting a connected host.",
+  "version": "1.0.0",
+  "author": "VibeShell Example",
+  "category": "operations",
+  "icon": "wrench",
+  "permissions": ["remote_exec"],
+  "sessionTypes": ["ssh"],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "kernel",
+        "name": "Kernel",
+        "description": "Show the remote operating system and kernel version.",
+        "program": "uname",
+        "args": ["-a"]
+      },
+      {
+        "id": "users",
+        "name": "Logged-in users",
+        "description": "Show users currently logged in to the remote host.",
+        "program": "who"
+      },
+      {
+        "id": "resolve-host",
+        "name": "Resolve hostname",
+        "description": "Resolve one hostname through the remote host's configured resolver.",
+        "program": "getent",
+        "args": ["hosts", "{{input.hostname}}"],
+        "inputs": [
+          {
+            "id": "hostname",
+            "label": "Hostname",
+            "placeholder": "example.com",
+            "required": true
+          }
+        ]
+      }
+    ]
+  }
+}
