@@ -517,7 +517,8 @@ mod tests {
                 .unwrap();
             assert!(output.status.success(), "git {:?} failed", args);
         };
-        let filename = ":(top)tracked.txt";
+        // Brackets exercise Git's pathspec magic while remaining a valid filename on Windows.
+        let filename = "[tracked].txt";
 
         run(&["init", "-q"]);
         run(&["config", "user.email", "tests@vibeshell.local"]);
