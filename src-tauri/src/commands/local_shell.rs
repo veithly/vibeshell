@@ -1,11 +1,51 @@
 //! Tauri commands for local shell management.
 
-use log::{debug, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::local_shell::{LocalShellInfo, LocalShellManager, ShellInfo};
+
+pub(crate) fn ensure_local_shell_output_bridge(
+    app: AppHandle,
+    session: Arc<crate::local_shell::LocalShellSession>,
+) {
+    if !session.claim_output_bridge() {
+        return;
+    }
+
+    let session_id = session.id.clone();
+    let mut receiver = session.subscribe();
+    tokio::spawn(async move {
+        debug!(
+            "[LocalShell Command] Output bridge started for session {}",
+            session_id
+        );
+        loop {
+            match receiver.recv().await {
+                Ok(data) => {
+                    let event = LocalShellOutputEvent {
+                        session_id: session_id.clone(),
+                        data,
+                    };
+                    let _ = app.emit("session-output", event);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                    warn!(
+                        "[LocalShell Command] Output bridge lagged {} chunks for session {}",
+                        skipped, session_id
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+        debug!(
+            "[LocalShell Command] Output bridge ended for session {}",
+            session_id
+        );
+    });
+}
 
 /// Output event for local shell sessions
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,29 +145,8 @@ pub async fn local_shell_create(
     }
     .map_err(|e| e.to_string())?;
 
-    let session_id = session.id.clone();
     let info = session.get_info().await;
-
-    // Subscribe to session output and emit events
-    let mut receiver = session.subscribe();
-    tokio::spawn(async move {
-        debug!(
-            "[LocalShell Command] Output bridge started for session {}",
-            session_id
-        );
-        while let Ok(data) = receiver.recv().await {
-            let event = LocalShellOutputEvent {
-                session_id: session_id.clone(),
-                data,
-            };
-            // Emit to frontend using the same event name as SSH sessions
-            let _ = app.emit("session-output", event);
-        }
-        debug!(
-            "[LocalShell Command] Output bridge ended for session {}",
-            session_id
-        );
-    });
+    ensure_local_shell_output_bridge(app, session);
 
     info!("[LocalShell Command] Session created: {}", info.id);
     Ok(info)
@@ -196,18 +215,21 @@ pub async fn local_shell_attach(
     session.attach();
 
     let session_id = request.session_id.clone();
-    let mut receiver = session.subscribe();
 
-    // Spawn task to forward output to frontend
-    tokio::spawn(async move {
-        while let Ok(data) = receiver.recv().await {
-            let event = LocalShellOutputEvent {
-                session_id: session_id.clone(),
-                data,
-            };
-            let _ = app.emit("session-output", event);
-        }
-    });
+    // Replay buffered output so a re-attaching frontend (e.g. a split pane
+    // recreated after drag) redraws recent history instead of going blank.
+    // Emitted before the forwarder subscribes so the listener is already
+    // registered on the frontend side (the Terminal registers its listener
+    // before invoking local_shell_attach).
+    for data in session.replay_output() {
+        let event = LocalShellOutputEvent {
+            session_id: session_id.clone(),
+            data,
+        };
+        let _ = app.emit("session-output", event);
+    }
+
+    ensure_local_shell_output_bridge(app, session.clone());
 
     Ok(session.get_info().await)
 }

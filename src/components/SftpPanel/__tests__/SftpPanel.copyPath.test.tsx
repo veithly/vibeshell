@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SftpPanel } from '../SftpPanel';
+import { useRuntimeCapabilitiesStore } from '../../../stores/runtimeCapabilitiesStore';
 
 const safeInvokeMock = vi.fn();
 const writeTextMock = vi.fn();
@@ -21,6 +22,20 @@ describe('SftpPanel path copy', () => {
   });
 
   beforeEach(() => {
+    useRuntimeCapabilitiesStore.setState({
+      status: 'ready',
+      capabilities: {
+        platform: 'linux',
+        isMobile: false,
+        windowControls: true,
+        localShell: true,
+        agentGateway: true,
+        desktopUpdater: true,
+        cliIpc: true,
+        directoryTransfer: true,
+        backgroundTunnels: true,
+      },
+    });
     writeTextMock.mockReset();
     writeTextMock.mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
@@ -138,6 +153,41 @@ describe('SftpPanel path copy', () => {
     fireEvent.click(screen.getByTitle('More actions'));
     expect(await screen.findByText('Upload folder')).toBeInTheDocument();
     expect(screen.getByText('Sync current folder')).toBeInTheDocument();
+  });
+
+  it('hides path-based transfers when the runtime has no native file picker', async () => {
+    useRuntimeCapabilitiesStore.setState((state) => ({
+      capabilities: { ...state.capabilities, directoryTransfer: false },
+    }));
+
+    render(<SftpPanel sessionId="session-1" defaultCollapsed={false} dock="right" />);
+
+    await screen.findByText('app.log');
+    expect(screen.queryByTitle('Upload file')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('More actions'));
+    expect(screen.queryByText('Upload folder')).not.toBeInTheDocument();
+    expect(screen.queryByText('Sync current folder')).not.toBeInTheDocument();
+    expect(screen.queryByText('Download')).not.toBeInTheDocument();
+  });
+
+  it('opens directories with one tap on coarse-pointer devices', async () => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === '(pointer: coarse)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+
+    render(<SftpPanel sessionId="session-1" defaultCollapsed={false} dock="right" />);
+
+    await screen.findByText('app.log');
+    fireEvent.click(screen.getByTitle('Details view'));
+    fireEvent.click(screen.getByText('src'));
+
+    expect(await screen.findByText('index.ts')).toBeInTheDocument();
   });
 
   it('docks on the right and expands nested paths as Finder-style columns', async () => {

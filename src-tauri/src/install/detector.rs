@@ -217,6 +217,15 @@ fn tool_definitions(home: &Path) -> Vec<ToolDefinition> {
             ],
         },
         ToolDefinition {
+            id: "pi",
+            name: "Pi",
+            config_candidates: vec![
+                home.join(".pi").join("agent").join("settings.json"),
+                home.join(".pi").join("agent").join("models.json"),
+            ],
+            skill_dir_candidates: vec![home.join(".pi").join("agent").join("skills")],
+        },
+        ToolDefinition {
             id: "gemini-cli",
             name: "Gemini CLI",
             config_candidates: vec![
@@ -408,13 +417,14 @@ mod tests {
     #[test]
     fn test_detect_ai_tools() {
         let tools = detect_ai_tools();
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 16);
 
         let tool_ids: Vec<&str> = tools.iter().map(|t| t.id.as_str()).collect();
         assert!(tool_ids.contains(&"claude-code"));
         assert!(tool_ids.contains(&"cursor"));
         assert!(tool_ids.contains(&"codex"));
         assert!(tool_ids.contains(&"opencode"));
+        assert!(tool_ids.contains(&"pi"));
         assert!(tool_ids.contains(&"gemini-cli"));
         assert!(tool_ids.contains(&"openclaw"));
         assert!(tool_ids.contains(&"windsurf"));

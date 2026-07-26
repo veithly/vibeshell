@@ -91,17 +91,41 @@ pub struct ServerUpdateInput {
     pub username: Option<String>,
     #[serde(alias = "authType")]
     pub auth_type: Option<String>,
-    #[serde(alias = "credentialId")]
-    pub credential_id: Option<String>,
-    #[serde(alias = "groupId")]
-    pub group_id: Option<String>,
+    #[serde(
+        default,
+        alias = "credentialId",
+        deserialize_with = "deserialize_present_option"
+    )]
+    pub credential_id: Option<Option<String>>,
+    #[serde(
+        default,
+        alias = "groupId",
+        deserialize_with = "deserialize_present_option"
+    )]
+    pub group_id: Option<Option<String>>,
     pub tags: Option<Vec<String>>,
-    #[serde(alias = "jumpHostId")]
-    pub jump_host_id: Option<String>,
-    #[serde(alias = "postLoginCommand")]
-    pub post_login_command: Option<String>,
+    #[serde(
+        default,
+        alias = "jumpHostId",
+        deserialize_with = "deserialize_present_option"
+    )]
+    pub jump_host_id: Option<Option<String>>,
+    #[serde(
+        default,
+        alias = "postLoginCommand",
+        deserialize_with = "deserialize_present_option"
+    )]
+    pub post_login_command: Option<Option<String>>,
     #[serde(alias = "agentForwarding")]
     pub agent_forwarding: Option<bool>,
+}
+
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// Update an existing server (partial update — only sent fields are changed)
@@ -126,29 +150,15 @@ pub fn update_server(
             .auth_type
             .map(|a| string_to_auth_type(&a))
             .unwrap_or(existing.auth_type),
-        credential_id: if updates.credential_id.is_some() {
-            updates.credential_id
-        } else {
-            existing.credential_id
-        },
-        group_id: if updates.group_id.is_some() {
-            updates.group_id
-        } else {
-            existing.group_id
-        },
+        credential_id: updates.credential_id.unwrap_or(existing.credential_id),
+        group_id: updates.group_id.unwrap_or(existing.group_id),
         tags: updates.tags.unwrap_or(existing.tags),
         created_at: existing.created_at,
         updated_at: 0,
-        jump_host_id: if updates.jump_host_id.is_some() {
-            updates.jump_host_id
-        } else {
-            existing.jump_host_id
-        },
-        post_login_command: if updates.post_login_command.is_some() {
-            updates.post_login_command
-        } else {
-            existing.post_login_command
-        },
+        jump_host_id: updates.jump_host_id.unwrap_or(existing.jump_host_id),
+        post_login_command: updates
+            .post_login_command
+            .unwrap_or(existing.post_login_command),
         agent_forwarding: updates
             .agent_forwarding
             .unwrap_or(existing.agent_forwarding),
@@ -219,6 +229,15 @@ pub fn save_credential(
     db: State<'_, Arc<Database>>,
     request: SaveCredentialInput,
 ) -> Result<String, String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (db, request);
+        return Err(
+            "Saving credentials on mobile requires Keychain or Keystore support".to_string(),
+        );
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     db.credential_save(
         &request.server_name,
         &request.auth_type,
@@ -251,7 +270,7 @@ pub fn delete_credential(
 
 #[cfg(test)]
 mod tests {
-    use super::ServerInput;
+    use super::{ServerInput, ServerUpdateInput};
     use serde_json::json;
 
     #[test]
@@ -282,5 +301,21 @@ mod tests {
         let parsed: ServerInput =
             serde_json::from_value(value).expect("camelCase should deserialize");
         assert_eq!(parsed.auth_type, "password");
+    }
+
+    #[test]
+    fn server_update_distinguishes_missing_relationships_from_explicit_null() {
+        let omitted: ServerUpdateInput =
+            serde_json::from_value(json!({})).expect("omitted fields should deserialize");
+        assert!(omitted.group_id.is_none());
+        assert!(omitted.jump_host_id.is_none());
+
+        let explicit_null: ServerUpdateInput = serde_json::from_value(json!({
+            "groupId": null,
+            "jumpHostId": null
+        }))
+        .expect("explicit null fields should deserialize");
+        assert!(explicit_null.group_id.is_some());
+        assert!(explicit_null.jump_host_id.is_some());
     }
 }

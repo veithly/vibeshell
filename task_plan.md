@@ -44,3 +44,40 @@ Run an authenticated, cross-platform Agent Gateway inside the visible VibeShell 
 
 ## Status
 **Complete** - Implementation, live Gateway verification, cross-platform packaging review, skill validation, and release build are finished.
+
+---
+
+# Task Plan: SFTP Delete, Transfer Progress, and Batch Actions
+
+## Goal
+Make SFTP deletion reliable, expose visible upload/download progress, and support practical multi-selection batch workflows across local and SSH sessions.
+
+## Phases
+- [x] Phase 1: Establish scope and persistent task records
+- [x] Phase 2: Reproduce deletion failure and audit frontend/backend transfer contracts
+- [x] Phase 3: Define batch and progress behavior with regression tests
+- [x] Phase 4: Implement backend/frontend changes
+- [x] Phase 5: Run focused and full verification
+- [x] Phase 6: Package, replace, and live-test the installed macOS app
+- [x] Phase 7: Review and deliver
+
+## Key Questions
+1. Why does the current delete action report unsupported or fail for the user's active session type?
+2. Which operations already accept multiple selections, and which are restricted to a single file?
+3. Can byte-level progress be emitted by current Rust transfer loops without changing the established IPC boundary?
+4. How should partial failures be represented without hiding successfully completed items?
+
+## Decisions Made
+- Batch scope: delete, download, compress, extract, select all/clear; upload accepts multiple selected files.
+- Progress UI must show operation, active item, completed/total counts, bytes when available, and success/failure outcome.
+- Preserve runtime capability gating: native path transfers stay hidden where the platform has no file picker.
+
+## Errors Encountered
+- Initial red test used the compact toolbar and did not reach the target handlers; fixed the fixture width so the signal exercises delete/download directly.
+- The batch-delete test assumed click order, but the component intentionally processes sorted directory order; compare the complete path set instead.
+- TypeScript target does not include `Array.prototype.at`; use indexed access in tests.
+- Full `cargo fmt --check` reports unrelated pre-existing formatting changes in plugin files; keep those user-owned edits untouched and verify the SFTP files separately.
+- Tauri generated the macOS app successfully but the command ended with an updater-signing error because `TAURI_SIGNING_PRIVATE_KEY` is not configured. The local app bundle was re-signed ad hoc and passed strict verification before installation.
+
+## Status
+**Complete** - Implementation, full verification, protected app replacement, and live installed-app QA are finished.

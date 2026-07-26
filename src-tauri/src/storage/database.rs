@@ -6,12 +6,13 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use uuid::Uuid;
 
+use super::sync::{self, SyncEntityKind};
 use crate::storage::models::{
     AuthType, CommandSnippet, PluginInstallation, Recording, Server, TunnelConfig, TunnelType,
 };
 
 pub struct Database {
-    conn: Mutex<Connection>,
+    pub(super) conn: Mutex<Connection>,
 }
 
 fn row_to_plugin_installation(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInstallation> {
@@ -57,7 +58,10 @@ impl Database {
     }
 
     fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
+
+        // SQLite does not enforce declared foreign keys unless enabled per connection.
+        conn.pragma_update(None, "foreign_keys", "ON")?;
 
         conn.execute_batch(
             r#"
@@ -153,6 +157,8 @@ impl Database {
             let _ = conn.execute(sql, []);
         }
 
+        sync::initialize(&mut conn)?;
+
         Ok(())
     }
 
@@ -224,7 +230,7 @@ impl Database {
 
     /// Add a new server. Generates UUID and sets timestamps automatically.
     pub fn server_add(&self, server: &mut Server) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
 
         // Generate UUID if not provided
         if server.id.is_empty() {
@@ -240,7 +246,8 @@ impl Database {
         let tags_json = serde_json::to_string(&server.tags)?;
         let auth_type_str = auth_type_to_string(&server.auth_type);
 
-        conn.execute(
+        let tx = conn.transaction()?;
+        tx.execute(
             r#"INSERT INTO servers
                (id, name, host, port, username, auth_type, credential_id, group_id, tags, created_at, updated_at,
                 jump_host_id, post_login_command, agent_forwarding)
@@ -263,18 +270,22 @@ impl Database {
             ],
         )?;
 
+        sync::record_server_upsert(&tx, server, server.created_at, server.updated_at)?;
+        tx.commit()?;
+
         Ok(())
     }
 
     /// Update an existing server. Updates the updated_at timestamp automatically.
     pub fn server_update(&self, server: &Server) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
 
         let now = Utc::now().timestamp();
         let tags_json = serde_json::to_string(&server.tags)?;
         let auth_type_str = auth_type_to_string(&server.auth_type);
 
-        conn.execute(
+        let tx = conn.transaction()?;
+        let changed = tx.execute(
             r#"UPDATE servers SET
                name = ?2, host = ?3, port = ?4, username = ?5, auth_type = ?6,
                credential_id = ?7, group_id = ?8, tags = ?9, updated_at = ?10,
@@ -297,13 +308,22 @@ impl Database {
             ],
         )?;
 
+        if changed > 0 {
+            sync::record_server_upsert(&tx, server, server.created_at, now)?;
+        }
+        tx.commit()?;
+
         Ok(())
     }
 
     /// Delete a server by its ID
     pub fn server_delete(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM servers WHERE id = ?1", [id])?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        sync::detach_server_references(&tx, id, true)?;
+        tx.execute("DELETE FROM servers WHERE id = ?1", [id])?;
+        sync::record_local_delete(&tx, SyncEntityKind::Server, id)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -390,24 +410,32 @@ impl Database {
 
     /// Add a new group
     pub fn group_add(&self, group: &mut Group) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
 
         if group.id.is_empty() {
             group.id = Uuid::new_v4().to_string();
         }
 
-        conn.execute(
+        let tx = conn.transaction()?;
+        tx.execute(
             "INSERT INTO groups (id, name, parent_id, color) VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![group.id, group.name, group.parent_id, group.color],
         )?;
+
+        sync::record_group_upsert(&tx, group)?;
+        tx.commit()?;
 
         Ok(())
     }
 
     /// Delete a group
     pub fn group_delete(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM groups WHERE id = ?1", [id])?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        sync::detach_group_references(&tx, id, true)?;
+        tx.execute("DELETE FROM groups WHERE id = ?1", [id])?;
+        sync::record_local_delete(&tx, SyncEntityKind::Group, id)?;
+        tx.commit()?;
         Ok(())
     }
 }
@@ -699,7 +727,7 @@ impl Database {
 
     /// Add a command snippet
     pub fn snippet_add(&self, snippet: &mut CommandSnippet) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
         if snippet.id.is_empty() {
             snippet.id = Uuid::new_v4().to_string();
         }
@@ -709,7 +737,8 @@ impl Database {
 
         let tags_json = serde_json::to_string(&snippet.tags)?;
 
-        conn.execute(
+        let tx = conn.transaction()?;
+        tx.execute(
             r#"INSERT INTO command_snippets (id, name, command, category, description, tags, created_at, updated_at)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
             rusqlite::params![
@@ -723,16 +752,19 @@ impl Database {
                 snippet.updated_at,
             ],
         )?;
+        sync::record_snippet_upsert(&tx, snippet, snippet.created_at, snippet.updated_at)?;
+        tx.commit()?;
         Ok(())
     }
 
     /// Update a command snippet
     pub fn snippet_update(&self, snippet: &CommandSnippet) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock().unwrap();
         let now = Utc::now().timestamp();
         let tags_json = serde_json::to_string(&snippet.tags)?;
 
-        conn.execute(
+        let tx = conn.transaction()?;
+        let changed = tx.execute(
             r#"UPDATE command_snippets SET
                name = ?2, command = ?3, category = ?4, description = ?5, tags = ?6, updated_at = ?7
                WHERE id = ?1"#,
@@ -746,13 +778,20 @@ impl Database {
                 now,
             ],
         )?;
+        if changed > 0 {
+            sync::record_snippet_upsert(&tx, snippet, snippet.created_at, now)?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
     /// Delete a command snippet
     pub fn snippet_delete(&self, id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM command_snippets WHERE id = ?1", [id])?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM command_snippets WHERE id = ?1", [id])?;
+        sync::record_local_delete(&tx, SyncEntityKind::CommandSnippet, id)?;
+        tx.commit()?;
         Ok(())
     }
 

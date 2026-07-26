@@ -551,6 +551,12 @@ export interface ThemeDefinition {
     fgDark: string;
     accent: string;
     onAccent: string;
+    red: string;
+    green: string;
+    yellow: string;
+    magenta: string;
+    cyan: string;
+    orange: string;
   };
 }
 
@@ -566,6 +572,12 @@ export const themes: ThemeDefinition[] = [
       fgDark: '#73736e',
       accent: '#6d4aff',
       onAccent: '#ffffff',
+      red: '#b52f3e',
+      green: '#18714a',
+      yellow: '#805200',
+      magenta: '#743796',
+      cyan: '#087477',
+      orange: '#974117',
     },
   },
   {
@@ -579,6 +591,12 @@ export const themes: ThemeDefinition[] = [
       fgDark: '#746e64',
       accent: '#5d3fd3',
       onAccent: '#ffffff',
+      red: '#b52f3e',
+      green: '#18714a',
+      yellow: '#805200',
+      magenta: '#743796',
+      cyan: '#087477',
+      orange: '#974117',
     },
   },
   {
@@ -592,6 +610,12 @@ export const themes: ThemeDefinition[] = [
       fgDark: '#85858c',
       accent: '#a78bfa',
       onAccent: '#0b0b0c',
+      red: '#ff7b86',
+      green: '#63d9a0',
+      yellow: '#e7b75f',
+      magenta: '#d8a1f0',
+      cyan: '#55d6d8',
+      orange: '#ff9c68',
     },
   },
   {
@@ -605,6 +629,12 @@ export const themes: ThemeDefinition[] = [
       fgDark: '#958aa6',
       accent: '#9b72ff',
       onAccent: '#100d16',
+      red: '#ff7b86',
+      green: '#63d9a0',
+      yellow: '#e7b75f',
+      magenta: '#d8a1f0',
+      cyan: '#55d6d8',
+      orange: '#ff9c68',
     },
   },
   {
@@ -618,6 +648,12 @@ export const themes: ThemeDefinition[] = [
       fgDark: '#7b9998',
       accent: '#2dd4bf',
       onAccent: '#071112',
+      red: '#ff7b86',
+      green: '#63d9a0',
+      yellow: '#e7b75f',
+      magenta: '#d8a1f0',
+      cyan: '#55d6d8',
+      orange: '#ff9c68',
     },
   },
 ];

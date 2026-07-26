@@ -67,6 +67,7 @@ pub fn exec_isolated(session_id: &str, command: &str) -> Result<String> {
     match send(&IpcMessage::ExecCommand {
         session_id: session_id.to_string(),
         command: command.to_string(),
+        stdin: None,
     })? {
         IpcMessage::CommandOutput { output } => Ok(output),
         IpcMessage::Error { message } => bail!("Command failed: {}", message),

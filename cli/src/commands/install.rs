@@ -59,6 +59,7 @@ pub fn install(tool: &str) -> Result<()> {
             println!("  - Cursor");
             println!("  - Codex");
             println!("  - Open Code");
+            println!("  - Pi");
             println!("  - Gemini CLI");
             println!("  - OpenClaw");
             println!("  - Windsurf");

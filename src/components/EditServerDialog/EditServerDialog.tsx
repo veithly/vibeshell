@@ -86,9 +86,9 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
         port: formData.port,
         username: formData.username.trim(),
         auth_type: formData.authType,
-        jump_host_id: formData.jumpHostId || undefined,
+        jump_host_id: formData.jumpHostId || null,
         agent_forwarding: formData.agentForwarding,
-        post_login_command: formData.postLoginCommand.trim() || undefined,
+        post_login_command: formData.postLoginCommand.trim() || null,
       });
 
       notifySuccess('Server Updated', `${formData.name} has been updated successfully.`);
@@ -120,7 +120,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
   const displayError = localError || error;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="responsive-dialog-layer fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60"
@@ -128,13 +128,14 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
       />
 
       {/* Dialog */}
-      <div className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-md mx-4">
+      <div className="responsive-dialog-panel relative min-w-0 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-md mx-3 sm:mx-4">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
+        <div className="responsive-dialog-header flex items-center justify-between gap-3 px-4 py-3 border-b border-tokyo-bg-hl">
           <h2 className="text-lg font-semibold text-tokyo-fg">Edit Server</h2>
           <button
             className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
             onClick={onClose}
+            aria-label="Close edit server dialog"
           >
             <X className="w-5 h-5" />
           </button>
@@ -187,7 +188,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
           </div>
 
           {/* Port & Username */}
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
                 Port
@@ -250,14 +251,14 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
                 Private Key Path (optional)
               </label>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <input
                   type="text"
                   value={formData.privateKeyPath}
                   onChange={(e) => handleChange('privateKeyPath', e.target.value)}
                   placeholder="~/.ssh/id_rsa"
                   className={cn(
-                    'flex-1 px-3 py-2 rounded-md',
+                    'min-w-0 flex-1 px-3 py-2 rounded-md',
                     'bg-tokyo-bg border border-tokyo-bg-hl',
                     'text-tokyo-fg placeholder-tokyo-comment',
                     'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue'
@@ -270,7 +271,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
                     'px-3 py-2 rounded-md',
                     'bg-tokyo-bg-hl text-tokyo-fg',
                     'hover:bg-tokyo-bg hover:text-tokyo-fg',
-                    'transition-colors flex items-center gap-1'
+                    'transition-colors flex items-center justify-center gap-1'
                   )}
                 >
                   <FolderOpen className="w-4 h-4" />
@@ -341,7 +342,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
           </div>
 
           {/* Actions */}
-          <div className="flex justify-end gap-3 pt-4">
+          <div className="responsive-dialog-actions flex justify-end gap-3 pt-4">
             <button
               type="button"
               onClick={onClose}

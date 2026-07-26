@@ -10,6 +10,8 @@ const action: PluginAction = {
   args: ['ps'],
   inputs: [],
   requiresConfirmation: false,
+  elevate: false,
+  allowSudo: false,
   output: {
     kind: 'table',
     columns: ['ID', 'Name', 'Status'],

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useGSAP } from '@gsap/react';
 import gsap from 'gsap';
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import {
+  Bot,
   Grid2X2,
   List,
   Monitor,
@@ -19,20 +19,25 @@ import { cn } from '../../lib/utils';
 import { useServerStore, type Server, type Group } from '../../stores/serverStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useAvailableShells, useLocalShellStore, type ShellInfo } from '../../stores/localShellStore';
+import { CodingAgentLauncher } from '../CodingAgentLauncher';
+import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
 
-gsap.registerPlugin(useGSAP, ScrollTrigger);
+gsap.registerPlugin(useGSAP);
 
-type ConnectionTab = 'local' | 'ssh';
+type ConnectionTab = 'agent' | 'local' | 'ssh';
 type LauncherView = 'list' | 'icons';
 
 interface SelectServerDialogProps {
   isOpen: boolean;
+  initialTab?: ConnectionTab;
   onClose: () => void;
   onSelectServer: (server: Server) => void;
   onSelectLocalShell?: (shell: ShellInfo) => void;
   onAddServer: () => void;
   onEditServer?: (server: Server) => void;
   onNewSession?: (server: Server) => void;
+  onCodingAgentLaunched?: (sessionId: string) => void;
+  initialWorkspace?: string;
   connectedServerIds?: Set<string>;
 }
 
@@ -46,7 +51,8 @@ function loadLauncherView(): LauncherView {
 
 function loadConnectionTab(): ConnectionTab {
   try {
-    return globalThis.localStorage?.getItem('newConnectionTab') === 'ssh' ? 'ssh' : 'local';
+    const saved = globalThis.localStorage?.getItem('newConnectionTab');
+    return saved === 'ssh' || saved === 'agent' ? saved : 'local';
   } catch {
     return 'local';
   }
@@ -155,18 +161,23 @@ function ShellCard({ shell, view, onClick }: { shell: ShellInfo; view: LauncherV
 
 export function SelectServerDialog({
   isOpen,
+  initialTab,
   onClose,
   onSelectServer,
   onSelectLocalShell,
   onAddServer,
   onEditServer,
   onNewSession,
+  onCodingAgentLaunched,
+  initialWorkspace,
   connectedServerIds = new Set(),
 }: SelectServerDialogProps) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
-  const scrollerRef = useRef<HTMLDivElement>(null);
-  const toolbarRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const focusBeforeOpenRef = useRef<HTMLElement | null>(null);
+  const wasOpenRef = useRef(false);
+  const onCloseRef = useRef(onClose);
   const { servers, groups, fetchServers, fetchGroups } = useServerStore();
   const sessions = useSessionStore((state) => state.sessions);
   const createLocalShellSession = useSessionStore((state) => state.createLocalShellSession);
@@ -175,29 +186,104 @@ export function SelectServerDialog({
   const fetchDefaultShell = useLocalShellStore((state) => state.fetchDefaultShell);
   const setLastSelectedShell = useLocalShellStore((state) => state.setLastSelectedShell);
   const { shells } = useAvailableShells();
+  const localShellEnabled = useRuntimeCapabilitiesStore((state) => state.capabilities.localShell);
+  const runtimeStatus = useRuntimeCapabilitiesStore((state) => state.status);
+  const loadRuntimeCapabilities = useRuntimeCapabilitiesStore((state) => state.load);
   const [activeTab, setActiveTab] = useState<ConnectionTab>(loadConnectionTab);
   const [view, setView] = useState<LauncherView>(loadLauncherView);
   const [query, setQuery] = useState('');
 
   useEffect(() => {
-    if (!isOpen) return;
-    void Promise.all([
-      fetchAvailableShells(),
-      fetchDefaultShell(),
-      fetchServers(),
-      fetchGroups(),
-    ]);
-    setQuery('');
-  }, [isOpen, fetchAvailableShells, fetchDefaultShell, fetchServers, fetchGroups]);
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+    void loadRuntimeCapabilities();
+    const requests = [fetchServers(), fetchGroups()];
+    if (localShellEnabled) {
+      requests.push(fetchAvailableShells(), fetchDefaultShell());
+    }
+    void Promise.all(requests);
+    setQuery('');
+  }, [
+    isOpen,
+    initialTab,
+    fetchAvailableShells,
+    fetchDefaultShell,
+    fetchServers,
+    fetchGroups,
+    loadRuntimeCapabilities,
+    localShellEnabled,
+  ]);
+
+  useEffect(() => {
+    if (runtimeStatus === 'ready' && !localShellEnabled) {
+      setActiveTab('ssh');
+    }
+  }, [localShellEnabled, runtimeStatus]);
+
+  useLayoutEffect(() => {
+    if (isOpen) return;
+    return () => {
+      if (document.activeElement instanceof HTMLElement) {
+        focusBeforeOpenRef.current = document.activeElement;
+      }
+    };
+  }, [isOpen]);
+
+  useLayoutEffect(() => {
+    const wasOpen = wasOpenRef.current;
+    if (!isOpen && wasOpen && focusBeforeOpenRef.current?.isConnected) {
+      focusBeforeOpenRef.current.focus();
+    }
+    wasOpenRef.current = isOpen;
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const focusFrame = initialTab === 'agent' || activeTab === 'agent'
+      ? requestAnimationFrame(() => {
+        const dialog = rootRef.current?.querySelector<HTMLElement>('[role="dialog"]');
+        if (dialog && !dialog.contains(document.activeElement)) {
+          closeButtonRef.current?.focus();
+        }
+      })
+      : null;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') {
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const dialog = rootRef.current?.querySelector<HTMLElement>('[role="dialog"]');
+      if (!dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+      )).filter((element) => element.getAttribute('aria-hidden') !== 'true');
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+    return () => {
+      if (focusFrame !== null) cancelAnimationFrame(focusFrame);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [activeTab, initialTab, isOpen]);
 
   useGSAP(() => {
     if (!isOpen) return;
@@ -210,20 +296,6 @@ export function SelectServerDialog({
       );
     }
 
-    const scroller = scrollerRef.current;
-    const toolbar = toolbarRef.current;
-    if (!scroller || !toolbar) return;
-
-    const pin = ScrollTrigger.create({
-      trigger: toolbar,
-      scroller,
-      pin: toolbar,
-      pinSpacing: true,
-      start: 'top top',
-      end: () => `+=${Math.max(1, scroller.scrollHeight - scroller.clientHeight)}`,
-    });
-
-    return () => pin.kill();
   }, { scope: rootRef, dependencies: [isOpen, activeTab, view, query] });
 
   const changeTab = useCallback((tab: ConnectionTab) => {
@@ -259,6 +331,7 @@ export function SelectServerDialog({
   }), [shells, normalizedQuery]);
 
   const handleShellClick = useCallback(async (shell: ShellInfo) => {
+    if (!localShellEnabled) return;
     setLastSelectedShell(shell.id);
     if (onSelectLocalShell) {
       onSelectLocalShell(shell);
@@ -270,7 +343,7 @@ export function SelectServerDialog({
       setActiveSession(session.id);
       onClose();
     }
-  }, [createLocalShellSession, onClose, onSelectLocalShell, setActiveSession, setLastSelectedShell]);
+  }, [createLocalShellSession, localShellEnabled, onClose, onSelectLocalShell, setActiveSession, setLastSelectedShell]);
 
   const handleServerClick = useCallback((server: Server) => {
     onSelectServer(server);
@@ -294,7 +367,8 @@ export function SelectServerDialog({
 
   if (!isOpen) return null;
 
-  const items = activeTab === 'ssh' ? filteredServers : filteredShells;
+  const effectiveTab = localShellEnabled ? activeTab : 'ssh';
+  const items = effectiveTab === 'ssh' ? filteredServers : filteredShells;
 
   return (
     <div ref={rootRef} className="fixed inset-0 z-50 flex items-start justify-center px-3 pb-3 pt-14 sm:px-6 sm:pt-20">
@@ -314,12 +388,18 @@ export function SelectServerDialog({
               {t('connect.launcherTitle')}
             </h2>
           </div>
-          <button className="icon-button" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}>
+          <button
+            ref={closeButtonRef}
+            className="icon-button"
+            onClick={onClose}
+            aria-label={t('common.close')}
+            title={t('common.close')}
+          >
             <X className="h-4 w-4" />
           </button>
         </header>
 
-        {servers.length > 1 && (
+        {effectiveTab === 'ssh' && servers.length > 1 && (
           <div className="connection-marquee h-7 flex-shrink-0 overflow-hidden border-b border-tokyo-bg-hl bg-tokyo-bg-dark" aria-hidden="true">
             <div className="connection-marquee-track flex h-full w-max items-center gap-8 whitespace-nowrap px-4 font-mono text-[10px] text-tokyo-comment">
               {[...servers, ...servers].map((server, index) => (
@@ -329,56 +409,71 @@ export function SelectServerDialog({
           </div>
         )}
 
-        <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto">
-          <div ref={toolbarRef} className="z-20 flex flex-wrap items-center gap-3 border-b border-tokyo-bg-hl bg-tokyo-bg px-4 py-3 sm:px-5">
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-tokyo-bg-hl bg-tokyo-bg px-4 py-3 sm:px-5">
             <div className="flex rounded-md bg-tokyo-bg-dark p-0.5">
+              {localShellEnabled && (
+                <button
+                  className={cn('workspace-action', effectiveTab === 'local' && 'is-active')}
+                  onClick={() => changeTab('local')}
+                >
+                  <Monitor className="h-4 w-4" />
+                  {t('session.localShell')}
+                </button>
+              )}
               <button
-                className={cn('workspace-action', activeTab === 'local' && 'is-active')}
-                onClick={() => changeTab('local')}
-              >
-                <Monitor className="h-4 w-4" />
-                {t('session.localShell')}
-              </button>
-              <button
-                className={cn('workspace-action', activeTab === 'ssh' && 'is-active')}
+                className={cn('workspace-action', effectiveTab === 'ssh' && 'is-active')}
                 onClick={() => changeTab('ssh')}
               >
                 <ServerIcon className="h-4 w-4" />
                 SSH
               </button>
+              {localShellEnabled && (
+                <button
+                  className={cn('workspace-action', effectiveTab === 'agent' && 'is-active')}
+                  onClick={() => changeTab('agent')}
+                >
+                  <Bot className="h-4 w-4" />
+                  {t('codingAgent.tab')}
+                </button>
+              )}
             </div>
 
-            <label className="relative min-w-[180px] flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-tokyo-comment" />
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder={t('connect.searchConnections')}
-                autoFocus
-                className="h-9 w-full rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark pl-9 pr-3 text-sm text-tokyo-fg placeholder:text-tokyo-comment focus:outline-none focus:ring-1 focus:ring-tokyo-blue"
-              />
-            </label>
+            {effectiveTab !== 'agent' && (
+              <>
+                <label className="relative min-w-[180px] flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-tokyo-comment" />
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder={t('connect.searchConnections')}
+                    autoFocus
+                    className="h-9 w-full rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark pl-9 pr-3 text-sm text-tokyo-fg placeholder:text-tokyo-comment focus:outline-none focus:ring-1 focus:ring-tokyo-blue"
+                  />
+                </label>
 
-            <div className="flex items-center rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark p-0.5">
-              <button
-                className={cn('icon-button h-7 w-7', view === 'list' && 'bg-tokyo-selection text-tokyo-fg')}
-                onClick={() => changeView('list')}
-                aria-label={t('connect.listView')}
-                title={t('connect.listView')}
-              >
-                <List className="h-4 w-4" />
-              </button>
-              <button
-                className={cn('icon-button h-7 w-7', view === 'icons' && 'bg-tokyo-selection text-tokyo-fg')}
-                onClick={() => changeView('icons')}
-                aria-label={t('connect.iconsView')}
-                title={t('connect.iconsView')}
-              >
-                <Grid2X2 className="h-4 w-4" />
-              </button>
-            </div>
+                <div className="flex items-center rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark p-0.5">
+                  <button
+                    className={cn('icon-button h-7 w-7', view === 'list' && 'bg-tokyo-selection text-tokyo-fg')}
+                    onClick={() => changeView('list')}
+                    aria-label={t('connect.listView')}
+                    title={t('connect.listView')}
+                  >
+                    <List className="h-4 w-4" />
+                  </button>
+                  <button
+                    className={cn('icon-button h-7 w-7', view === 'icons' && 'bg-tokyo-selection text-tokyo-fg')}
+                    onClick={() => changeView('icons')}
+                    aria-label={t('connect.iconsView')}
+                    title={t('connect.iconsView')}
+                  >
+                    <Grid2X2 className="h-4 w-4" />
+                  </button>
+                </div>
+              </>
+            )}
 
-            {activeTab === 'ssh' && (
+            {effectiveTab === 'ssh' && (
               <button className="workspace-action border-tokyo-bg-hl bg-tokyo-fg text-tokyo-bg hover:bg-tokyo-fg hover:text-tokyo-bg" onClick={handleAddServer}>
                 <Plus className="h-4 w-4" />
                 {t('sidebar.addServer')}
@@ -386,15 +481,23 @@ export function SelectServerDialog({
             )}
           </div>
 
-          <div className="p-4 sm:p-5">
-            {items.length === 0 ? (
+          <div className={cn(effectiveTab !== 'agent' && 'p-4 sm:p-5')}>
+            {effectiveTab === 'agent' ? (
+              <CodingAgentLauncher
+                initialWorkspace={initialWorkspace}
+                onLaunched={(sessionId) => {
+                  onCodingAgentLaunched?.(sessionId);
+                  onClose();
+                }}
+              />
+            ) : items.length === 0 ? (
               <div className="flex min-h-56 flex-col items-center justify-center text-center">
                 <Terminal className="mb-4 h-7 w-7 text-tokyo-comment" />
                 <p className="text-sm font-medium text-tokyo-fg">
-                  {activeTab === 'ssh' ? t('server.noServers') : t('connect.noShells')}
+                  {effectiveTab === 'ssh' ? t('server.noServers') : t('connect.noShells')}
                 </p>
               </div>
-            ) : activeTab === 'ssh' ? (
+            ) : effectiveTab === 'ssh' ? (
               <div
                 className={cn(
                   'grid grid-flow-dense',

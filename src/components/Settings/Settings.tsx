@@ -16,6 +16,12 @@ import {
 } from '../../lib/aiCommandPrediction';
 import { useFingerprintStore } from '../../stores/fingerprintStore';
 import { useUpdateStore } from '../../stores/updateStore';
+import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
+import {
+  useCloudSyncStore,
+  type CloudSyncProvider,
+  type CreateCloudSyncVaultInput,
+} from '../../stores/cloudSyncStore';
 import { IntegrationCard } from './IntegrationCard';
 import {
   Monitor,
@@ -36,6 +42,11 @@ import {
   EyeOff,
   Bot,
   RefreshCw,
+  Cloud,
+  Copy,
+  LockKeyhole,
+  FileDown,
+  FileUp,
 } from 'lucide-react';
 import { useRecordingStore } from '../../stores/recordingStore';
 import type { Recording } from '../../types/tunnel';
@@ -56,13 +67,13 @@ interface SettingsSectionProps {
  */
 function SettingsSection({ icon, title, description, children }: SettingsSectionProps) {
   return (
-    <section className="mb-8">
-      <div className="flex items-center gap-3 mb-2">
-        <span className="text-tokyo-blue">{icon}</span>
-        <h2 className="text-xl font-semibold text-tokyo-fg">{title}</h2>
+    <section className="mb-7 min-w-0 sm:mb-8">
+      <div className="mb-2 flex min-w-0 items-center gap-2 sm:gap-3">
+        <span className="flex-shrink-0 text-tokyo-blue">{icon}</span>
+        <h2 className="min-w-0 break-words text-lg font-semibold text-tokyo-fg sm:text-xl">{title}</h2>
       </div>
-      {description && <p className="text-tokyo-comment mb-4 ml-9">{description}</p>}
-      <div className="ml-9 space-y-4">{children}</div>
+      {description && <p className="mb-4 break-words text-sm text-tokyo-comment sm:ml-8 sm:text-base">{description}</p>}
+      <div className="min-w-0 space-y-4 sm:ml-8">{children}</div>
     </section>
   );
 }
@@ -78,12 +89,12 @@ interface SettingRowProps {
  */
 function SettingRow({ label, description, children }: SettingRowProps) {
   return (
-    <div className="flex items-center justify-between py-3 border-b border-tokyo-bg-hl last:border-b-0">
-      <div className="flex-1 mr-4">
+    <div className="flex min-w-0 flex-col items-stretch gap-3 border-b border-tokyo-bg-hl py-3 last:border-b-0 sm:flex-row sm:items-center sm:justify-between sm:gap-0">
+      <div className="min-w-0 flex-1 sm:mr-4">
         <label className="text-tokyo-fg font-medium">{label}</label>
-        {description && <p className="text-tokyo-comment text-sm mt-0.5">{description}</p>}
+        {description && <p className="mt-0.5 break-words text-sm text-tokyo-comment">{description}</p>}
       </div>
-      <div className="flex-shrink-0">{children}</div>
+      <div className="settings-control min-w-0 w-full sm:w-auto sm:flex-shrink-0">{children}</div>
     </div>
   );
 }
@@ -104,7 +115,7 @@ function Slider({ value, min, max, step = 1, onChange, formatValue }: SliderProp
   const displayValue = formatValue ? formatValue(value) : String(value);
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto">
       <input
         type="range"
         min={min}
@@ -112,7 +123,7 @@ function Slider({ value, min, max, step = 1, onChange, formatValue }: SliderProp
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="w-32 h-2 bg-tokyo-bg-hl rounded-lg appearance-none cursor-pointer
+        className="h-2 min-w-0 flex-1 appearance-none rounded-lg bg-tokyo-bg-hl cursor-pointer sm:w-32 sm:flex-none
                    [&::-webkit-slider-thumb]:appearance-none
                    [&::-webkit-slider-thumb]:w-4
                    [&::-webkit-slider-thumb]:h-4
@@ -122,7 +133,7 @@ function Slider({ value, min, max, step = 1, onChange, formatValue }: SliderProp
                    [&::-webkit-slider-thumb]:hover:bg-tokyo-cyan
                    [&::-webkit-slider-thumb]:transition-colors"
       />
-      <span className="text-tokyo-fg text-sm w-16 text-right font-mono">{displayValue}</span>
+      <span className="w-16 flex-shrink-0 text-right font-mono text-sm text-tokyo-fg">{displayValue}</span>
     </div>
   );
 }
@@ -141,7 +152,7 @@ function Select<T extends string>({ value, options, onChange }: SelectProps<T>) 
     <select
       value={value}
       onChange={(e) => onChange(e.target.value as T)}
-      className="px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
+      className="w-full max-w-full px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl sm:w-auto
                  text-tokyo-fg text-sm cursor-pointer
                  focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue
                  hover:border-tokyo-comment transition-colors"
@@ -196,7 +207,7 @@ interface NumberInputProps {
  */
 function NumberInput({ value, min, max, onChange, placeholder, suffix }: NumberInputProps) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
       <input
         type="number"
         value={value}
@@ -204,7 +215,7 @@ function NumberInput({ value, min, max, onChange, placeholder, suffix }: NumberI
         max={max}
         onChange={(e) => onChange(Number(e.target.value))}
         placeholder={placeholder}
-        className="w-24 px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
+        className="min-w-0 flex-1 px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl sm:w-24 sm:flex-none
                    text-tokyo-fg text-sm font-mono
                    focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue
                    hover:border-tokyo-comment transition-colors"
@@ -225,14 +236,14 @@ interface TextInputProps {
 /**
  * A styled text input.
  */
-function TextInput({ value, onChange, placeholder, type = 'text', className = 'w-48' }: TextInputProps) {
+function TextInput({ value, onChange, placeholder, type = 'text', className = 'sm:w-48' }: TextInputProps) {
   return (
     <input
       type={type}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className={`${className} px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
+      className={`w-full max-w-full ${className} px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
                  text-tokyo-fg text-sm
                  focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue
                  hover:border-tokyo-comment transition-colors
@@ -245,13 +256,13 @@ function SecretInput({ value, onChange, placeholder }: TextInputProps) {
   const [visible, setVisible] = useState(false);
 
   return (
-    <div className="relative">
+    <div className="relative w-full sm:w-80">
       <input
         type={visible ? 'text' : 'password'}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-80 pl-3 pr-10 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
+        className="w-full pl-3 pr-10 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
                    text-tokyo-fg text-sm
                    focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue
                    hover:border-tokyo-comment transition-colors
@@ -286,7 +297,7 @@ function TextArea({ value, onChange, onBlur, placeholder }: TextAreaProps) {
       onBlur={onBlur}
       placeholder={placeholder}
       rows={8}
-      className="w-80 px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl
+      className="w-full px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl sm:w-80
                  text-tokyo-fg text-sm font-mono resize-y
                  focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue
                  hover:border-tokyo-comment transition-colors
@@ -417,9 +428,9 @@ function RecordingSection() {
         label={t('settings.storageLocation')}
         description={t('settings.storageLocationDesc')}
       >
-        <div className="flex items-center gap-2 text-sm text-tokyo-comment font-mono">
-          <FolderOpen className="w-4 h-4" />
-          <span>%APPDATA%/vibeshell/recordings</span>
+        <div className="flex min-w-0 items-start gap-2 text-sm text-tokyo-comment font-mono sm:items-center">
+          <FolderOpen className="w-4 h-4 flex-shrink-0" />
+          <span className="break-all">%APPDATA%/vibeshell/recordings</span>
         </div>
       </SettingRow>
 
@@ -436,7 +447,7 @@ function RecordingSection() {
             {recordings.map((rec) => (
               <div
                 key={rec.id}
-                className="flex items-center justify-between p-3 rounded-md bg-tokyo-bg-dark border border-tokyo-bg-hl"
+                className="flex min-w-0 items-center justify-between gap-2 p-3 rounded-md bg-tokyo-bg-dark border border-tokyo-bg-hl"
               >
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-tokyo-fg truncate">{rec.filePath.split(/[/\\]/).pop()}</div>
@@ -506,19 +517,49 @@ export function Settings() {
     installLatestUpdate,
     openLatestRelease,
   } = useUpdateStore();
+  const runtimeCapabilities = useRuntimeCapabilitiesStore((state) => state.capabilities);
+  const loadRuntimeCapabilities = useRuntimeCapabilitiesStore((state) => state.load);
+  const {
+    status: cloudSyncStatus,
+    pairingInfo: cloudPairingInfo,
+    report: cloudSyncReport,
+    fileReport: cloudSyncFileReport,
+    loading: cloudSyncLoading,
+    error: cloudSyncError,
+    refreshStatus: refreshCloudSyncStatus,
+    createVault: createCloudSyncVault,
+    joinVault: joinCloudSyncVault,
+    syncNow: syncCloudNow,
+    lock: lockCloudSync,
+    exportFile: exportCloudSyncFile,
+    importFile: importCloudSyncFile,
+  } = useCloudSyncStore();
 
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [cloudProvider, setCloudProvider] = useState<CloudSyncProvider>('github_gist');
+  const [cloudWebDavEndpoint, setCloudWebDavEndpoint] = useState('');
+  const [cloudGistId, setCloudGistId] = useState('');
+  const [cloudToken, setCloudToken] = useState('');
+  const [cloudWebDavUsername, setCloudWebDavUsername] = useState('');
+  const [cloudWebDavPassword, setCloudWebDavPassword] = useState('');
+  const [cloudPairingCode, setCloudPairingCode] = useState('');
+  const [pairingCodeCopied, setPairingCodeCopied] = useState(false);
   const [uploadExcludeText, setUploadExcludeText] = useState(
     uploadIgnoreConfig.excludedPaths.join('\n')
   );
 
-  // Initialize settings and fetch AI tools on mount
+  // Load only the settings surfaces supported by the native runtime.
   useEffect(() => {
-    initializeSettings();
-    fetchAiTools();
-    fetchGatewayStatus();
-    fetchAppVersion();
-  }, [initializeSettings, fetchAiTools, fetchGatewayStatus, fetchAppVersion]);
+    void initializeSettings();
+    void fetchAppVersion();
+    void refreshCloudSyncStatus();
+    void loadRuntimeCapabilities().then((capabilities) => {
+      if (capabilities.agentGateway) {
+        void fetchAiTools();
+        void fetchGatewayStatus();
+      }
+    });
+  }, [initializeSettings, fetchAiTools, fetchGatewayStatus, fetchAppVersion, loadRuntimeCapabilities, refreshCloudSyncStatus]);
 
   useEffect(() => {
     setUploadExcludeText(uploadIgnoreConfig.excludedPaths.join('\n'));
@@ -552,6 +593,48 @@ export function Settings() {
       baseUrl: getDefaultAiBaseUrl(provider),
       model: getDefaultAiModel(provider),
     });
+  };
+
+  const handleCreateCloudVault = async () => {
+    let input: CreateCloudSyncVaultInput;
+    if (cloudProvider === 'github_gist') {
+      input = {
+        provider: cloudProvider,
+        gistId: cloudGistId.trim() || undefined,
+        token: cloudToken,
+      };
+    } else {
+      input = {
+        provider: cloudProvider,
+        endpoint: cloudWebDavEndpoint,
+        username: cloudWebDavUsername,
+        password: cloudWebDavPassword,
+      };
+    }
+    const created = await createCloudSyncVault(input);
+    if (created) {
+      setCloudToken('');
+      setCloudWebDavPassword('');
+    }
+    setPairingCodeCopied(false);
+  };
+
+  const canCreateCloudVault =
+    cloudProvider === 'github_gist'
+      ? Boolean(cloudToken.trim())
+      : Boolean(cloudWebDavEndpoint.trim());
+
+  const handleJoinCloudVault = async () => {
+    const joined = await joinCloudSyncVault(cloudPairingCode);
+    if (joined) {
+      setCloudPairingCode('');
+    }
+  };
+
+  const handleCopyPairingCode = async () => {
+    if (!cloudPairingInfo) return;
+    await navigator.clipboard.writeText(cloudPairingInfo.pairingCode);
+    setPairingCodeCopied(true);
   };
 
   const effectiveAppVersion = appVersion ?? checkedCurrentVersion;
@@ -593,7 +676,7 @@ export function Settings() {
   // Show loading state while settings are initializing
   if (!initialized) {
     return (
-      <div className="p-6 max-w-4xl mx-auto">
+      <div className="settings-page mx-auto w-full min-w-0 max-w-4xl overflow-x-hidden p-4 sm:p-6">
         <div className="flex items-center justify-center py-12">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-tokyo-blue"></div>
           <span className="ml-3 text-tokyo-comment">{t('common.loading')}</span>
@@ -603,8 +686,8 @@ export function Settings() {
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold text-tokyo-fg mb-8">{t('settings.title')}</h1>
+    <div className="settings-page mx-auto w-full min-w-0 max-w-4xl overflow-x-hidden p-4 sm:p-6">
+      <h1 className="mb-7 text-2xl font-bold text-tokyo-fg sm:mb-8">{t('settings.title')}</h1>
 
       {/* ================================================================== */}
       {/* Terminal Settings Section */}
@@ -660,6 +743,259 @@ export function Settings() {
       </SettingsSection>
 
       {/* ================================================================== */}
+      {/* Cloud Sync Section */}
+      {/* ================================================================== */}
+      <SettingsSection
+        icon={<Cloud className="w-5 h-5" />}
+        title={t('settings.cloudSync')}
+        description={t('settings.cloudSyncDesc')}
+      >
+        {cloudSyncError && (
+          <div className="border-y border-tokyo-red/30 bg-tokyo-red/10 px-3 py-2 text-sm text-tokyo-red">
+            {cloudSyncError}
+          </div>
+        )}
+
+        {cloudSyncStatus.unlocked ? (
+          <>
+            <SettingRow label={t('settings.cloudSyncStatus')}>
+              <div className="flex min-w-0 items-center gap-2 text-sm text-tokyo-fg">
+                <span className="h-2 w-2 flex-shrink-0 rounded-full bg-tokyo-green" />
+                <span>{cloudSyncStatus.syncing ? t('settings.cloudSyncing') : t('settings.cloudUnlocked')}</span>
+              </div>
+            </SettingRow>
+            <SettingRow label={t('settings.cloudVault')}>
+              <div className="max-w-full text-right text-xs text-tokyo-comment sm:max-w-sm">
+                <div className="text-tokyo-fg">
+                  {t(`settings.cloudProvider_${cloudSyncStatus.provider ?? 'github_gist'}`)}
+                </div>
+                <div className="break-all font-mono text-tokyo-fg">{cloudSyncStatus.vaultId}</div>
+                <div className="break-all">{cloudSyncStatus.endpoint}</div>
+              </div>
+            </SettingRow>
+            <SettingRow label={t('settings.cloudPending')}>
+              <span className="font-mono text-sm text-tokyo-fg">{cloudSyncStatus.pendingChanges}</span>
+            </SettingRow>
+            <SettingRow label={t('settings.cloudConflicts')}>
+              <span className={`font-mono text-sm ${cloudSyncStatus.conflicts > 0 ? 'text-tokyo-yellow' : 'text-tokyo-fg'}`}>
+                {cloudSyncStatus.conflicts}
+              </span>
+            </SettingRow>
+            <SettingRow label={t('settings.cloudLastSync')}>
+              <span className="text-sm text-tokyo-comment">
+                {cloudSyncStatus.lastSuccessAt
+                  ? new Date(cloudSyncStatus.lastSuccessAt * 1000).toLocaleString(i18n.language)
+                  : t('settings.cloudNeverSynced')}
+              </span>
+            </SettingRow>
+
+            {cloudPairingInfo && (
+              <div className="space-y-2 border-y border-tokyo-yellow/30 bg-tokyo-yellow/10 px-3 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <label htmlFor="cloudPairingOutput" className="text-sm font-medium text-tokyo-fg">
+                    {t('settings.cloudPairingCode')}
+                  </label>
+                  <button
+                    type="button"
+                    className="icon-button tooltip-button"
+                    data-tooltip={pairingCodeCopied ? t('settings.cloudCopied') : t('settings.cloudCopyPairing')}
+                    aria-label={pairingCodeCopied ? t('settings.cloudCopied') : t('settings.cloudCopyPairing')}
+                    onClick={handleCopyPairingCode}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </button>
+                </div>
+                <textarea
+                  id="cloudPairingOutput"
+                  readOnly
+                  value={cloudPairingInfo.pairingCode}
+                  rows={3}
+                  spellCheck={false}
+                  className="w-full resize-none rounded-md border border-tokyo-bg-hl bg-tokyo-bg px-3 py-2 font-mono text-xs text-tokyo-fg focus:outline-none focus:ring-1 focus:ring-tokyo-yellow"
+                />
+                <p className="text-xs text-tokyo-yellow">{t('settings.cloudPairingCodeWarning')}</p>
+              </div>
+            )}
+
+            {cloudSyncReport && (
+              <p className="text-xs text-tokyo-comment">
+                {t('settings.cloudSyncReport', {
+                  uploaded: cloudSyncReport.uploaded,
+                  downloaded: cloudSyncReport.downloaded,
+                  conflicts: cloudSyncReport.conflicts,
+                })}
+              </p>
+            )}
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void lockCloudSync()}
+                disabled={cloudSyncLoading}
+                className="inline-flex min-h-10 items-center gap-2 rounded-md border border-tokyo-bg-hl px-3 py-2 text-sm text-tokyo-fg transition-colors hover:bg-tokyo-bg-hl disabled:opacity-50"
+              >
+                <LockKeyhole className="h-4 w-4" />
+                {t('settings.cloudLock')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void syncCloudNow()}
+                disabled={cloudSyncLoading || cloudSyncStatus.syncing}
+                className="inline-flex min-h-10 items-center gap-2 rounded-md bg-tokyo-blue px-3 py-2 text-sm text-tokyo-on-accent transition-colors hover:bg-tokyo-blue/80 disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${cloudSyncLoading || cloudSyncStatus.syncing ? 'animate-spin' : ''}`} />
+                {t('settings.cloudSyncNow')}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <SettingRow label={t('settings.cloudProvider')}>
+              <Select
+                value={cloudProvider}
+                options={[
+                  { value: 'github_gist', label: t('settings.cloudProvider_github_gist') },
+                  { value: 'webdav', label: t('settings.cloudProvider_webdav') },
+                ]}
+                onChange={setCloudProvider}
+              />
+            </SettingRow>
+
+            {cloudProvider === 'github_gist' && (
+              <>
+                <SettingRow
+                  label={t('settings.cloudGistId')}
+                  description={t('settings.cloudGistIdDesc')}
+                >
+                  <TextInput
+                    value={cloudGistId}
+                    onChange={setCloudGistId}
+                    placeholder="https://gist.github.com/user/id"
+                    className="sm:w-80"
+                  />
+                </SettingRow>
+                <SettingRow
+                  label={t('settings.cloudGithubToken')}
+                  description={t('settings.cloudGithubTokenDesc')}
+                >
+                  <SecretInput
+                    value={cloudToken}
+                    onChange={setCloudToken}
+                    placeholder="github_pat_..."
+                  />
+                </SettingRow>
+              </>
+            )}
+
+            {cloudProvider === 'webdav' && (
+              <>
+                <SettingRow
+                  label={t('settings.cloudWebDavEndpoint')}
+                  description={t('settings.cloudWebDavEndpointDesc')}
+                >
+                  <TextInput
+                    value={cloudWebDavEndpoint}
+                    onChange={setCloudWebDavEndpoint}
+                    placeholder="https://dav.example.com/vibeshell-sync.json"
+                    className="sm:w-80"
+                  />
+                </SettingRow>
+                <SettingRow label={t('settings.cloudWebDavUsername')}>
+                  <TextInput
+                    value={cloudWebDavUsername}
+                    onChange={setCloudWebDavUsername}
+                    placeholder={t('settings.cloudOptional')}
+                    className="sm:w-80"
+                  />
+                </SettingRow>
+                <SettingRow label={t('settings.cloudWebDavPassword')}>
+                  <SecretInput
+                    value={cloudWebDavPassword}
+                    onChange={setCloudWebDavPassword}
+                    placeholder={t('settings.cloudOptional')}
+                  />
+                </SettingRow>
+              </>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void handleCreateCloudVault()}
+                disabled={cloudSyncLoading || !canCreateCloudVault}
+                className="inline-flex min-h-10 items-center gap-2 rounded-md bg-tokyo-blue px-3 py-2 text-sm text-tokyo-on-accent transition-colors hover:bg-tokyo-blue/80 disabled:opacity-50"
+              >
+                <Cloud className="h-4 w-4" />
+                {t('settings.cloudCreateVault')}
+              </button>
+            </div>
+            <SettingRow label={t('settings.cloudPairingCode')}>
+              <TextArea
+                value={cloudPairingCode}
+                onChange={setCloudPairingCode}
+                placeholder="vibeshell-sync-v2..."
+              />
+            </SettingRow>
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void handleJoinCloudVault()}
+                disabled={cloudSyncLoading || !cloudPairingCode.trim()}
+                className="inline-flex min-h-10 items-center gap-2 rounded-md border border-tokyo-blue px-3 py-2 text-sm text-tokyo-blue transition-colors hover:bg-tokyo-blue/10 disabled:opacity-50"
+              >
+                <Key className="h-4 w-4" />
+                {t('settings.cloudJoinVault')}
+              </button>
+            </div>
+          </>
+        )}
+
+        {runtimeCapabilities.directoryTransfer && (
+          <div className="space-y-3 border-t border-tokyo-bg-hl pt-4">
+            <div>
+              <h3 className="text-sm font-medium text-tokyo-fg">{t('settings.cloudPortableFile')}</h3>
+              <p className="mt-1 text-xs text-tokyo-comment">{t('settings.cloudPortableFileDesc')}</p>
+            </div>
+            {cloudSyncFileReport && (
+              <p className="break-all text-xs text-tokyo-comment">
+                {cloudSyncFileReport.operation === 'export'
+                  ? t('settings.cloudFileExportReport', {
+                      count: cloudSyncFileReport.exported,
+                      path: cloudSyncFileReport.path,
+                    })
+                  : t('settings.cloudFileImportReport', {
+                      applied: cloudSyncFileReport.applied,
+                      ignored: cloudSyncFileReport.ignored,
+                      conflicts: cloudSyncFileReport.conflicts,
+                      path: cloudSyncFileReport.path,
+                    })}
+              </p>
+            )}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void importCloudSyncFile()}
+                disabled={cloudSyncLoading}
+                className="inline-flex min-h-10 items-center gap-2 rounded-md border border-tokyo-blue px-3 py-2 text-sm text-tokyo-blue transition-colors hover:bg-tokyo-blue/10 disabled:opacity-50"
+              >
+                <FileUp className="h-4 w-4" />
+                {t('settings.cloudImportFile')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void exportCloudSyncFile()}
+                disabled={cloudSyncLoading}
+                className="inline-flex min-h-10 items-center gap-2 rounded-md border border-tokyo-bg-hl px-3 py-2 text-sm text-tokyo-fg transition-colors hover:bg-tokyo-bg-hl disabled:opacity-50"
+              >
+                <FileDown className="h-4 w-4" />
+                {t('settings.cloudExportFile')}
+              </button>
+            </div>
+          </div>
+        )}
+      </SettingsSection>
+
+      {/* ================================================================== */}
       {/* AI Command Prediction Section */}
       {/* ================================================================== */}
       <SettingsSection
@@ -699,7 +1035,7 @@ export function Settings() {
             value={settings.aiPrediction.baseUrl}
             onChange={(baseUrl) => updateAiPredictionSettings({ baseUrl })}
             placeholder={getDefaultAiBaseUrl(settings.aiPrediction.provider)}
-            className="w-80"
+            className="sm:w-80"
           />
         </SettingRow>
 
@@ -708,7 +1044,7 @@ export function Settings() {
             value={settings.aiPrediction.model}
             onChange={(model) => updateAiPredictionSettings({ model })}
             placeholder={getDefaultAiModel(settings.aiPrediction.provider)}
-            className="w-64"
+            className="sm:w-64"
           />
         </SettingRow>
 
@@ -741,7 +1077,7 @@ export function Settings() {
         description={t('settings.appearanceDesc')}
       >
         <SettingRow label={t('settings.theme')} description={t('settings.themeDesc')}>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             {themes.map((theme) => (
               <ThemePreview
                 key={theme.name}
@@ -825,11 +1161,12 @@ export function Settings() {
       {/* ================================================================== */}
       {/* File Transfer Section */}
       {/* ================================================================== */}
-      <SettingsSection
-        icon={<FolderOpen className="w-5 h-5" />}
-        title={t('settings.fileTransfer')}
-        description={t('settings.fileTransferDesc')}
-      >
+      {runtimeCapabilities.directoryTransfer && (
+        <SettingsSection
+          icon={<FolderOpen className="w-5 h-5" />}
+          title={t('settings.fileTransfer')}
+          description={t('settings.fileTransferDesc')}
+        >
         <SettingRow
           label={t('settings.respectGitignore')}
           description={t('settings.respectGitignoreDesc')}
@@ -861,7 +1198,8 @@ export function Settings() {
             {t('common.save')}
           </button>
         </div>
-      </SettingsSection>
+        </SettingsSection>
+      )}
 
       {/* ================================================================== */}
       {/* Security Section */}
@@ -876,7 +1214,9 @@ export function Settings() {
       {/* ================================================================== */}
       {/* Agent Gateway Section */}
       {/* ================================================================== */}
-      <SettingsSection
+      {runtimeCapabilities.agentGateway && (
+        <>
+        <SettingsSection
         icon={<Bot className="w-5 h-5" />}
         title={t('settings.gateway')}
         description={t('settings.gatewayDesc')}
@@ -916,7 +1256,7 @@ export function Settings() {
             </div>
           </dl>
         </div>
-      </SettingsSection>
+        </SettingsSection>
 
       {/* ================================================================== */}
       {/* Skills Section */}
@@ -979,7 +1319,9 @@ export function Settings() {
             </button>
           </div>
         )}
-      </SettingsSection>
+        </SettingsSection>
+        </>
+      )}
 
       {/* ================================================================== */}
       {/* About Section */}
@@ -989,27 +1331,28 @@ export function Settings() {
         title={t('settings.about')}
         description={t('settings.aboutDesc')}
       >
-        <div className="bg-tokyo-bg-dark rounded-lg p-6 border border-tokyo-bg-hl">
-          <div className="flex items-start gap-4">
-            <div className="text-4xl text-tokyo-blue font-bold">{'>'}_</div>
-            <div className="flex-1">
+        <div className="rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark p-4 sm:p-6">
+          <div className="flex min-w-0 flex-col items-start gap-3 sm:flex-row sm:gap-4">
+            <div className="flex-shrink-0 text-3xl font-bold text-tokyo-blue sm:text-4xl">{'>'}_</div>
+            <div className="min-w-0 flex-1">
               <h3 className="text-xl font-bold text-tokyo-fg">{t('settings.appTitle')}</h3>
               <p className="text-tokyo-comment mt-1">{t('settings.appSubtitle')}</p>
 
               <div className="mt-4 space-y-2">
-                <div className="flex items-center gap-2 text-sm">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
                   <span className="text-tokyo-comment">{t('common.version')}:</span>
                   <span className="text-tokyo-fg font-mono">
                     {appVersion ?? (appVersionLoaded ? t('common.unknown') : t('common.loading'))}
                   </span>
                 </div>
-                <div className="flex items-center gap-2 text-sm">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
                   <span className="text-tokyo-comment">{t('common.builtWith')}:</span>
                   <span className="text-tokyo-fg">Tauri + React + TypeScript</span>
                 </div>
               </div>
 
-              <div className="mt-4 pt-4 border-t border-tokyo-bg-hl">
+              {runtimeCapabilities.desktopUpdater && (
+                <div className="mt-4 pt-4 border-t border-tokyo-bg-hl">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-sm font-medium text-tokyo-fg">{t('settings.updates')}</div>
@@ -1051,9 +1394,10 @@ export function Settings() {
                     </button>
                   </div>
                 </div>
-              </div>
+                </div>
+              )}
 
-              <div className="mt-6 flex gap-3">
+              <div className="mt-6 flex flex-wrap gap-3">
                 <a
                   href="https://github.com/veithly/vibeshell"
                   target="_blank"
@@ -1073,8 +1417,8 @@ export function Settings() {
 
         {/* Reset Settings */}
         <div className="mt-6 pt-6 border-t border-tokyo-bg-hl">
-          <div className="flex items-center justify-between">
-            <div>
+          <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
               <h4 className="text-tokyo-fg font-medium">{t('settings.resetSettings')}</h4>
               <p className="text-tokyo-comment text-sm mt-0.5">
                 {t('settings.resetSettingsDesc')}
@@ -1091,8 +1435,8 @@ export function Settings() {
                 <span>{t('settings.resetAll')}</span>
               </button>
             ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-tokyo-comment text-sm mr-2">{t('settings.resetConfirm')}</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="mr-2 text-sm text-tokyo-comment">{t('settings.resetConfirm')}</span>
                 <button
                   onClick={handleResetSettings}
                   className="px-3 py-1.5 rounded-md bg-tokyo-red text-white text-sm

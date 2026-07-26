@@ -87,7 +87,7 @@ cli/                          # CLI client (workspace member)
 |-------|---------|
 | `servers` | SSH server configs (host, port, auth, jump_host, post_login_cmd) |
 | `groups` | Server organization groups |
-| `credentials` | Encrypted credential storage |
+| `credentials` | Device-local credential storage (secure vault pending) |
 | `server_credentials` | Per-server saved credentials |
 | `tunnel_configs` | Persistent SSH tunnel configurations |
 | `command_snippets` | Saved command templates |

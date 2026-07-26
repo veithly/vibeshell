@@ -498,6 +498,17 @@ impl SshClient {
     /// Execute a command on a separate exec channel and capture output.
     /// This does NOT use the shell channel, so output won't appear in the terminal.
     pub async fn exec_command(&self, command: &str) -> Result<String> {
+        self.exec_command_with_stdin(command, None).await
+    }
+
+    /// Like [`exec_command`] but optionally writes `stdin_data` to the channel's
+    /// stdin after starting the command, then signals EOF. Used by elevated
+    /// plugin actions to feed a sudo password to `sudo -S`.
+    pub async fn exec_command_with_stdin(
+        &self,
+        command: &str,
+        stdin_data: Option<&str>,
+    ) -> Result<String> {
         debug!("[SSH] Executing command via exec channel: {}", command);
 
         // Open the channel while holding the russh handle lock, then release it.
@@ -521,6 +532,21 @@ impl SshClient {
         if let Err(error) = channel.exec(true, command).await {
             let _ = channel.close().await;
             return Err(error).with_context(|| format!("Failed to exec command: {}", command));
+        }
+
+        // Feed stdin (e.g. a sudo password) and close our side so the remote
+        // process can proceed. Failures here are non-fatal: the command still
+        // runs, it just won't receive the password.
+        if let Some(data) = stdin_data {
+            if !data.is_empty() {
+                let payload = format!("{data}\n");
+                if let Err(error) = channel.data(payload.as_bytes()).await {
+                    debug!("[SSH] Failed to write plugin stdin: {}", error);
+                }
+            }
+            if let Err(error) = channel.eof().await {
+                debug!("[SSH] Failed to signal EOF after stdin: {}", error);
+            }
         }
 
         // Collect output

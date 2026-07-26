@@ -13,7 +13,7 @@
 [![Rust](https://img.shields.io/badge/Rust-native-f7768e?style=flat-square)](https://www.rust-lang.org)
 [![Platform](https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-supported-bb9af7?style=flat-square)](#install)
 
-[Screenshots](#screenshots) · [Why It Exists](#why-it-exists) · [Features](#features) · [AI Agents](#ai-agents) · [Install](#install) · [Build](#build-from-source)
+[Screenshots](#screenshots) · [Recent Updates](#recent-updates) · [Why It Exists](#why-it-exists) · [Features](#features) · [AI Agents](#ai-agents) · [Install](#install) · [Build](#build-from-source)
 
 </div>
 
@@ -35,6 +35,15 @@ If you have ever asked an AI coding agent to deploy, inspect logs, edit a remote
 | --- | --- |
 | ![Three-column SFTP file manager with sanitized demo paths](docs/assets/screenshots/sftp-workflow.png) | ![Five high-contrast themes in English settings](docs/assets/screenshots/theme-system.png) |
 
+## Recent Updates
+
+- **Coding agents inside the terminal workspace**: launch Claude Code, Codex, OpenCode, or Pi in a native terminal tab, choose a repository and supported start/access mode, then inspect its live Git status and unified diffs without leaving VibeShell.
+- **Remote file workspace**: open SFTP files in shared tabs, edit syntax-highlighted text with save protection, preview images, PDF, audio, and video, and search the contents of ZIP, TAR, TAR.GZ, and TGZ archives.
+- **Encrypted cloud sync**: pair devices through a private GitHub Gist or WebDAV file and sync servers, groups, and command snippets as AES-256-GCM ciphertext. Credentials, host fingerprints, recordings, and live sessions remain device-local; vault keys are session-only until secure Keychain/Keystore persistence lands.
+- **Stronger SFTP workflows**: multi-select batch actions, visible upload/download progress, bounded large-file previews, archive compress/extract actions, and safer delete and transfer handling.
+- **Extensible session tools**: install external command plugins from the marketplace with explicit local/remote execution permissions and guarded `sudo` support.
+- **Mobile-ready runtime**: capability-gated iOS/Android foundations, foreground SSH/SFTP, touch terminal keys, safe-area layouts, and responsive workspace actions. Native mobile file pickers, persistent credentials, and background SSH are intentionally deferred.
+
 ### New In 1.0
 
 - **Split shells, one workspace**: open up to four terminal panes and switch between row and column layouts without leaving the active session.
@@ -53,13 +62,15 @@ VibeShell is designed around that new workflow:
 - **Human-friendly by default**: fast tabs, xterm.js rendering, command snippets, local shell, SFTP, tunnels, and session recording.
 - **Agent-ready when needed**: built-in MCP tools expose server, session, command, search, and SFTP workflows to compatible AI tools.
 - **Observable automation**: agents can connect, run commands, inspect output, and transfer files while you keep the UI open as the control room.
-- **Native and local-first**: Rust backend, SQLite storage, encrypted credentials, and no hosted control plane.
+- **Native and local-first**: Rust backend, SQLite storage, optional device-local credentials, and no hosted control plane.
 
 ## Features
 
 ### Terminal Workspace
 
 - Multi-tab SSH sessions and local shell sessions.
+- Native terminal tabs for Claude Code, Codex, OpenCode, and Pi coding agents.
+- Live workspace-change panel with staged/unstaged state, rename and conflict detection, and bounded unified diffs.
 - Up to four shell panes with horizontal and vertical split layouts.
 - Direct-to-terminal startup with no empty landing screen.
 - Smooth terminal rendering with xterm.js and WebGL support.
@@ -80,14 +91,26 @@ VibeShell is designed around that new workflow:
 ### SSH, SFTP, And Tunnels
 
 - Password, key, and key-with-passphrase authentication.
-- Saved encrypted credentials and per-server configuration.
+- Optional device-local credentials and per-server configuration. Secure Keychain/Keystore storage is planned; current saved credentials are not encrypted at rest.
 - Host key verification with trusted fingerprint management.
 - Jump host / ProxyJump support for bastion access.
 - SSH agent forwarding.
 - Finder-style SFTP column browsing plus an icon view for scanning folders visually.
 - Expandable SFTP workspace with a dedicated address row and responsive action menu.
-- File preview, upload, download, rename, delete, mkdir, recursive upload, and sync flows.
+- Shared file-workspace tabs with syntax-aware text editing, rich media previews, and searchable archive listings.
+- File preview, multi-select upload/download/delete, rename, mkdir, compression, extraction, recursive upload, and sync flows with visible progress.
 - Local forward, remote forward, and dynamic SOCKS5 tunnels.
+
+### Cloud Sync And Mobile
+
+- End-to-end encrypted server, group, and command-snippet sync through GitHub Gist or WebDAV.
+- Deterministic revisions, tombstones, conflict reporting, retryable outbox delivery, and portable JSON import/export.
+- Credentials, trusted fingerprints, recordings, tunnels, and runtime sessions stay out of cloud sync.
+- Foreground SSH terminal and remote SFTP browsing on the mobile runtime foundation, with desktop-only features hidden through backend capability detection.
+
+### Local Coding Agents
+
+VibeShell can detect installed Claude Code, Codex, OpenCode, and Pi CLIs and launch them directly in the visible terminal workspace. Each tool exposes only the session and access modes it supports. Agent sessions keep their repository path attached, so the workspace-change panel can refresh Git status and render text diffs while the agent works.
 
 ### AI Agents
 
@@ -123,14 +146,17 @@ Agent:
 VibeShell
 ├─ React 18 + TypeScript + Zustand + Tailwind
 │  ├─ Server list, session tabs, terminal, SFTP, tunnels, settings
+│  ├─ Coding-agent launcher, file workspace, and live Git diff panel
 │  └─ safeInvoke wrappers for all Tauri IPC calls
 ├─ Tauri 2 IPC bridge
 ├─ Rust backend
 │  ├─ russh SSH client and session manager
 │  ├─ russh-sftp operations and recursive sync helpers
-│  ├─ SQLite storage and encrypted credentials
+│  ├─ SQLite storage and device-local credentials
 │  ├─ SSH tunnel manager
 │  ├─ local shell manager
+│  ├─ encrypted cloud sync and portable workspace snapshots
+│  ├─ local coding-agent launcher and bounded Git inspection
 │  ├─ authenticated Agent Gateway with per-launch discovery
 │  └─ MCP tools sharing the GUI session manager
 └─ AI-tool skill installer
@@ -199,7 +225,9 @@ The Windows packaging script produces NSIS and MSI installers with the built-in 
 GitHub Actions run:
 
 - Frontend type-check and Vite build.
+- Frontend unit/component tests.
 - Rust `cargo check` and `cargo test` on Linux, Windows, and macOS.
+- Rust target check for the iOS arm64 simulator.
 - Linux `cargo clippy -- -D warnings`.
 - Release builds for Windows x64, macOS arm64/x64, and Linux x64.
 
@@ -218,6 +246,8 @@ src-tauri/src/ssh/      SSH client and host fingerprints
 src-tauri/src/sftp/     SFTP operations and sync helpers
 src-tauri/src/mcp/      MCP tools and transports
 src-tauri/src/install/  AI tool detection and skill installer
+src-tauri/src/cloud_sync/ Encrypted GitHub Gist and WebDAV sync
+src-tauri/src/coding_agent/ Local coding-agent launch and Git workspace inspection
 cli/                    optional standalone CLI source for legacy workflows
 docs/                   Design notes, plans, and README screenshots
 ```

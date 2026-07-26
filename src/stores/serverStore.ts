@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { useMemo } from 'react';
 import { safeInvoke, TauriError } from '../lib/tauri';
 import { useNotificationStore } from './notificationStore';
+import { scheduleCloudSync } from './cloudSyncStore';
 
 /**
  * Helper to show error notification
@@ -31,15 +32,15 @@ export interface Server {
   port: number;
   username: string;
   auth_type: AuthType;
-  credential_id?: string;
-  group_id?: string;
+  credential_id?: string | null;
+  group_id?: string | null;
   tags: string[];
   created_at: number;
   updated_at: number;
   /** Jump host server ID for ProxyJump connections */
-  jump_host_id?: string;
+  jump_host_id?: string | null;
   /** Command to auto-execute after SSH login */
-  post_login_command?: string;
+  post_login_command?: string | null;
   /** Whether to enable SSH agent forwarding */
   agent_forwarding?: boolean;
 }
@@ -131,6 +132,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
         servers: [...state.servers, result.data],
         loading: false,
       }));
+      scheduleCloudSync();
       return result.data;
     } else {
       set({ error: result.error.message, loading: false });
@@ -149,6 +151,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
         ),
         loading: false,
       }));
+      scheduleCloudSync();
     } else {
       set({ error: result.error.message, loading: false });
       showError('Failed to Update Server', result.error);
@@ -164,6 +167,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
         selectedServerId: state.selectedServerId === id ? null : state.selectedServerId,
         loading: false,
       }));
+      scheduleCloudSync();
     } else {
       set({ error: result.error.message, loading: false });
       showError('Failed to Delete Server', result.error);
@@ -201,6 +205,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
         groups: [...state.groups, result.data],
         loading: false,
       }));
+      scheduleCloudSync();
       return result.data;
     } else {
       set({ error: result.error.message, loading: false });
@@ -221,6 +226,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
         ),
         loading: false,
       }));
+      scheduleCloudSync();
     } else {
       set({ error: result.error.message, loading: false });
       showError('Failed to Delete Group', result.error);

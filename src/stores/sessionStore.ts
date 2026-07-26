@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { safeInvoke, TauriError, sendInputBatched } from '../lib/tauri';
 import { useNotificationStore } from './notificationStore';
+import { useFileWorkspaceStore } from './fileWorkspaceStore';
+import type { CodingAgentLaunchRequest } from '../types/codingAgent';
 
 /**
  * Helper to show error notification
@@ -21,6 +23,27 @@ function mapSessionInfo(info: SessionInfo): Session {
     state: info.state,
     createdAt: info.created_at * 1000,
     sessionType: 'ssh',
+  };
+}
+
+const localStateMap: Record<LocalShellSessionInfo['state'], SessionState> = {
+  starting: 'connecting',
+  running: 'connected',
+  stopped: 'disconnected',
+  error: 'error',
+};
+
+function mapLocalSessionInfo(info: LocalShellSessionInfo): Session {
+  return {
+    id: info.id,
+    serverId: info.shellId,
+    serverName: info.shellName,
+    state: localStateMap[info.state],
+    createdAt: info.createdAt * 1000,
+    sessionType: 'local',
+    purpose: info.agentId ? 'coding_agent' : 'shell',
+    agentId: info.agentId ?? undefined,
+    cwd: info.cwd ?? undefined,
   };
 }
 
@@ -59,6 +82,8 @@ export interface LocalShellSessionInfo {
   id: string;
   shellId: string;
   shellName: string;
+  cwd?: string | null;
+  agentId?: string | null;
   state: 'starting' | 'running' | 'stopped' | 'error';
   createdAt: number;
   clients: number;
@@ -68,6 +93,7 @@ export interface LocalShellSessionInfo {
  * Connection state for a session
  */
 export type SessionState = 'connecting' | 'connected' | 'disconnected' | 'error';
+export type SessionPurpose = 'shell' | 'coding_agent';
 
 /**
  * Represents an active session (SSH or Local Shell)
@@ -87,6 +113,12 @@ export interface Session {
   errorMessage?: string;
   /** Session type: SSH or Local Shell */
   sessionType: SessionType;
+  /** What the local PTY is being used for. SSH sessions omit this. */
+  purpose?: SessionPurpose;
+  /** Coding agent adapter ID for embedded agent sessions. */
+  agentId?: string;
+  /** Workspace selected when the coding agent was launched. */
+  cwd?: string;
 }
 
 /**
@@ -134,6 +166,10 @@ interface SessionStore {
   ) => Promise<Session | null>;
   /** Attach to an existing session and start receiving output */
   attachSession: (sessionId: string) => Promise<boolean>;
+  /** Attach to a local shell session (replays buffered output) */
+  attachLocalShellSession: (sessionId: string) => Promise<boolean>;
+  /** Detach a terminal view from a local PTY session. */
+  detachLocalShellSession: (sessionId: string) => Promise<boolean>;
   /** Detach from a session */
   detachSession: (sessionId: string) => Promise<boolean>;
   /** Send input data to a session */
@@ -162,6 +198,8 @@ interface SessionStore {
     cols?: number,
     rows?: number
   ) => Promise<Session | null>;
+  /** Launch a local coding agent inside a PTY-backed session. */
+  launchCodingAgentSession: (request: CodingAgentLaunchRequest) => Promise<Session | null>;
   /** Send input to a local shell session */
   sendLocalShellInput: (sessionId: string, data: string) => Promise<boolean>;
   /** Send input fast to a local shell session (fire-and-forget) */
@@ -194,6 +232,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   removeSession: (id) => {
+    useFileWorkspaceStore.getState().closeTabsForSession(id);
     set((state) => {
       const newSessions = state.sessions.filter((s) => s.id !== id);
       let newActiveId = state.activeSessionId;
@@ -235,6 +274,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   clearAllSessions: () => {
+    useFileWorkspaceStore.getState().retainTabsForSessions([]);
     set({ sessions: [], activeSessionId: null });
   },
 
@@ -353,6 +393,32 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     return false;
   },
 
+  attachLocalShellSession: async (sessionId: string) => {
+    // local_shell_attach replays the buffered output (recent history +
+    // initial prompt) via session-output events and spawns a forwarder for
+    // subsequent live output. The listener must already be registered before
+    // this call so replayed chunks are not lost.
+    const result = await safeInvoke('local_shell_attach', {
+      request: {
+        sessionId: sessionId,
+      },
+    });
+    if (!result.success) {
+      console.warn('[sessionStore] local_shell_attach failed:', result.error.message);
+    }
+    return result.success;
+  },
+
+  detachLocalShellSession: async (sessionId: string) => {
+    const result = await safeInvoke('local_shell_detach', {
+      request: { sessionId },
+    });
+    if (!result.success) {
+      console.warn('[sessionStore] local_shell_detach failed:', result.error.message);
+    }
+    return result.success;
+  },
+
   detachSession: async (sessionId: string) => {
     const result = await safeInvoke('session_detach', {
       request: {
@@ -442,6 +508,10 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     if (result.success) {
       const sessions: Session[] = result.data.map(mapSessionInfo);
 
+      useFileWorkspaceStore
+        .getState()
+        .retainTabsForSessions(sessions.map((session) => session.id));
+
       set((state) => {
         const activeSessionStillExists = state.activeSessionId
           ? sessions.some((session) => session.id === state.activeSessionId)
@@ -460,6 +530,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const errorMsg = result.error.isTauriUnavailable
         ? 'Running in browser mode'
         : result.error.message;
+      useFileWorkspaceStore.getState().retainTabsForSessions([]);
       set({ sessions: [], loading: false, error: errorMsg });
       // Don't show toast for initial fetch failures when Tauri unavailable
       if (!result.error.isTauriUnavailable) {
@@ -469,21 +540,44 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   syncRemoteSessions: async () => {
-    const result = await safeInvoke<SessionInfo[]>('session_list');
+    const [result, localResult] = await Promise.all([
+      safeInvoke<SessionInfo[]>('session_list'),
+      safeInvoke<LocalShellSessionInfo[]>('local_shell_list_sessions'),
+    ]);
     if (!result.success) return;
 
     const backendSessions = result.data;
     const backendById = new Map(backendSessions.map((session) => [session.id, session]));
+    const backendLocalById = localResult.success
+      ? new Map(localResult.data.map((session) => [session.id, session]))
+      : null;
 
     // Merge against the latest state after the async IPC call so a local shell
     // created while session_list is in flight cannot be overwritten.
     set((state) => {
-      const localSshIds = new Set(
+      const knownSshIds = new Set(
         state.sessions.filter((session) => session.sessionType === 'ssh').map((session) => session.id)
+      );
+      const knownLocalIds = new Set(
+        state.sessions.filter((session) => session.sessionType === 'local').map((session) => session.id)
       );
       let changed = false;
       const merged = state.sessions.flatMap((session) => {
-        if (session.sessionType !== 'ssh') return [session];
+        if (session.sessionType === 'local') {
+          const backend = backendLocalById?.get(session.id);
+          if (!backend) return [session];
+          const mapped = mapLocalSessionInfo(backend);
+          if (
+            mapped.state !== session.state
+            || mapped.serverName !== session.serverName
+            || mapped.cwd !== session.cwd
+            || mapped.agentId !== session.agentId
+          ) {
+            changed = true;
+            return [{ ...session, ...mapped }];
+          }
+          return [session];
+        }
         const backend = backendById.get(session.id);
         if (!backend) {
           changed = true;
@@ -497,11 +591,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       });
 
       const newSessions = backendSessions
-        .filter((info) => !localSshIds.has(info.id))
+        .filter((info) => !knownSshIds.has(info.id))
         .map(mapSessionInfo);
+      const newLocalSessions = localResult.success
+        ? localResult.data.filter((info) => !knownLocalIds.has(info.id)).map(mapLocalSessionInfo)
+        : [];
       if (newSessions.length > 0) {
         changed = true;
         merged.push(...newSessions);
+      }
+      if (newLocalSessions.length > 0) {
+        changed = true;
+        merged.push(...newLocalSessions);
       }
 
       const nextActiveSessionId =
@@ -512,6 +613,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       if (!changed && nextActiveSessionId === state.activeSessionId) return state;
       return { sessions: merged, activeSessionId: nextActiveSessionId };
     });
+    useFileWorkspaceStore
+      .getState()
+      .retainTabsForSessions(get().sessions.map((session) => session.id));
   },
 
   // Local shell session methods
@@ -527,22 +631,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     });
 
     if (result.success) {
-      // Map local shell state to session state
-      const stateMap: Record<string, SessionState> = {
-        starting: 'connecting',
-        running: 'connected',
-        stopped: 'disconnected',
-        error: 'error',
-      };
-
-      const session: Session = {
-        id: result.data.id,
-        serverId: result.data.shellId,
-        serverName: result.data.shellName,
-        state: stateMap[result.data.state] || 'connecting',
-        createdAt: result.data.createdAt * 1000,
-        sessionType: 'local',
-      };
+      const session = mapLocalSessionInfo(result.data);
 
       set((state) => ({
         sessions: [...state.sessions, session],
@@ -559,6 +648,25 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       showError('Failed to Create Local Shell', result.error);
       return null;
     }
+  },
+
+  launchCodingAgentSession: async (request: CodingAgentLaunchRequest) => {
+    set({ loading: true, error: null });
+    const result = await safeInvoke<LocalShellSessionInfo>('coding_agent_launch', { request });
+
+    if (!result.success) {
+      set({ loading: false, error: result.error.message });
+      showError('Failed to Start Coding Agent', result.error);
+      return null;
+    }
+
+    const session = mapLocalSessionInfo(result.data);
+    set((state) => ({
+      sessions: upsertSession(state.sessions, session),
+      activeSessionId: session.id,
+      loading: false,
+    }));
+    return session;
   },
 
   sendLocalShellInput: async (sessionId: string, data: string) => {

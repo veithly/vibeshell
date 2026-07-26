@@ -7,10 +7,29 @@ import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useSettingsStore, themes } from '../../stores/settingsStore';
 import { CompletionPopup, type CompletionItem } from './CompletionPopup';
+import { MobileKeyBar } from './MobileKeyBar';
 import { useCompletion } from './useCompletion';
 import { applyTrackedInput, getClickedInputPosition, getCursorMoveSequence } from './inputCursor';
+import { flushInputBatch } from '../../lib/tauri';
 
 type ConnectionStatus = 'initializing' | 'listening' | 'receiving' | 'error';
+
+function fitTerminalIfRenderable(fitAddon: FitAddon, terminalElement: HTMLElement | null): boolean {
+  if (!terminalElement?.isConnected) return false;
+
+  const rect = terminalElement.getBoundingClientRect();
+  if (
+    !Number.isFinite(rect.width)
+    || !Number.isFinite(rect.height)
+    || rect.width <= 0
+    || rect.height <= 0
+  ) {
+    return false;
+  }
+
+  fitAddon.fit();
+  return true;
+}
 
 function getTerminalScreenRect(xterm: XTerm, fallbackElement: HTMLElement): DOMRect {
   const screen = xterm.element?.querySelector('.xterm-screen') as HTMLElement | null;
@@ -83,6 +102,13 @@ function useSessionType(sessionId: string | undefined): 'local' | 'ssh' | undefi
   });
 }
 
+function useIsCodingAgentSession(sessionId: string | undefined): boolean {
+  return useSessionStore((state) => {
+    if (!sessionId) return false;
+    return state.sessions.find((session) => session.id === sessionId)?.purpose === 'coding_agent';
+  });
+}
+
 interface TerminalProps {
   sessionId?: string;
   onData?: (data: string) => void;
@@ -103,6 +129,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     const fitAddonRef = useRef<FitAddon | null>(null);
     const eventUnlistenRef = useRef<(() => void) | null>(null);
     const [_connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('initializing');
+    const [terminalInitializationFor, setTerminalInitializationFor] = useState<string | null | undefined>(null);
+    const [terminalReadyFor, setTerminalReadyFor] = useState<string | null | undefined>(null);
     const receivedDataRef = useRef(false);
 
     const inputBufferRef = useRef<string>('');
@@ -112,6 +140,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     const sendInputFast = useSessionStore((s) => s.sendInputFast);
     const resizeSession = useSessionStore((s) => s.resizeSession);
     const attachSession = useSessionStore((s) => s.attachSession);
+    const attachLocalShellSession = useSessionStore((s) => s.attachLocalShellSession);
+    const detachLocalShellSession = useSessionStore((s) => s.detachLocalShellSession);
     const detachSession = useSessionStore((s) => s.detachSession);
     const sendLocalShellInput = useSessionStore((s) => s.sendLocalShellInput);
     const sendLocalShellInputFast = useSessionStore((s) => s.sendLocalShellInputFast);
@@ -120,6 +150,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
     const sessionType = useSessionType(sessionId);
     const isLocalShell = sessionType === 'local';
+    const isCodingAgent = useIsCodingAgentSession(sessionId);
+    const rawInputRef = useRef(isCodingAgent);
 
     const sendInputForSession = isLocalShell ? sendLocalShellInput : sendInput;
     const sendInputFastForSession = isLocalShell ? sendLocalShellInputFast : sendInputFast;
@@ -134,7 +166,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     useEffect(() => { sendInputForSessionRef.current = sendInputForSession; }, [sendInputForSession]);
     useEffect(() => { resizeForSessionRef.current = resizeSessionForSession; }, [resizeSessionForSession]);
     useEffect(() => { onDataRef.current = onData; }, [onData]);
-
     const [completionState, completionActions] = useCompletion(settings.aiPrediction);
 
     const [contextMenu, setContextMenu] = useState({
@@ -153,6 +184,16 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     useEffect(() => {
       completionActionsRef.current = completionActions;
     }, [completionActions]);
+
+    useEffect(() => {
+      rawInputRef.current = isCodingAgent;
+      if (isCodingAgent) {
+        inputBufferRef.current = '';
+        cursorPositionRef.current = 0;
+        completionActionsRef.current.hideCompletions();
+        completionActionsRef.current.clearGhostText();
+      }
+    }, [isCodingAgent]);
 
     useImperativeHandle(ref, () => ({
       write: (data: string | Uint8Array) => {
@@ -211,8 +252,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       try {
         const text = await navigator.clipboard.readText();
         if (text) {
-          const processedText = text.replace(/\r?\n/g, '\r');
-          sendInputForSessionRef.current(sid, processedText);
+          const xterm = xtermRef.current;
+          if (xterm) {
+            // xterm adds bracketed-paste markers when the active TUI requests them.
+            xterm.paste(text);
+          } else {
+            sendInputForSessionRef.current(sid, text);
+          }
           inputBufferRef.current = '';
           cursorPositionRef.current = 0;
           completionActionsRef.current.hideCompletions();
@@ -221,6 +267,17 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       } catch (err) {
         console.error('[Terminal] Failed to paste:', err);
       }
+    }, []);
+
+    const handleMobileKey = useCallback((data: string) => {
+      const sid = sessionIdRef.current;
+      if (!sid) return;
+
+      completionActionsRef.current.hideCompletions();
+      completionActionsRef.current.clearGhostText();
+      sendInputFastRef.current(sid, data);
+      onDataRef.current?.(data);
+      xtermRef.current?.focus();
     }, []);
 
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -335,7 +392,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     }, [handleCompletionSelect]);
 
     useEffect(() => {
-      if (!sessionId) {
+      if (!sessionId || terminalReadyFor !== sessionId) {
         return;
       }
 
@@ -344,6 +401,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
       let unlisten: (() => void) | null = null;
       let shouldDetach = false;
+      let disposed = false;
 
       interface SessionOutputEvent {
         session_id?: string;
@@ -369,18 +427,37 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             }
           });
 
+          if (disposed) {
+            unlisten();
+            unlisten = null;
+            return;
+          }
+
           eventUnlistenRef.current = unlisten;
 
+          let attached: boolean;
           if (!isLocalShell) {
-            shouldDetach = await attachSession(sessionId);
+            attached = await attachSession(sessionId);
           } else {
-            // The login shell can print its first prompt before React has mounted
-            // this listener. An empty command asks it to redraw once the bridge is ready.
-            await sendInputForSessionRef.current(sessionId, '\r');
+            // Local shell: attach replays the buffered output (including the
+            // initial prompt) via the session-output event. No need to send a
+            // carriage return — that would trigger a second, duplicate prompt.
+            attached = await attachLocalShellSession(sessionId);
           }
+
+          if (disposed) {
+            if (attached) {
+              const detach = isLocalShell ? detachLocalShellSession : detachSession;
+              await detach(sessionId);
+            }
+            return;
+          }
+
+          shouldDetach = attached;
 
           setConnectionStatus('listening');
         } catch (error) {
+          if (disposed) return;
           console.error('[Terminal] Failed to set up session output listener:', error);
           setConnectionStatus('error');
           if (xtermRef.current) {
@@ -392,50 +469,69 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       setupListener();
 
       return () => {
-        if (eventUnlistenRef.current) {
-          eventUnlistenRef.current();
+        disposed = true;
+        unlisten?.();
+        if (eventUnlistenRef.current === unlisten) {
           eventUnlistenRef.current = null;
         }
-        if (shouldDetach && !isLocalShell) {
-          detachSession(sessionId).catch((error) => {
+        if (shouldDetach) {
+          const detach = isLocalShell ? detachLocalShellSession : detachSession;
+          detach(sessionId).catch((error) => {
             console.warn('[Terminal] Failed to detach session:', error);
           });
         }
       };
-    }, [sessionId, isLocalShell, attachSession, detachSession]);
+    }, [
+      sessionId,
+      terminalReadyFor,
+      isLocalShell,
+      attachSession,
+      attachLocalShellSession,
+      detachSession,
+      detachLocalShellSession,
+    ]);
 
     const getXtermTheme = useCallback(() => {
       const currentTheme = themes.find((t) => t.name === settings.appearance.theme);
       const baseColors = currentTheme?.colors || themes[0].colors;
+      const isLight = currentTheme?.name === 'paper-white' || currentTheme?.name === 'warm-ivory';
       return {
         background: baseColors.bg,
         foreground: baseColors.fg,
         cursor: baseColors.accent,
         cursorAccent: baseColors.bg,
         selectionBackground: baseColors.bgHl,
-        black: '#32344a',
-        red: '#f7768e',
-        green: '#9ece6a',
-        yellow: '#e0af68',
-        blue: '#7aa2f7',
-        magenta: '#ad8ee6',
-        cyan: '#449dab',
-        white: '#787c99',
-        brightBlack: '#444b6a',
-        brightRed: '#ff7a93',
-        brightGreen: '#b9f27c',
-        brightYellow: '#ff9e64',
-        brightBlue: '#7da6ff',
-        brightMagenta: '#bb9af7',
-        brightCyan: '#0db9d7',
-        brightWhite: '#acb0d0',
+        black: isLight ? baseColors.fg : baseColors.bgHl,
+        red: baseColors.red,
+        green: baseColors.green,
+        yellow: baseColors.yellow,
+        blue: baseColors.accent,
+        magenta: baseColors.magenta,
+        cyan: baseColors.cyan,
+        white: isLight ? baseColors.fgDark : baseColors.fg,
+        brightBlack: baseColors.fgDark,
+        brightRed: baseColors.red,
+        brightGreen: baseColors.green,
+        brightYellow: baseColors.yellow,
+        brightBlue: baseColors.accent,
+        brightMagenta: baseColors.magenta,
+        brightCyan: baseColors.cyan,
+        brightWhite: baseColors.fg,
       };
     }, [settings.appearance.theme]);
 
     useEffect(() => {
-      if (!terminalRef.current) {
-        return;
-      }
+      const initializationFrame = requestAnimationFrame(() => {
+        setTerminalInitializationFor(sessionId);
+      });
+
+      return () => cancelAnimationFrame(initializationFrame);
+    }, [sessionId]);
+
+    useEffect(() => {
+      if (terminalInitializationFor !== sessionId || !terminalRef.current) return;
+
+      const terminalElement = terminalRef.current;
 
       const xterm = new XTerm({
         theme: getXtermTheme(),
@@ -449,7 +545,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         smoothScrollDuration: 0,
         allowProposedApi: true,
         drawBoldTextInBrightColors: true,
-        minimumContrastRatio: 1,
+        minimumContrastRatio: 4.5,
       });
 
       const fitAddon = new FitAddon();
@@ -468,11 +564,10 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         console.info('[Terminal] WebGL not available, using canvas renderer');
       }
 
-      xterm.open(terminalRef.current);
-      fitAddon.fit();
-
+      xterm.open(terminalElement);
       xtermRef.current = xterm;
       fitAddonRef.current = fitAddon;
+      fitTerminalIfRenderable(fitAddon, terminalElement);
 
       const terminalScreen = xterm.element?.querySelector('.xterm-screen') as HTMLElement | null;
       const handleTerminalClick = (event: MouseEvent) => {
@@ -480,6 +575,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         const target = event.target instanceof Element ? event.target : null;
         if (
           !sid ||
+          rawInputRef.current ||
           event.button !== 0 ||
           event.altKey ||
           event.ctrlKey ||
@@ -537,6 +633,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       terminalScreen?.addEventListener('click', handleTerminalClick);
 
       xterm.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+        if (rawInputRef.current) {
+          return true;
+        }
         if (event.ctrlKey && event.code === 'Space' && event.type === 'keydown') {
           event.preventDefault();
           const cs = completionStateRef.current;
@@ -555,6 +654,15 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       });
 
       xterm.onData((data) => {
+        if (rawInputRef.current) {
+          const sid = sessionIdRef.current;
+          if (sid) {
+            sendInputFastRef.current(sid, data);
+          }
+          onDataRef.current?.(data);
+          return;
+        }
+
         const compState = completionStateRef.current;
         const compActions = completionActionsRef.current;
 
@@ -691,35 +799,56 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       handleTerminalResize(xterm.cols, xterm.rows);
 
       let resizeObserver: ResizeObserver | null = null;
-      if (terminalRef.current) {
-        resizeObserver = new ResizeObserver(() => {
-          requestAnimationFrame(() => {
-            if (fitAddonRef.current) {
-              fitAddonRef.current.fit();
-            }
-          });
+      let resizeAnimationFrame: number | null = null;
+      let disposed = false;
+      resizeObserver = new ResizeObserver(() => {
+        if (resizeAnimationFrame !== null) {
+          cancelAnimationFrame(resizeAnimationFrame);
+        }
+        resizeAnimationFrame = requestAnimationFrame(() => {
+          resizeAnimationFrame = null;
+          if (!disposed && fitAddonRef.current === fitAddon) {
+            fitTerminalIfRenderable(fitAddon, terminalElement);
+          }
         });
-        resizeObserver.observe(terminalRef.current);
-      }
+      });
+      resizeObserver.observe(terminalElement);
 
       const handleWindowResize = () => {
-        fitAddon.fit();
+        if (!disposed && fitAddonRef.current === fitAddon) {
+          fitTerminalIfRenderable(fitAddon, terminalElement);
+        }
       };
       window.addEventListener('resize', handleWindowResize);
+      window.visualViewport?.addEventListener('resize', handleWindowResize);
+      window.visualViewport?.addEventListener('scroll', handleWindowResize);
+
+      setTerminalReadyFor(sessionId);
 
       return () => {
+        disposed = true;
         terminalScreen?.removeEventListener('click', handleTerminalClick);
         resizeObserver?.disconnect();
+        if (resizeAnimationFrame !== null) {
+          cancelAnimationFrame(resizeAnimationFrame);
+          resizeAnimationFrame = null;
+        }
         window.removeEventListener('resize', handleWindowResize);
-        xterm.dispose();
+        window.visualViewport?.removeEventListener('resize', handleWindowResize);
+        window.visualViewport?.removeEventListener('scroll', handleWindowResize);
+        // Flush any buffered keystrokes for this session before tearing down
+        // the terminal, so no dangling RAF fires an IPC into a stale session.
+        flushInputBatch(sessionId);
+        fitAddonRef.current = null;
         xtermRef.current = null;
+        xterm.dispose();
       };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [sessionId, settings.terminal, getXtermTheme]);
+    }, [sessionId, terminalInitializationFor]);
 
     useEffect(() => {
       const xterm = xtermRef.current;
-      if (!xterm) return;
+      if (!xterm || terminalReadyFor !== sessionId) return;
 
       xterm.options.fontSize = settings.terminal.fontSize;
       xterm.options.fontFamily = `${settings.terminal.fontFamily}, Menlo, Monaco, Consolas, monospace`;
@@ -729,28 +858,33 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       xterm.options.theme = getXtermTheme();
 
       if (fitAddonRef.current) {
-        fitAddonRef.current.fit();
+        fitTerminalIfRenderable(fitAddonRef.current, terminalRef.current);
       }
-    }, [settings.terminal, settings.appearance.theme, getXtermTheme]);
+    }, [sessionId, terminalReadyFor, settings.terminal, settings.appearance.theme, getXtermTheme]);
 
     const currentTheme = themes.find((t) => t.name === settings.appearance.theme);
     const themeColors = currentTheme?.colors || themes[0].colors;
     const bgColor = themeColors.bg;
 
     return (
-      <>
+      <div className="terminal-mobile-shell">
         <div
           ref={terminalRef}
-          className="terminal-viewport w-full h-full relative overflow-hidden"
+          className="terminal-viewport w-full min-h-0 flex-1 relative overflow-hidden"
           style={{ backgroundColor: bgColor }}
           onContextMenu={handleContextMenu}
+        />
+
+        <MobileKeyBar
+          onSend={handleMobileKey}
+          onPaste={() => { void handlePaste().finally(() => xtermRef.current?.focus()); }}
         />
 
         <CompletionPopup
           items={completionState.items}
           selectedIndex={completionState.selectedIndex}
           position={completionState.position}
-          visible={completionState.visible}
+          visible={!isCodingAgent && completionState.visible}
           onSelect={handleCompletionSelect}
           onSelectionChange={completionActions.setSelectedIndex}
           onClose={completionActions.hideCompletions}
@@ -852,7 +986,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             themeColors={themeColors}
           />
         )}
-      </>
+      </div>
     );
   }
 );

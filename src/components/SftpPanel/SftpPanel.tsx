@@ -1,4 +1,5 @@
-import { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
+import { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useRef, useMemo, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { SessionType } from '../../stores/sessionStore';
 import {
   ChevronUp,
@@ -29,14 +30,22 @@ import {
   List,
   GripVertical,
   MoreHorizontal,
+  X,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { safeInvoke } from '../../lib/tauri';
 import { useNotificationStore } from '../../stores/notificationStore';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { FileIcon, isTextPreviewable, isImagePreviewable } from './FileIcon';
+import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
+import { useFileWorkspaceStore } from '../../stores/fileWorkspaceStore';
+import { ConfirmDialog } from '../ConfirmDialog';
+import { FileIcon } from './FileIcon';
 
-const PreviewModal = lazy(() => import('./PreviewModal').then((mod) => ({ default: mod.PreviewModal })));
+function usesCoarsePointer(): boolean {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(pointer: coarse)').matches;
+}
 
 /**
  * Archive format types supported for compression
@@ -73,6 +82,16 @@ interface DirectoryTransferSummary {
   skippedFiles: number;
   deletedEntries: number;
   transferredBytes: number;
+}
+
+interface TransferBatchState {
+  operation: 'upload' | 'download';
+  status: 'running' | 'completed' | 'failed';
+  current: number;
+  total: number;
+  currentName: string;
+  completed: number;
+  failed: number;
 }
 
 /**
@@ -164,13 +183,6 @@ function isArchiveFile(name: string): boolean {
   );
 }
 
-/**
- * Check if a file can be previewed
- */
-function canPreviewFile(name: string): boolean {
-  return isTextPreviewable(name) || isImagePreviewable(name);
-}
-
 function basename(path: string): string {
   return path.split(/[/\\]/).filter(Boolean).pop() || 'folder';
 }
@@ -178,6 +190,16 @@ function basename(path: string): string {
 function joinRemotePath(parent: string, child: string): string {
   if (!parent || parent === '/') return `/${child}`;
   return `${parent.replace(/\/+$/, '')}/${child}`;
+}
+
+function joinLocalPath(parent: string, child: string): string {
+  const separator = parent.includes('\\') && !parent.includes('/') ? '\\' : '/';
+  return `${parent.replace(/[/\\]+$/, '')}${separator}${child}`;
+}
+
+function summarizeFailures(failures: string[]): string {
+  const visible = failures.slice(0, 3).join('; ');
+  return failures.length > 3 ? `${visible}; and ${failures.length - 3} more` : visible;
 }
 
 function getErrorMessage(err: unknown, fallback: string): string {
@@ -251,9 +273,13 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   const [selectedEntries, setSelectedEntries] = useState<Set<string>>(new Set());
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [transferBatch, setTransferBatch] = useState<TransferBatchState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const uploadIgnoreConfig = useSettingsStore((state) => state.uploadIgnoreConfig);
+  const pathTransferEnabled = useRuntimeCapabilitiesStore(
+    (state) => state.capabilities.directoryTransfer
+  );
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0 });
@@ -273,23 +299,28 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   const [showNewFolderDialog, setShowNewFolderDialog] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
 
+  // Use an in-app confirmation dialog because native window.confirm is not
+  // reliably surfaced by the Tauri webview in packaged desktop builds.
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+
   // Compress dialog state
   const [showCompressDialog, setShowCompressDialog] = useState(false);
   const [compressFormat, setCompressFormat] = useState<ArchiveFormat>('tar.gz');
   const [archiveName, setArchiveName] = useState('');
-
-  // Preview modal state
-  const [previewEntry, setPreviewEntry] = useState<SftpEntry | null>(null);
 
   // Drag-and-drop state
   const [isDragOver, setIsDragOver] = useState(false);
   const fileListRef = useRef<HTMLDivElement>(null);
   const columnsScrollerRef = useRef<HTMLDivElement>(null);
   const columnLoadRequestRef = useRef(0);
+  const directoryLoadRequestRef = useRef(0);
+  const directoryFetchesRef = useRef<Map<string, Promise<SftpEntry[]>>>(new Map());
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const columnsRef = useRef<SftpColumn[]>([]);
   const viewModeRef = useRef<SftpViewMode>(viewMode);
 
   const { success: notifySuccess, error: notifyError } = useNotificationStore();
+  const openFile = useFileWorkspaceStore((state) => state.openFile);
 
   useEffect(() => {
     columnsRef.current = columns;
@@ -313,14 +344,19 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     return entries.filter(e => selectedEntries.has(e.path));
   }, [selectedEntries, entries]);
 
+  const selectedFiles = useMemo(() => {
+    return selectedEntriesArray.filter((entry) => !entry.isDirectory);
+  }, [selectedEntriesArray]);
+
   // Check if any selected entries are archives (for extract option)
   const hasSelectedArchives = useMemo(() => {
     return selectedEntriesArray.some(e => !e.isDirectory && isArchiveFile(e.name));
   }, [selectedEntriesArray]);
 
-  // Check if selected file can be previewed
-  const canPreviewSelected = useMemo(() => {
-    return selectedEntry && !selectedEntry.isDirectory && canPreviewFile(selectedEntry.name);
+  // Any regular file opens in a workspace tab. Unsupported formats still get
+  // a useful metadata/download view instead of doing nothing.
+  const canOpenSelected = useMemo(() => {
+    return selectedEntry && !selectedEntry.isDirectory;
   }, [selectedEntry]);
 
   // Reset SFTP browser state whenever the owning terminal session changes.
@@ -333,8 +369,10 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     setLastSelectedIndex(null);
     setCurrentPath('~');
     setError(null);
-    setPreviewEntry(null);
     columnLoadRequestRef.current += 1;
+    directoryLoadRequestRef.current += 1;
+    directoryFetchesRef.current.clear();
+    setShowDeleteDialog(false);
 
     if (!sessionId) {
       setIsCollapsed(true);
@@ -363,9 +401,40 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     return () => document.removeEventListener('click', handleClickOutside);
   }, [contextMenu.visible]);
 
+  useLayoutEffect(() => {
+    if (!contextMenu.visible || !contextMenuRef.current) return;
+
+    const viewportMargin = 8;
+    const fitMenuToViewport = () => {
+      const menu = contextMenuRef.current;
+      if (!menu) return;
+
+      const rect = menu.getBoundingClientRect();
+      const maxX = Math.max(viewportMargin, window.innerWidth - rect.width - viewportMargin);
+      const maxY = Math.max(viewportMargin, window.innerHeight - rect.height - viewportMargin);
+
+      setContextMenu((previous) => {
+        if (!previous.visible) return previous;
+        const x = Math.min(Math.max(viewportMargin, previous.x), maxX);
+        const y = Math.min(Math.max(viewportMargin, previous.y), maxY);
+        return x === previous.x && y === previous.y ? previous : { ...previous, x, y };
+      });
+    };
+
+    fitMenuToViewport();
+    window.addEventListener('resize', fitMenuToViewport);
+    return () => window.removeEventListener('resize', fitMenuToViewport);
+  }, [contextMenu.visible, contextMenu.x, contextMenu.y]);
+
   // Handle resize dragging
   useEffect(() => {
     if (!isDragging) return;
+
+    const stopDragging = () => {
+      setIsDragging(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
 
     const handleMouseMove = (e: MouseEvent) => {
       if (dock === 'right') {
@@ -377,20 +446,26 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       }
     };
 
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+    const handleVisibilityChange = () => {
+      if (document.hidden) stopDragging();
     };
 
     document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('mouseup', stopDragging);
+    document.addEventListener('mouseleave', stopDragging);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', stopDragging);
     document.body.style.cursor = dock === 'right' ? 'ew-resize' : 'ns-resize';
     document.body.style.userSelect = 'none';
 
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('mouseup', stopDragging);
+      document.removeEventListener('mouseleave', stopDragging);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', stopDragging);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     };
   }, [dock, isDragging, minHeight, maxHeight, minWidth, maxWidth]);
 
@@ -428,25 +503,41 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     isFullscreen: () => isFullscreen,
   }), [collapsePanel, enterFullscreen, exitFullscreen, expandPanel, isCollapsed, isFullscreen, togglePanel, togglePanelFullscreen]);
 
-  const fetchDirectoryEntries = useCallback(async (path: string): Promise<SftpEntry[]> => {
-    if (!sessionId) return [];
+  const fetchDirectoryEntries = useCallback((path: string): Promise<SftpEntry[]> => {
+    if (!sessionId) return Promise.resolve([]);
 
-    const result = await safeInvoke<SftpEntry[]>('sftp_list_dir', {
-      request: {
-        sessionId,
-        path,
-      },
-    });
+    const requestKey = `${sessionId}\0${path}`;
+    const pendingRequest = directoryFetchesRef.current.get(requestKey);
+    if (pendingRequest) return pendingRequest;
 
-    if (!result.success) {
-      throw new Error(result.error.message);
-    }
-    return sortDirectoryEntries(result.data);
+    const request = (async () => {
+      const result = await safeInvoke<SftpEntry[]>('sftp_list_dir', {
+        request: {
+          sessionId,
+          path,
+        },
+      });
+
+      if (!result.success) {
+        throw new Error(result.error.message);
+      }
+      return sortDirectoryEntries(result.data);
+    })();
+
+    directoryFetchesRef.current.set(requestKey, request);
+    const clearRequest = () => {
+      if (directoryFetchesRef.current.get(requestKey) === request) {
+        directoryFetchesRef.current.delete(requestKey);
+      }
+    };
+    void request.then(clearRequest, clearRequest);
+    return request;
   }, [sessionId]);
 
   const loadDirectory = useCallback(async (path: string) => {
     if (!sessionId) return;
 
+    const requestId = ++directoryLoadRequestRef.current;
     setIsLoading(true);
     setError(null);
     setSelectedEntries(new Set());
@@ -454,6 +545,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
     try {
       const sorted = await fetchDirectoryEntries(path);
+      if (requestId !== directoryLoadRequestRef.current) return;
       setEntries(sorted);
       setCurrentPath(path);
       const existingColumnIndex = viewModeRef.current === 'columns'
@@ -476,6 +568,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
         setColumnSelections({});
       }
     } catch (err) {
+      if (requestId !== directoryLoadRequestRef.current) return;
       console.error('[SftpPanel] Failed to load directory:', err);
       const message = getErrorMessage(err, 'Failed to load directory');
       if (isSftpConnectionError(message)) {
@@ -483,7 +576,9 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       }
       setError(message);
     } finally {
-      setIsLoading(false);
+      if (requestId === directoryLoadRequestRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [fetchDirectoryEntries, sessionId]);
 
@@ -622,31 +717,64 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     if (!sessionId) return;
 
     try {
-      // Pick file to upload
-      const pickResult = await safeInvoke<string | null>('pick_file_for_upload');
+      const pickResult = await safeInvoke<string[]>('pick_files_for_upload');
 
-      if (!pickResult.success || !pickResult.data) return;
+      if (!pickResult.success) throw new Error(pickResult.error.message);
+      if (pickResult.data.length === 0) return;
 
-      const localPath = pickResult.data;
-      const fileName = localPath.split(/[/\\]/).pop() || 'file';
-      const remotePath = joinRemotePath(currentPath, fileName);
+      const paths = pickResult.data;
+      const failures: string[] = [];
+      let completed = 0;
 
       setIsLoading(true);
-
-      const uploadResult = await safeInvoke('sftp_upload_file', {
-        request: {
-          sessionId: sessionId,
-          localPath: localPath,
-          remotePath: remotePath,
-        },
+      setTransferBatch({
+        operation: 'upload',
+        status: 'running',
+        current: 1,
+        total: paths.length,
+        currentName: basename(paths[0]),
+        completed: 0,
+        failed: 0,
       });
 
-      if (uploadResult.success) {
-        notifySuccess('Upload Complete', `${fileName} uploaded successfully`);
-        await loadDirectory(currentPath);
-      } else {
-        throw new Error(uploadResult.error.message);
+      for (const [index, localPath] of paths.entries()) {
+        const fileName = basename(localPath);
+        setTransferBatch((previous) => previous ? {
+          ...previous,
+          current: index + 1,
+          currentName: fileName,
+          completed,
+          failed: failures.length,
+        } : previous);
+
+        try {
+          const uploadResult = await safeInvoke('sftp_upload_file', {
+            request: {
+              sessionId,
+              localPath,
+              remotePath: joinRemotePath(currentPath, fileName),
+            },
+          });
+          if (uploadResult.success) completed += 1;
+          else failures.push(`${fileName}: ${uploadResult.error.message}`);
+        } catch (err) {
+          failures.push(`${fileName}: ${getErrorMessage(err, 'Upload failed')}`);
+        }
       }
+
+      setTransferBatch({
+        operation: 'upload',
+        status: failures.length > 0 ? 'failed' : 'completed',
+        current: paths.length,
+        total: paths.length,
+        currentName: basename(paths[paths.length - 1]),
+        completed,
+        failed: failures.length,
+      });
+
+      if (completed > 0) notifySuccess('Upload Complete', `${completed} file(s) uploaded successfully`);
+      if (failures.length > 0) notifyError('Upload Failed', summarizeFailures(failures));
+      if (completed > 0) await loadDirectory(currentPath);
     } catch (err) {
       console.error('[SftpPanel] Upload failed:', err);
       notifyError('Upload Failed', err instanceof Error ? err.message : 'Failed to upload file');
@@ -714,10 +842,26 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     setIsLoading(true);
     let successCount = 0;
     let failCount = 0;
+    setTransferBatch({
+      operation: 'upload',
+      status: 'running',
+      current: 1,
+      total: paths.length,
+      currentName: basename(paths[0]),
+      completed: 0,
+      failed: 0,
+    });
 
-    for (const localPath of paths) {
+    for (const [index, localPath] of paths.entries()) {
       const fileName = localPath.split(/[/\\]/).pop() || 'file';
       const remotePath = joinRemotePath(currentPath, fileName);
+      setTransferBatch((previous) => previous ? {
+        ...previous,
+        current: index + 1,
+        currentName: fileName,
+        completed: successCount,
+        failed: failCount,
+      } : previous);
 
       try {
         const result = await safeInvoke('sftp_upload_file', {
@@ -753,6 +897,16 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
         }
       }
     }
+
+    setTransferBatch({
+      operation: 'upload',
+      status: failCount > 0 ? 'failed' : 'completed',
+      current: paths.length,
+      total: paths.length,
+      currentName: basename(paths[paths.length - 1]),
+      completed: successCount,
+      failed: failCount,
+    });
 
     if (successCount > 0) {
       notifySuccess('Upload Complete', `${successCount} file(s) uploaded successfully`);
@@ -818,56 +972,89 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   }, [isCollapsed, sessionId, handleDropFiles]);
 
   const handleDownload = useCallback(async () => {
-    if (!sessionId || !selectedEntry || selectedEntry.isDirectory) return;
+    if (!sessionId || selectedFiles.length === 0) return;
 
     try {
-      // Pick download directory
       const pickResult = await safeInvoke<string | null>('pick_download_directory');
 
       if (!pickResult.success || !pickResult.data) return;
 
-      const localPath = `${pickResult.data}/${selectedEntry.name}`;
+      const targetDirectory = pickResult.data;
+      const failures: string[] = [];
+      let completed = 0;
 
       setIsLoading(true);
-
-      const downloadResult = await safeInvoke('sftp_download_file', {
-        request: {
-          sessionId: sessionId,
-          remotePath: selectedEntry.path,
-          localPath: localPath,
-        },
+      setTransferBatch({
+        operation: 'download',
+        status: 'running',
+        current: 1,
+        total: selectedFiles.length,
+        currentName: selectedFiles[0].name,
+        completed: 0,
+        failed: 0,
       });
 
-      if (downloadResult.success) {
-        notifySuccess('Download Complete', `${selectedEntry.name} downloaded successfully`);
-      } else {
-        throw new Error(downloadResult.error.message);
+      for (const [index, entry] of selectedFiles.entries()) {
+        setTransferBatch((previous) => previous ? {
+          ...previous,
+          current: index + 1,
+          currentName: entry.name,
+          completed,
+          failed: failures.length,
+        } : previous);
+
+        try {
+          const downloadResult = await safeInvoke('sftp_download_file', {
+            request: {
+              sessionId,
+              remotePath: entry.path,
+              localPath: joinLocalPath(targetDirectory, entry.name),
+            },
+          });
+          if (downloadResult.success) completed += 1;
+          else failures.push(`${entry.name}: ${downloadResult.error.message}`);
+        } catch (err) {
+          failures.push(`${entry.name}: ${getErrorMessage(err, 'Download failed')}`);
+        }
       }
+
+      setTransferBatch({
+        operation: 'download',
+        status: failures.length > 0 ? 'failed' : 'completed',
+        current: selectedFiles.length,
+        total: selectedFiles.length,
+        currentName: selectedFiles[selectedFiles.length - 1].name,
+        completed,
+        failed: failures.length,
+      });
+
+      if (completed > 0) notifySuccess('Download Complete', `${completed} file(s) downloaded successfully`);
+      if (failures.length > 0) notifyError('Download Failed', summarizeFailures(failures));
     } catch (err) {
       console.error('[SftpPanel] Download failed:', err);
       notifyError('Download Failed', err instanceof Error ? err.message : 'Failed to download file');
     } finally {
       setIsLoading(false);
     }
-  }, [sessionId, selectedEntry, notifySuccess, notifyError]);
+  }, [sessionId, selectedFiles, notifySuccess, notifyError]);
 
-  const handleDelete = useCallback(async () => {
+  const handleDelete = useCallback(() => {
     if (!sessionId || selectedEntriesArray.length === 0) return;
+    setShowDeleteDialog(true);
+  }, [sessionId, selectedEntriesArray.length]);
 
-    const count = selectedEntriesArray.length;
-    const confirmed = window.confirm(
-      count === 1
-        ? `Are you sure you want to delete ${selectedEntriesArray[0].name}?`
-        : `Are you sure you want to delete ${count} items?`
-    );
+  const handleConfirmDelete = useCallback(async () => {
+    if (!sessionId || selectedEntriesArray.length === 0) {
+      setShowDeleteDialog(false);
+      return;
+    }
 
-    if (!confirmed) return;
-
+    setShowDeleteDialog(false);
     try {
       setIsLoading(true);
 
       let successCount = 0;
-      let failCount = 0;
+      const failures: string[] = [];
 
       for (const entry of selectedEntriesArray) {
         const deleteResult = await safeInvoke('sftp_delete', {
@@ -881,15 +1068,15 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
         if (deleteResult.success) {
           successCount++;
         } else {
-          failCount++;
+          failures.push(`${entry.name}: ${deleteResult.error.message}`);
         }
       }
 
       if (successCount > 0) {
         notifySuccess('Deleted', `${successCount} item(s) deleted successfully`);
       }
-      if (failCount > 0) {
-        notifyError('Delete Failed', `Failed to delete ${failCount} item(s)`);
+      if (failures.length > 0) {
+        notifyError('Delete Failed', summarizeFailures(failures));
       }
 
       setSelectedEntries(new Set());
@@ -1148,75 +1335,27 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     }
   }, [sessionId, selectedEntriesArray, currentPath, loadDirectory, notifySuccess, notifyError]);
 
-  // Open preview for a file
-  const handlePreview = useCallback((entry?: SftpEntry) => {
+  // Open files in the shared workspace tab strip, deduplicated by session/path.
+  const handleOpenFile = useCallback((entry?: SftpEntry) => {
     const targetEntry = entry || selectedEntry;
-    if (!targetEntry || targetEntry.isDirectory || !canPreviewFile(targetEntry.name)) return;
-    setPreviewEntry(targetEntry);
+    if (!sessionId || !targetEntry || targetEntry.isDirectory) return;
+    openFile({
+      sessionId,
+      path: targetEntry.path,
+      name: targetEntry.name,
+      size: targetEntry.size,
+    });
     setContextMenu({ visible: false, x: 0, y: 0 });
-  }, [selectedEntry]);
+  }, [openFile, selectedEntry, sessionId]);
 
-  // Close preview modal
-  const handleClosePreview = useCallback(() => {
-    setPreviewEntry(null);
-  }, []);
-
-  // Save file content from preview modal editor
-  const handleSavePreviewFile = useCallback(async (content: string) => {
-    if (!sessionId || !previewEntry) return;
-
-    try {
-      const saveResult = await safeInvoke('sftp_write_file', {
-        request: {
-          sessionId: sessionId,
-          path: previewEntry.path,
-          content: content,
-        },
-      });
-
-      if (saveResult.success) {
-        notifySuccess('Saved', `${previewEntry.name} saved successfully`);
-      } else {
-        throw new Error(saveResult.error.message);
-      }
-    } catch (err) {
-      console.error('[SftpPanel] Save failed:', err);
-      notifyError('Save Failed', err instanceof Error ? err.message : 'Failed to save file');
-      throw err;
+  const handleTouchEntryOpen = useCallback((entry: SftpEntry) => {
+    if (!usesCoarsePointer()) return;
+    if (entry.isDirectory) {
+      navigateToEntry(entry);
+    } else {
+      handleOpenFile(entry);
     }
-  }, [sessionId, previewEntry, notifySuccess, notifyError]);
-
-  // Download file for preview modal
-  const handleDownloadPreviewFile = useCallback(async () => {
-    if (!sessionId || !previewEntry) return;
-
-    try {
-      const pickResult = await safeInvoke<string | null>('pick_download_directory');
-      if (!pickResult.success || !pickResult.data) return;
-
-      const localPath = `${pickResult.data}/${previewEntry.name}`;
-      setIsLoading(true);
-
-      const downloadResult = await safeInvoke('sftp_download_file', {
-        request: {
-          sessionId: sessionId,
-          remotePath: previewEntry.path,
-          localPath: localPath,
-        },
-      });
-
-      if (downloadResult.success) {
-        notifySuccess('Download Complete', `${previewEntry.name} downloaded successfully`);
-      } else {
-        throw new Error(downloadResult.error.message);
-      }
-    } catch (err) {
-      console.error('[SftpPanel] Download failed:', err);
-      notifyError('Download Failed', err instanceof Error ? err.message : 'Failed to download file');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [sessionId, previewEntry, notifySuccess, notifyError]);
+  }, [handleOpenFile, navigateToEntry]);
 
   // Start resize drag
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -1262,6 +1401,10 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   // Parse path for breadcrumb navigation
   const pathParts = currentPath.split('/').filter(Boolean);
   const isCompactToolbar = dock === 'right' && !isFullscreen && panelWidth < 620;
+  const transferProcessed = transferBatch ? transferBatch.completed + transferBatch.failed : 0;
+  const transferPercent = transferBatch
+    ? Math.round((transferProcessed / Math.max(transferBatch.total, 1)) * 100)
+    : 0;
 
   const getPanelStyle = (): React.CSSProperties => {
     if (isFullscreen) return { width: '100%', height: '100%' };
@@ -1279,7 +1422,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     <div
       ref={panelRef}
       className={cn(
-        'relative bg-tokyo-bg-dark transition-[width,height] duration-200',
+        'sftp-panel-shell relative bg-tokyo-bg-dark transition-[width,height] duration-200',
         dock === 'right' ? 'border-l border-tokyo-bg-hl' : 'border-t border-tokyo-bg-hl',
         dock === 'right' && isCollapsed && !isFullscreen && 'pointer-events-none overflow-hidden border-l-0',
         isFullscreen && 'absolute inset-0 z-40 border-l-0 border-t-0'
@@ -1292,7 +1435,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       {!isCollapsed && !isFullscreen && (
         <div
           className={cn(
-            'absolute z-10 group flex items-center justify-center',
+            'sftp-resize-handle absolute z-10 group flex items-center justify-center',
             dock === 'right'
               ? 'bottom-0 left-0 top-0 w-2 cursor-ew-resize'
               : 'left-0 right-0 top-0 h-2 cursor-ns-resize',
@@ -1405,7 +1548,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
       {/* Content (when expanded) */}
       {!isCollapsed && (
-        <div className="flex flex-col h-[calc(100%-40px)] relative">
+        <div className="relative flex h-[calc(100%-40px)] min-h-0 flex-col">
           {/* Toolbar */}
           <div className="flex items-center gap-1 px-2 py-1 border-b border-tokyo-bg-hl bg-tokyo-bg" data-testid="sftp-toolbar">
             <button
@@ -1451,15 +1594,19 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
             >
               <FolderPlus className="w-4 h-4 text-tokyo-comment" />
             </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); handleUpload(); }}
-              disabled={isLoading}
-              className="p-1.5 rounded hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
-              title="Upload file"
-            >
-              <Upload className="w-4 h-4 text-tokyo-comment" />
-            </button>
+            {pathTransferEnabled && (
+              <button
+                onClick={(e) => { e.stopPropagation(); handleUpload(); }}
+                disabled={isLoading}
+                className="p-1.5 rounded hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
+                title="Upload file"
+              >
+                <Upload className="w-4 h-4 text-tokyo-comment" />
+              </button>
+            )}
             {!isCompactToolbar && (
+              <>
+            {pathTransferEnabled && (
               <>
             <button
               onClick={(e) => { e.stopPropagation(); handleUploadDirectory('upload'); }}
@@ -1479,17 +1626,19 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); handleDownload(); }}
-              disabled={isLoading || !selectedEntry || selectedEntry.isDirectory}
+              disabled={isLoading || selectedFiles.length === 0}
               className="p-1.5 rounded hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
-              title="Download"
+              title={selectedFiles.length > 1 ? `Download ${selectedFiles.length} files` : 'Download'}
             >
               <Download className="w-4 h-4 text-tokyo-comment" />
             </button>
+              </>
+            )}
             <button
-              onClick={(e) => { e.stopPropagation(); handlePreview(); }}
-              disabled={isLoading || !canPreviewSelected}
+              onClick={(e) => { e.stopPropagation(); handleOpenFile(); }}
+              disabled={isLoading || !canOpenSelected}
               className="p-1.5 rounded hover:bg-tokyo-bg-hl transition-colors disabled:opacity-50"
-              title="Preview"
+              title="Open in Tab"
             >
               <Eye className="w-4 h-4 text-tokyo-comment" />
             </button>
@@ -1574,6 +1723,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                     className="absolute right-0 top-full z-50 mt-1 max-h-64 w-52 overflow-y-auto rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
                     onClick={(event) => event.stopPropagation()}
                   >
+                    {pathTransferEnabled && (
+                      <>
                     <button
                       className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
                       onClick={() => { setIsToolbarMenuOpen(false); void handleUploadDirectory('upload'); }}
@@ -1591,16 +1742,19 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                     <button
                       className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
                       onClick={() => { setIsToolbarMenuOpen(false); void handleDownload(); }}
-                      disabled={isLoading || !selectedEntry || selectedEntry.isDirectory}
+                      disabled={isLoading || selectedFiles.length === 0}
                     >
-                      <Download className="h-4 w-4 text-tokyo-comment" /> Download
+                      <Download className="h-4 w-4 text-tokyo-comment" />
+                      {selectedFiles.length > 1 ? `Download ${selectedFiles.length} files` : 'Download'}
                     </button>
+                      </>
+                    )}
                     <button
                       className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
-                      onClick={() => { setIsToolbarMenuOpen(false); handlePreview(); }}
-                      disabled={isLoading || !canPreviewSelected}
+                      onClick={() => { setIsToolbarMenuOpen(false); handleOpenFile(); }}
+                      disabled={isLoading || !canOpenSelected}
                     >
-                      <Eye className="h-4 w-4 text-tokyo-comment" /> Preview
+                      <Eye className="h-4 w-4 text-tokyo-comment" /> Open in Tab
                     </button>
                     <div className="my-1 border-t border-tokyo-bg-hl" />
                     <button
@@ -1679,6 +1833,59 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
               })}
           </div>
 
+          {transferBatch && (
+            <div
+              data-testid="sftp-transfer-progress"
+              className="flex-shrink-0 border-b border-tokyo-bg-hl bg-tokyo-bg px-3 py-2"
+              aria-live="polite"
+            >
+              <div className="flex min-w-0 items-center gap-2 text-xs">
+                {transferBatch.status === 'running' ? (
+                  <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-tokyo-blue" />
+                ) : transferBatch.status === 'completed' ? (
+                  <Check className="h-3.5 w-3.5 flex-shrink-0 text-tokyo-green" />
+                ) : (
+                  <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 text-tokyo-red" />
+                )}
+                <span className="flex-shrink-0 font-medium text-tokyo-fg">
+                  {transferBatch.status === 'running'
+                    ? `${transferBatch.operation === 'upload' ? 'Uploading' : 'Downloading'} ${transferBatch.current} of ${transferBatch.total}`
+                    : `${transferBatch.operation === 'upload' ? 'Upload' : 'Download'} ${transferBatch.status}`}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-tokyo-comment" title={transferBatch.currentName}>
+                  {transferBatch.status === 'running'
+                    ? transferBatch.currentName
+                    : `${transferBatch.completed} succeeded${transferBatch.failed > 0 ? `, ${transferBatch.failed} failed` : ''}`}
+                </span>
+                {transferBatch.status !== 'running' && (
+                  <button
+                    onClick={() => setTransferBatch(null)}
+                    className="icon-button h-6 w-6 flex-shrink-0"
+                    title="Dismiss transfer status"
+                    aria-label="Dismiss transfer status"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              <div
+                className="mt-1.5 h-1.5 overflow-hidden rounded-sm bg-tokyo-bg-hl"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={transferPercent}
+              >
+                <div
+                  className={cn(
+                    'h-full transition-[width] duration-200',
+                    transferBatch.status === 'failed' ? 'bg-tokyo-red' : 'bg-tokyo-blue'
+                  )}
+                  style={{ width: `${transferPercent}%` }}
+                />
+              </div>
+            </div>
+          )}
+
           {/* Error display */}
           {error && (
             <div className="flex items-center gap-2 px-3 py-2 bg-tokyo-red/10 border-b border-tokyo-red/30 text-tokyo-red text-sm">
@@ -1705,7 +1912,10 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
           {/* File list */}
           <div
             ref={fileListRef}
-            className="flex-1 overflow-auto relative"
+            className={cn(
+              'relative min-h-0 flex-1 overflow-auto',
+              viewMode !== 'columns' && 'pb-6'
+            )}
             onClick={(e) => {
               e.stopPropagation();
               // Clear selection when clicking empty space
@@ -1743,7 +1953,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                         {column.path === '/' ? '/' : basename(column.path)}
                       </span>
                     </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto py-1">
+                    <div className="min-h-0 flex-1 overflow-y-auto pb-6 pt-1">
                       {column.entries.length === 0 ? (
                         <div className="px-3 py-4 text-xs text-tokyo-comment">Empty directory</div>
                       ) : column.entries.map((entry) => (
@@ -1761,7 +1971,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                           }}
                           onDoubleClick={(event) => {
                             event.stopPropagation();
-                            if (!entry.isDirectory && canPreviewFile(entry.name)) handlePreview(entry);
+                            if (!entry.isDirectory) handleOpenFile(entry);
                           }}
                           onContextMenu={(event) => {
                             event.preventDefault();
@@ -1832,15 +2042,18 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                   {entries.map((entry, index) => (
                     <tr
                       key={entry.path}
-                      onClick={(e) => handleEntryClick(entry, index, e)}
+                      onClick={(e) => {
+                        handleEntryClick(entry, index, e);
+                        handleTouchEntryOpen(entry);
+                      }}
                       onContextMenu={(e) => handleContextMenu(e, entry, index)}
                       onDoubleClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
                         if (entry.isDirectory) {
                           navigateToEntry(entry);
-                        } else if (canPreviewFile(entry.name)) {
-                          handlePreview(entry);
+                        } else {
+                          handleOpenFile(entry);
                         }
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
@@ -1905,15 +2118,18 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                   <button
                     key={entry.path}
                     title={entry.name}
-                    onClick={(e) => handleEntryClick(entry, index, e)}
+                    onClick={(e) => {
+                      handleEntryClick(entry, index, e);
+                      handleTouchEntryOpen(entry);
+                    }}
                     onContextMenu={(e) => handleContextMenu(e, entry, index)}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
                       if (entry.isDirectory) {
                         navigateToEntry(entry);
-                      } else if (canPreviewFile(entry.name)) {
-                        handlePreview(entry);
+                      } else {
+                        handleOpenFile(entry);
                       }
                     }}
                     className={cn(
@@ -2026,6 +2242,18 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
             </div>
           )}
 
+          <ConfirmDialog
+            isOpen={showDeleteDialog}
+            title={selectedEntriesArray.length === 1 ? 'Delete item?' : `Delete ${selectedEntriesArray.length} items?`}
+            message={selectedEntriesArray.length === 1
+              ? `Are you sure you want to permanently delete ${selectedEntriesArray[0]?.name ?? 'this item'}?`
+              : `Are you sure you want to permanently delete these ${selectedEntriesArray.length} items?`}
+            confirmLabel="Delete"
+            variant="danger"
+            onConfirm={() => { void handleConfirmDelete(); }}
+            onCancel={() => setShowDeleteDialog(false)}
+          />
+
           {/* Compress Dialog */}
           {showCompressDialog && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-50">
@@ -2094,13 +2322,20 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
           )}
 
           {/* Context Menu */}
-          {contextMenu.visible && (
+          {contextMenu.visible && createPortal(
             <div
+              ref={contextMenuRef}
+              role="menu"
+              data-testid="sftp-context-menu"
               className={cn(
                 'fixed bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-lg py-1 z-[60]',
-                'min-w-[160px]'
+                'min-w-[160px] overflow-y-auto overscroll-contain'
               )}
-              style={{ left: contextMenu.x, top: contextMenu.y }}
+              style={{
+                left: contextMenu.x,
+                top: contextMenu.y,
+                maxHeight: 'calc(100vh - 16px)',
+              }}
               onClick={(e) => e.stopPropagation()}
             >
               {selectedEntries.size > 0 && (
@@ -2114,19 +2349,19 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                     {selectedEntries.size === 1 ? 'Copy Path' : `Copy ${selectedEntries.size} Paths`}
                   </button>
 
-                  {/* Preview (single file only, previewable types) */}
-                  {selectedEntries.size === 1 && selectedEntry && !selectedEntry.isDirectory && canPreviewFile(selectedEntry.name) && (
+                  {/* Open a single file in the workspace tab strip. */}
+                  {selectedEntries.size === 1 && selectedEntry && !selectedEntry.isDirectory && (
                     <button
-                      onClick={() => handlePreview()}
+                      onClick={() => handleOpenFile()}
                       className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
                     >
                       <Eye className="w-4 h-4" />
-                      Preview
+                      Open in Tab
                     </button>
                   )}
 
-                  {/* Download (single file only) */}
-                  {selectedEntries.size === 1 && selectedEntry && !selectedEntry.isDirectory && (
+                  {/* Download selected files */}
+                  {pathTransferEnabled && selectedFiles.length > 0 && (
                     <button
                       onClick={() => {
                         setContextMenu({ visible: false, x: 0, y: 0 });
@@ -2135,7 +2370,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                       className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
                     >
                       <Download className="w-4 h-4" />
-                      Download
+                      {selectedFiles.length > 1 ? `Download ${selectedFiles.length} files` : 'Download'}
                     </button>
                   )}
 
@@ -2236,16 +2471,18 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
               </button>
 
               {/* Upload */}
-              <button
-                onClick={() => {
-                  setContextMenu({ visible: false, x: 0, y: 0 });
-                  handleUpload();
-                }}
-                className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-              >
-                <Upload className="w-4 h-4" />
-                Upload File
-              </button>
+              {pathTransferEnabled && (
+                <button
+                  onClick={() => {
+                    setContextMenu({ visible: false, x: 0, y: 0 });
+                    handleUpload();
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
+                >
+                  <Upload className="w-4 h-4" />
+                  Upload Files
+                </button>
+              )}
 
               {/* Refresh */}
               <button
@@ -2258,26 +2495,12 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                 <RefreshCw className="w-4 h-4" />
                 Refresh
               </button>
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       )}
 
-      {/* Preview Modal */}
-      {previewEntry && sessionId && (
-        <Suspense fallback={null}>
-          <PreviewModal
-            isOpen={true}
-            filePath={previewEntry.path}
-            fileName={previewEntry.name}
-            fileSize={previewEntry.size}
-            sessionId={sessionId}
-            onClose={handleClosePreview}
-            onDownload={handleDownloadPreviewFile}
-            onSave={handleSavePreviewFile}
-          />
-        </Suspense>
-      )}
     </div>
   );
 });

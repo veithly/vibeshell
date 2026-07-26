@@ -1,10 +1,12 @@
 ﻿import { useState, useCallback, memo, useRef, useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle, RefreshCw } from 'lucide-react';
+import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle, RefreshCw, Code2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useSessionStore, type Session, type SessionState, type SessionType } from '../../stores/sessionStore';
 import { useRecordingStore } from '../../stores/recordingStore';
+import { useFileWorkspaceStore, type FileWorkspaceTab as FileTabModel } from '../../stores/fileWorkspaceStore';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { FileIcon } from '../SftpPanel/FileIcon';
 
 interface SessionTabsProps {
   /** Callback when "New Session" is clicked */
@@ -18,13 +20,20 @@ interface SessionTabsProps {
 /**
  * Get status indicator for a session state and type
  */
-function getStateIndicator(state: SessionState, sessionType: SessionType = 'ssh') {
+function getStateIndicator(
+  state: SessionState,
+  sessionType: SessionType = 'ssh',
+  purpose?: Session['purpose']
+) {
   switch (state) {
     case 'connecting':
       return <Loader2 className="w-3 h-3 animate-spin text-tokyo-yellow" />;
     case 'connected':
       // Show different icon for local vs SSH
       if (sessionType === 'local') {
+        if (purpose === 'coding_agent') {
+          return <Code2 className="w-3 h-3 text-tokyo-cyan" />;
+        }
         return <Monitor className="w-3 h-3 text-tokyo-cyan" />;
       }
       return <Wifi className="w-3 h-3 text-tokyo-cyan" />;
@@ -33,6 +42,9 @@ function getStateIndicator(state: SessionState, sessionType: SessionType = 'ssh'
     case 'disconnected':
     default:
       if (sessionType === 'local') {
+        if (purpose === 'coding_agent') {
+          return <Code2 className="w-3 h-3 text-tokyo-comment" />;
+        }
         return <span className="w-2 h-2 rounded-full bg-tokyo-cyan" />;
       }
       return <span className="w-2 h-2 rounded-full bg-tokyo-comment" />;
@@ -84,7 +96,7 @@ const SessionTab = memo(function SessionTab({
   return (
     <div
       className={cn(
-        'group flex h-8 items-center gap-2 px-2.5 rounded-lg cursor-pointer border',
+        'session-tab-item group flex h-8 items-center gap-2 px-2.5 rounded-lg cursor-pointer border',
         'transition-all duration-150 ease-out',
         'min-w-[120px] max-w-[220px]',
         'focus:outline-none focus:ring-1 focus:ring-tokyo-blue',
@@ -101,7 +113,7 @@ const SessionTab = memo(function SessionTab({
     >
       {/* Status Indicator */}
       <span className="flex-shrink-0">
-        {getStateIndicator(session.state, session.sessionType)}
+        {getStateIndicator(session.state, session.sessionType, session.purpose)}
       </span>
 
       {/* Server Name */}
@@ -120,7 +132,7 @@ const SessionTab = memo(function SessionTab({
       {canReconnect && (
         <button
           className={cn(
-            'flex-shrink-0 p-0.5 rounded-md opacity-0 group-hover:opacity-100',
+            'session-tab-action flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md opacity-0 group-hover:opacity-100',
             'transition-opacity duration-150',
             'hover:bg-tokyo-bg-hl focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
           )}
@@ -135,7 +147,7 @@ const SessionTab = memo(function SessionTab({
       {/* Close Button */}
       <button
         className={cn(
-          'flex-shrink-0 p-0.5 rounded-md opacity-0 group-hover:opacity-100',
+          'session-tab-action flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md opacity-0 group-hover:opacity-100',
           'transition-opacity duration-150',
           'hover:bg-tokyo-bg-hl focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
         )}
@@ -143,6 +155,56 @@ const SessionTab = memo(function SessionTab({
         aria-label={`Close ${session.serverName} session`}
       >
         <X className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+});
+
+interface FileTabProps {
+  tab: FileTabModel;
+  isActive: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+}
+
+const FileTab = memo(function FileTab({ tab, isActive, onSelect, onClose }: FileTabProps) {
+  return (
+    <div
+      className={cn(
+        'session-tab-item group flex h-8 min-w-[120px] max-w-[240px] cursor-pointer items-center gap-2 rounded-lg border px-2.5',
+        'transition-all duration-150 ease-out focus:outline-none focus:ring-1 focus:ring-tokyo-blue',
+        isActive
+          ? 'bg-tokyo-bg border-tokyo-cyan text-tokyo-fg'
+          : 'bg-transparent border-transparent text-tokyo-comment hover:border-tokyo-selection hover:bg-tokyo-bg-hl hover:text-tokyo-fg'
+      )}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+      role="tab"
+      aria-selected={isActive}
+      tabIndex={0}
+      title={tab.path}
+    >
+      <FileIcon filename={tab.name} isDirectory={false} />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{tab.name}</span>
+      {tab.dirty && <span className="h-2 w-2 flex-shrink-0 rounded-full bg-tokyo-orange" />}
+      <button
+        className={cn(
+          'session-tab-action flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md',
+          'opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus:opacity-100',
+          'hover:bg-tokyo-bg-hl focus:outline-none focus:ring-1 focus:ring-tokyo-blue'
+        )}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClose();
+        }}
+        aria-label={`Close ${tab.name}`}
+      >
+        <X className="h-3.5 w-3.5" />
       </button>
     </div>
   );
@@ -253,6 +315,12 @@ export function SessionTabs({ onNewSession, onReconnectSession, rightActions }: 
   const { t } = useTranslation();
   const { sessions, activeSessionId, setActiveSession, killSession, killLocalShellSession, removeSession } =
     useSessionStore();
+  const {
+    tabs: fileTabs,
+    activeTabId: activeFileTabId,
+    activateTab: activateFileTab,
+    closeTab: closeFileTab,
+  } = useFileWorkspaceStore();
   const { isRecording, startRecording, stopRecording } = useRecordingStore();
 
   // Confirmation dialog state
@@ -262,8 +330,21 @@ export function SessionTabs({ onNewSession, onReconnectSession, rightActions }: 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; session: Session } | null>(null);
 
   const handleSelectSession = useCallback((sessionId: string) => {
+    activateFileTab(null);
     setActiveSession(sessionId);
-  }, [setActiveSession]);
+  }, [activateFileTab, setActiveSession]);
+
+  const handleSelectFile = useCallback((tab: FileTabModel) => {
+    if (sessions.some((session) => session.id === tab.sessionId)) {
+      setActiveSession(tab.sessionId);
+    }
+    activateFileTab(tab.id);
+  }, [activateFileTab, sessions, setActiveSession]);
+
+  const handleCloseFile = useCallback((tab: FileTabModel) => {
+    if (tab.dirty && !window.confirm(t('fileWorkspace.discardChanges'))) return;
+    closeFileTab(tab.id);
+  }, [closeFileTab, t]);
 
   const closeInactiveSession = useCallback(async (session: Session) => {
     const success = session.sessionType === 'local'
@@ -276,12 +357,13 @@ export function SessionTabs({ onNewSession, onReconnectSession, rightActions }: 
   }, [killSession, killLocalShellSession, removeSession]);
 
   const handleRequestClose = useCallback((session: Session) => {
-    if (session.state === 'connected' || session.state === 'connecting') {
+    const hasUnsavedFiles = fileTabs.some((tab) => tab.sessionId === session.id && tab.dirty);
+    if (session.state === 'connected' || session.state === 'connecting' || hasUnsavedFiles) {
       setConfirmClose(session);
     } else {
       void closeInactiveSession(session);
     }
-  }, [closeInactiveSession]);
+  }, [closeInactiveSession, fileTabs]);
 
   const handleConfirmClose = useCallback(async () => {
     if (!confirmClose) return;
@@ -317,8 +399,21 @@ export function SessionTabs({ onNewSession, onReconnectSession, rightActions }: 
   }, [stopRecording]);
 
   const handleReconnect = useCallback((session: Session) => {
+    const dirtyFileCount = fileTabs.filter((tab) => tab.sessionId === session.id && tab.dirty).length;
+    if (dirtyFileCount > 0 && !window.confirm(t('fileWorkspace.sessionUnsavedWarning', { count: dirtyFileCount }))) {
+      return;
+    }
     onReconnectSession?.(session);
-  }, [onReconnectSession]);
+  }, [fileTabs, onReconnectSession, t]);
+
+  const confirmCloseDirtyFileCount = confirmClose
+    ? fileTabs.filter((tab) => tab.sessionId === confirmClose.id && tab.dirty).length
+    : 0;
+  const confirmCloseMessage = confirmClose?.purpose === 'coding_agent'
+    ? t('codingAgent.closeConfirm', { name: confirmClose?.serverName })
+    : confirmClose?.sessionType === 'local'
+      ? t('session.closeLocalShellConfirm', { name: confirmClose?.serverName })
+      : t('session.closeSessionConfirm', { name: confirmClose?.serverName });
 
   return (
     <>
@@ -330,14 +425,14 @@ export function SessionTabs({ onNewSession, onReconnectSession, rightActions }: 
               <i />
               <i />
             </span>
-            <span className="session-rail-count">{sessions.length}</span>
+            <span className="session-rail-count">{sessions.length + fileTabs.length}</span>
           </div>
 
           {sessions.map((session) => (
             <SessionTab
               key={session.id}
               session={session}
-              isActive={activeSessionId === session.id}
+              isActive={activeFileTabId === null && activeSessionId === session.id}
               isRecording={isRecording(session.id)}
               onSelect={() => handleSelectSession(session.id)}
               onReconnect={() => handleReconnect(session)}
@@ -346,9 +441,19 @@ export function SessionTabs({ onNewSession, onReconnectSession, rightActions }: 
             />
           ))}
 
+          {fileTabs.map((tab) => (
+            <FileTab
+              key={tab.id}
+              tab={tab}
+              isActive={activeFileTabId === tab.id}
+              onSelect={() => handleSelectFile(tab)}
+              onClose={() => handleCloseFile(tab)}
+            />
+          ))}
+
           <button
             className={cn(
-              'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border border-transparent',
+              'session-new-action flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border border-transparent',
               'bg-transparent text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg',
               'hover:border-tokyo-selection transition-colors duration-150',
               'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:ring-inset'
@@ -380,13 +485,15 @@ export function SessionTabs({ onNewSession, onReconnectSession, rightActions }: 
       {/* Confirmation Dialog */}
       <ConfirmDialog
         isOpen={confirmClose !== null}
-        title={confirmClose?.sessionType === 'local' ? t('session.closeLocalShell') : t('session.closeSession')}
-        message={
-          confirmClose?.sessionType === 'local'
-            ? t('session.closeLocalShellConfirm', { name: confirmClose?.serverName })
-            : t('session.closeSessionConfirm', { name: confirmClose?.serverName })
-        }
-        confirmLabel={confirmClose?.sessionType === 'local' ? t('session.closeLocalShell') : t('session.closeSession')}
+        title={confirmClose?.purpose === 'coding_agent'
+          ? t('codingAgent.close')
+          : confirmClose?.sessionType === 'local' ? t('session.closeLocalShell') : t('session.closeSession')}
+        message={confirmCloseDirtyFileCount > 0
+          ? `${confirmCloseMessage}\n\n${t('fileWorkspace.sessionUnsavedWarning', { count: confirmCloseDirtyFileCount })}`
+          : confirmCloseMessage}
+        confirmLabel={confirmClose?.purpose === 'coding_agent'
+          ? t('codingAgent.close')
+          : confirmClose?.sessionType === 'local' ? t('session.closeLocalShell') : t('session.closeSession')}
         cancelLabel={t('common.cancel')}
         variant="danger"
         onConfirm={handleConfirmClose}

@@ -59,9 +59,8 @@ function Toast({ id, type, title, message, dismissible, onDismiss }: ToastProps)
   return (
     <div
       className={cn(
-        'flex items-start gap-3 p-4 rounded-lg shadow-lg border-l-4',
+        'notification-toast flex w-full min-w-0 max-w-[420px] items-start gap-3 p-4 rounded-lg shadow-lg border-l-4',
         'animate-slide-in-right',
-        'min-w-[320px] max-w-[420px]',
         styles.bg,
         styles.border
       )}
@@ -76,7 +75,7 @@ function Toast({ id, type, title, message, dismissible, onDismiss }: ToastProps)
         <button
           onClick={() => onDismiss(id)}
           className={cn(
-            'flex-shrink-0 p-1 rounded-md',
+            'notification-dismiss flex-shrink-0 p-1 rounded-md',
             'text-tokyo-comment hover:text-tokyo-fg',
             'hover:bg-tokyo-bg-hl transition-colors'
           )}
@@ -102,21 +101,21 @@ function TauriBanner() {
   return (
     <div
       className={cn(
-        'flex items-center justify-between gap-4 px-4 py-2',
+        'tauri-banner flex min-w-0 items-start justify-between gap-3 px-4 py-2 sm:items-center sm:gap-4',
         'bg-tokyo-orange/20 border-b border-tokyo-orange/30'
       )}
       role="alert"
     >
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-start gap-2 sm:items-center">
         <AlertTriangle className="w-4 h-4 text-tokyo-orange flex-shrink-0" />
-        <span className="text-sm text-tokyo-orange">
+        <span className="min-w-0 break-words text-sm text-tokyo-orange">
           Running in browser mode. Tauri backend is not available - SSH connections will not work.
         </span>
       </div>
       <button
         onClick={dismissTauriBanner}
         className={cn(
-          'p-1 rounded-md flex-shrink-0',
+          'notification-dismiss p-1 rounded-md flex-shrink-0',
           'text-tokyo-orange hover:text-tokyo-fg',
           'hover:bg-tokyo-orange/20 transition-colors'
         )}
@@ -141,8 +140,8 @@ function ToastContainer() {
   return (
     <div
       className={cn(
-        'fixed bottom-4 right-4 z-50',
-        'flex flex-col gap-2'
+        'notification-stack fixed z-50',
+        'flex flex-col items-end gap-2'
       )}
       aria-live="polite"
       aria-label="Notifications"

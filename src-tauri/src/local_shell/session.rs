@@ -6,6 +6,7 @@ use log::{debug, error, info};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -62,6 +63,8 @@ pub struct LocalShellInfo {
     pub id: String,
     pub shell_id: String,
     pub shell_name: String,
+    pub cwd: Option<String>,
+    pub agent_id: Option<String>,
     pub state: LocalShellState,
     pub created_at: i64,
     pub clients: usize,
@@ -72,6 +75,8 @@ pub struct LocalShellSession {
     pub id: String,
     pub shell_id: String,
     pub shell_name: String,
+    cwd: Option<PathBuf>,
+    agent_id: Option<String>,
     state: Arc<RwLock<LocalShellState>>,
     created_at: i64,
 
@@ -89,6 +94,12 @@ pub struct LocalShellSession {
 
     // Channels for I/O
     output_tx: broadcast::Sender<Vec<u8>>,
+    output_bridge_started: Arc<AtomicBool>,
+
+    // Buffered output replay so re-attaching frontends (e.g. after a split pane
+    // is recreated) can redraw recent history instead of showing a blank screen.
+    // Uses a std Mutex because the reader thread is a sync thread, not a tokio task.
+    output_replay: Arc<std::sync::Mutex<crate::replay::OutputReplayBuffer>>,
 
     // Track connected clients
     client_count: Arc<AtomicUsize>,
@@ -102,6 +113,41 @@ impl LocalShellSession {
             shell_info.name, shell_info.path
         );
 
+        let command = build_shell_command(shell_info);
+        Self::spawn(
+            shell_info.id.clone(),
+            shell_info.name.clone(),
+            None,
+            None,
+            command,
+            cols,
+            rows,
+        )
+    }
+
+    /// Create a PTY session for a known local process, such as a coding agent.
+    pub fn new_process(
+        shell_id: String,
+        shell_name: String,
+        cwd: Option<PathBuf>,
+        agent_id: Option<String>,
+        command: CommandBuilder,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Self> {
+        info!("[LocalShell] Creating process session: {}", shell_name);
+        Self::spawn(shell_id, shell_name, cwd, agent_id, command, cols, rows)
+    }
+
+    fn spawn(
+        shell_id: String,
+        shell_name: String,
+        cwd: Option<PathBuf>,
+        agent_id: Option<String>,
+        command: CommandBuilder,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Self> {
         // Create the PTY system
         let pty_system = native_pty_system();
 
@@ -113,10 +159,8 @@ impl LocalShellSession {
             pixel_height: 0,
         })?;
 
-        let cmd = build_shell_command(shell_info);
-
-        // Spawn the shell process
-        let child = pair.slave.spawn_command(cmd)?;
+        // Spawn the shell or process.
+        let child = pair.slave.spawn_command(command)?;
 
         info!("[LocalShell] Shell process spawned successfully");
 
@@ -131,8 +175,10 @@ impl LocalShellSession {
 
         let session = Self {
             id: Uuid::new_v4().to_string(),
-            shell_id: shell_info.id.clone(),
-            shell_name: shell_info.name.clone(),
+            shell_id,
+            shell_name,
+            cwd,
+            agent_id,
             state: Arc::new(RwLock::new(LocalShellState::Running)),
             created_at: Utc::now().timestamp(),
             writer: Arc::new(std::sync::Mutex::new(Some(writer))),
@@ -140,13 +186,74 @@ impl LocalShellSession {
             child: Arc::new(std::sync::Mutex::new(Some(child))),
             shutdown: Arc::new(AtomicBool::new(false)),
             output_tx,
+            output_bridge_started: Arc::new(AtomicBool::new(false)),
+            output_replay: Arc::new(std::sync::Mutex::new(
+                crate::replay::OutputReplayBuffer::default(),
+            )),
             client_count: Arc::new(AtomicUsize::new(0)),
         };
 
-        // Start the reader thread
+        // Reap the child independently from PTY output. The monitor only holds
+        // the child mutex for non-blocking polls, leaving stop() free to kill it.
+        session.start_child_monitor();
         session.start_reader(reader);
 
         Ok(session)
+    }
+
+    fn start_child_monitor(&self) {
+        let session_id = self.id.clone();
+        let child = self.child.clone();
+        let state = self.state.clone();
+
+        thread::spawn(move || loop {
+            let poll_result = {
+                let mut child_guard = match child.lock() {
+                    Ok(guard) => guard,
+                    Err(error) => {
+                        error!(
+                            "[LocalShell] Failed to lock child monitor for session {}: {}",
+                            session_id, error
+                        );
+                        return;
+                    }
+                };
+                let Some(child_process) = child_guard.as_mut() else {
+                    return;
+                };
+                match child_process.try_wait() {
+                    Ok(Some(status)) => {
+                        *child_guard = None;
+                        Ok(Some(status))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            };
+
+            match poll_result {
+                Ok(Some(status)) => {
+                    let mut state_guard = state.blocking_write();
+                    if *state_guard == LocalShellState::Running {
+                        *state_guard = LocalShellState::Stopped;
+                    }
+                    drop(state_guard);
+                    info!(
+                        "[LocalShell] Child process exited for session {}: {:?}",
+                        session_id, status
+                    );
+                    return;
+                }
+                Ok(None) => thread::sleep(std::time::Duration::from_millis(25)),
+                Err(error) => {
+                    error!(
+                        "[LocalShell] Failed to poll child for session {}: {}",
+                        session_id, error
+                    );
+                    return;
+                }
+            }
+        });
     }
 
     /// Start the reader thread for PTY output
@@ -155,6 +262,7 @@ impl LocalShellSession {
         let output_tx = self.output_tx.clone();
         let shutdown = self.shutdown.clone();
         let state = self.state.clone();
+        let output_replay = self.output_replay.clone();
 
         thread::spawn(move || {
             debug!(
@@ -180,6 +288,10 @@ impl LocalShellSession {
                     }
                     Ok(n) => {
                         let data = buf[..n].to_vec();
+                        // Buffer output for late-attaching frontends (pane recreate).
+                        if let Ok(mut replay) = output_replay.lock() {
+                            replay.push(&data);
+                        }
                         // Ignore send errors (no receivers)
                         let _ = output_tx.send(data);
                     }
@@ -200,21 +312,17 @@ impl LocalShellSession {
                 }
             }
 
-            // Mark session as stopped using tokio runtime
-            let state_clone = state.clone();
-            let session_id_clone = session_id.clone();
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    let mut state_guard = state_clone.write().await;
-                    if *state_guard == LocalShellState::Running {
-                        *state_guard = LocalShellState::Stopped;
-                    }
-                });
+            // This is a plain reader thread, so it has no ambient Tokio runtime.
+            // Update the async lock through its blocking API before the thread exits.
+            let mut state_guard = state.blocking_write();
+            if *state_guard == LocalShellState::Running {
+                *state_guard = LocalShellState::Stopped;
             }
+            drop(state_guard);
 
             info!(
                 "[LocalShell] Output reader thread ended for session {}",
-                session_id_clone
+                session_id
             );
         });
     }
@@ -225,6 +333,11 @@ impl LocalShellSession {
             id: self.id.clone(),
             shell_id: self.shell_id.clone(),
             shell_name: self.shell_name.clone(),
+            cwd: self
+                .cwd
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            agent_id: self.agent_id.clone(),
             state: self.get_state().await,
             created_at: self.created_at,
             clients: self.client_count.load(Ordering::Relaxed),
@@ -245,6 +358,21 @@ impl LocalShellSession {
     /// Subscribe to output
     pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
         self.output_tx.subscribe()
+    }
+
+    /// Claim the single application-level output bridge for this session.
+    pub fn claim_output_bridge(&self) -> bool {
+        self.output_bridge_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Snapshot of buffered output for late-attaching frontends.
+    pub fn replay_output(&self) -> Vec<Vec<u8>> {
+        self.output_replay
+            .lock()
+            .map(|replay| replay.snapshot())
+            .unwrap_or_default()
     }
 
     /// Get output sender for bridging
@@ -297,10 +425,11 @@ impl LocalShellSession {
 
     /// Detach a client
     pub fn detach(&self) {
-        let current = self.client_count.load(Ordering::Relaxed);
-        if current > 0 {
-            self.client_count.fetch_sub(1, Ordering::Relaxed);
-        }
+        let _ = self
+            .client_count
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_sub(1)
+            });
     }
 
     /// Get client count
@@ -327,20 +456,19 @@ impl LocalShellSession {
             *writer_guard = None;
         }
 
-        // Kill the child process
-        {
+        // Child::kill preserves portable-pty's platform-specific termination
+        // semantics (including Unix escalation). The monitor never blocks while
+        // holding this mutex, so stop can always acquire it.
+        let kill_error = {
             let mut child_guard = self
                 .child
                 .lock()
                 .map_err(|e| anyhow!("Failed to lock child: {}", e))?;
-            if let Some(ref mut child) = *child_guard {
-                child.kill()?;
-                info!("[LocalShell] Child process killed for session {}", self.id);
-            }
-            *child_guard = None;
-        }
+            child_guard.as_mut().and_then(|child| child.kill().err())
+        };
 
-        // Clear the master
+        // Closing the PTY wakes the reader if it is still blocked in read(); the
+        // child monitor remains responsible for reaping the process.
         {
             let mut master_guard = self
                 .master
@@ -349,7 +477,41 @@ impl LocalShellSession {
             *master_guard = None;
         }
 
-        Ok(())
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let exited = {
+                let mut child_guard = self
+                    .child
+                    .lock()
+                    .map_err(|e| anyhow!("Failed to lock child: {}", e))?;
+                let Some(child) = child_guard.as_mut() else {
+                    return Ok(());
+                };
+                match child.try_wait() {
+                    Ok(Some(_)) => {
+                        *child_guard = None;
+                        true
+                    }
+                    Ok(None) => false,
+                    Err(error) => return Err(error.into()),
+                }
+            };
+
+            if exited {
+                info!("[LocalShell] Child process killed for session {}", self.id);
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                if let Some(error) = kill_error {
+                    return Err(error.into());
+                }
+                return Err(anyhow!(
+                    "Child process did not exit after termination for session {}",
+                    self.id
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 }
 
@@ -358,6 +520,7 @@ mod tests {
     use super::*;
     use crate::local_shell::detector::ShellType;
     use std::ffi::OsStr;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn zsh_launch_is_explicitly_interactive_and_login() {
@@ -382,5 +545,113 @@ mod tests {
             );
             assert_eq!(command.get_env("SHELL"), Some(OsStr::new("/bin/zsh")));
         }
+    }
+
+    #[tokio::test]
+    async fn short_lived_process_transitions_to_stopped() {
+        #[cfg(target_os = "windows")]
+        let command = {
+            let mut command = CommandBuilder::new("cmd.exe");
+            command.args(["/C", "exit", "0"]);
+            command
+        };
+        #[cfg(not(target_os = "windows"))]
+        let command = {
+            let mut command = CommandBuilder::new("/bin/sh");
+            command.args(["-c", "exit 0"]);
+            command
+        };
+
+        let session = LocalShellSession::new_process(
+            "short-lived".into(),
+            "Short lived".into(),
+            None,
+            Some("test-agent".into()),
+            command,
+            80,
+            24,
+        )
+        .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while (session.get_state().await == LocalShellState::Running
+            || session.child.lock().unwrap().is_some())
+            && Instant::now() < deadline
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(session.get_state().await, LocalShellState::Stopped);
+        assert!(session.child.lock().unwrap().is_none());
+
+        session.detach();
+        assert_eq!(session.client_count(), 0);
+        session.attach();
+        session.detach();
+        session.detach();
+        assert_eq!(session.client_count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stop_returns_after_pty_eof_while_child_is_still_alive() {
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args([
+            "-c",
+            "trap '' HUP; /bin/sleep 0.1; exec /bin/sleep 5 </dev/null >/dev/null 2>&1",
+        ]);
+        command.set_controlling_tty(false);
+
+        let session = Arc::new(
+            LocalShellSession::new_process(
+                "eof-before-exit".into(),
+                "EOF before exit".into(),
+                None,
+                Some("test-agent".into()),
+                command,
+                80,
+                24,
+            )
+            .unwrap(),
+        );
+        let child_pid = session
+            .child
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|child| child.process_id())
+            .expect("spawned child should expose a process ID");
+        let process_exists = |pid: u32| {
+            std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        };
+
+        let eof_deadline = Instant::now() + Duration::from_secs(2);
+        while session.get_state().await == LocalShellState::Running && Instant::now() < eof_deadline
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(session.get_state().await, LocalShellState::Stopped);
+        assert!(process_exists(child_pid));
+
+        let stop_session = session.clone();
+        let stop_task = tokio::spawn(async move { stop_session.stop().await });
+        tokio::time::timeout(Duration::from_secs(3), stop_task)
+            .await
+            .expect("stop blocked behind the reader's child wait")
+            .expect("stop task panicked")
+            .expect("stop failed");
+
+        let reap_deadline = Instant::now() + Duration::from_secs(2);
+        while process_exists(child_pid) && Instant::now() < reap_deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(!process_exists(child_pid), "child process was not reaped");
+        assert!(session.child.lock().unwrap().is_none());
     }
 }

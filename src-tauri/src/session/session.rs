@@ -1,51 +1,13 @@
 use anyhow::{Error, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use uuid::Uuid;
 
+use crate::replay::OutputReplayBuffer;
 use crate::ssh::{ClientHandler, SshClient};
-
-const OUTPUT_REPLAY_LIMIT_BYTES: usize = 64 * 1024;
-
-#[derive(Default)]
-struct OutputReplayBuffer {
-    chunks: VecDeque<Vec<u8>>,
-    total_bytes: usize,
-}
-
-impl OutputReplayBuffer {
-    fn push(&mut self, data: &[u8]) {
-        if data.is_empty() {
-            return;
-        }
-
-        let stored = if data.len() > OUTPUT_REPLAY_LIMIT_BYTES {
-            data[data.len() - OUTPUT_REPLAY_LIMIT_BYTES..].to_vec()
-        } else {
-            data.to_vec()
-        };
-
-        self.total_bytes += stored.len();
-        self.chunks.push_back(stored);
-
-        while self.total_bytes > OUTPUT_REPLAY_LIMIT_BYTES {
-            if let Some(removed) = self.chunks.pop_front() {
-                self.total_bytes = self.total_bytes.saturating_sub(removed.len());
-            } else {
-                self.total_bytes = 0;
-                break;
-            }
-        }
-    }
-
-    fn snapshot(&self) -> Vec<Vec<u8>> {
-        self.chunks.iter().cloned().collect()
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -270,6 +232,16 @@ impl Session {
     /// Execute a command via SSH exec channel (does not show in terminal)
     /// Returns the command output as a string
     pub async fn exec_command(&self, command: &str) -> Result<String> {
+        self.exec_command_with_stdin(command, None).await
+    }
+
+    /// Execute a command with optional stdin data (e.g. a sudo password fed to
+    /// `sudo -S` by elevated plugin actions).
+    pub async fn exec_command_with_stdin(
+        &self,
+        command: &str,
+        stdin: Option<&str>,
+    ) -> Result<String> {
         let client = {
             let ssh_guard = self.ssh_client.lock().await;
             ssh_guard
@@ -278,7 +250,7 @@ impl Session {
                 .ok_or_else(|| anyhow::anyhow!("SSH client not connected"))?
         };
 
-        match client.exec_command(command).await {
+        match client.exec_command_with_stdin(command, stdin).await {
             Ok(output) => {
                 self.mark_activity().await;
                 Ok(output)

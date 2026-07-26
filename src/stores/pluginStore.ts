@@ -25,7 +25,9 @@ interface PluginStore {
     pluginId: string,
     actionId: string,
     sessionId: string,
-    inputs?: PluginInputValues
+    inputs?: PluginInputValues,
+    sudoPassword?: string | null,
+    trySudo?: boolean
   ) => Promise<PluginExecutionResult | null>;
   clearError: () => void;
 }
@@ -144,12 +146,26 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
     return false;
   },
 
-  executePluginAction: async (pluginId, actionId, sessionId, inputs = {}) => {
+  executePluginAction: async (
+    pluginId,
+    actionId,
+    sessionId,
+    inputs = {},
+    sudoPassword = null,
+    trySudo = false
+  ) => {
     const requestSequence = ++executionRequestSequence;
     set({ operationId: `${pluginId}:${actionId}`, error: null });
     try {
       const result = await safeInvoke<PluginExecutionResult>('plugin_execute', {
-        request: { pluginId, actionId, sessionId, inputs },
+        request: {
+          pluginId,
+          actionId,
+          sessionId,
+          inputs,
+          sudoPassword: sudoPassword ?? undefined,
+          trySudo,
+        },
       });
       if (result.success) {
         if (requestSequence === executionRequestSequence) {

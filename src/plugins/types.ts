@@ -1,4 +1,4 @@
-export type PluginPermission = 'remote_exec' | 'local_system_read';
+export type PluginPermission = 'remote_exec' | 'local_system_read' | 'local_exec';
 export type PluginSessionType = 'ssh' | 'local';
 export type PluginSource = 'builtin' | 'external';
 export type PluginInputKind = 'text' | 'integer' | 'boolean' | 'select';
@@ -28,6 +28,14 @@ export interface PluginAction {
   args: string[];
   inputs: PluginInput[];
   requiresConfirmation: boolean;
+  /**
+   * When true the command runs under `sudo` so privileged operations work
+   * without a dedicated interactive shell. Always implies that the user is
+   * prompted for confirmation; a sudo password may be supplied at runtime.
+  */
+  elevate: boolean;
+  /** Allows an explicit sudo retry while keeping normal execution unprivileged. */
+  allowSudo: boolean;
   output: PluginOutput;
 }
 

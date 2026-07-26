@@ -40,6 +40,9 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      - name: Frontend tests
+        run: npm test
+
       - name: Build frontend
         run: npm run build
 
@@ -99,6 +102,13 @@ jobs:
 
       - name: Cargo test
         run: cargo test
+
+      - name: Check iOS simulator Rust target
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          rustup target add aarch64-apple-ios-sim
+          cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios-sim
 
   check-clippy:
     name: Clippy Lint

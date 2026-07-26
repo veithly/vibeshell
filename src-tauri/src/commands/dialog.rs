@@ -3,6 +3,7 @@
 //! This module provides Tauri commands for file system dialogs,
 //! specifically for picking SSH key files.
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use rfd::FileDialog;
 use std::{fs, path::Path};
 
@@ -18,13 +19,19 @@ use std::{fs, path::Path};
 /// or an error if the dialog failed to open.
 #[tauri::command]
 pub async fn pick_ssh_key_file() -> Result<Option<String>, String> {
-    // OpenSSH private keys commonly use names like `id_ed25519` with no extension,
-    // while rfd filters are extension-based and can hide them.
-    let file = FileDialog::new()
-        .set_title("Select SSH Private Key")
-        .pick_file();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Err("SSH key file selection is unavailable on mobile".to_string());
 
-    Ok(file.map(|f| f.to_string_lossy().to_string()))
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        // OpenSSH private keys commonly use names like `id_ed25519` with no extension,
+        // while rfd filters are extension-based and can hide them.
+        let file = FileDialog::new()
+            .set_title("Select SSH Private Key")
+            .pick_file();
+
+        Ok(file.map(|f| f.to_string_lossy().to_string()))
+    }
 }
 
 /// Opens a file dialog to pick any file for upload.
@@ -38,22 +45,55 @@ pub async fn pick_ssh_key_file() -> Result<Option<String>, String> {
 /// Returns `Ok(Some(path))` if a file was selected, `Ok(None)` if cancelled.
 #[tauri::command]
 pub async fn pick_file_for_upload() -> Result<Option<String>, String> {
-    let file = FileDialog::new()
-        .add_filter("All Files", &["*"])
-        .set_title("Select File to Upload")
-        .pick_file();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Err("Upload file selection is unavailable on mobile".to_string());
 
-    Ok(file.map(|f| f.to_string_lossy().to_string()))
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let file = FileDialog::new()
+            .add_filter("All Files", &["*"])
+            .set_title("Select File to Upload")
+            .pick_file();
+
+        Ok(file.map(|f| f.to_string_lossy().to_string()))
+    }
+}
+
+/// Opens a file dialog that accepts one or more files for batch upload.
+#[tauri::command]
+pub async fn pick_files_for_upload() -> Result<Vec<String>, String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Err("Upload file selection is unavailable on mobile".to_string());
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let files = FileDialog::new()
+            .add_filter("All Files", &["*"])
+            .set_title("Select Files to Upload")
+            .pick_files();
+
+        Ok(files
+            .unwrap_or_default()
+            .into_iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect())
+    }
 }
 
 /// Opens a directory dialog to pick a folder for recursive upload or sync.
 #[tauri::command]
 pub async fn pick_directory_for_upload() -> Result<Option<String>, String> {
-    let folder = FileDialog::new()
-        .set_title("Select Directory to Upload")
-        .pick_folder();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Err("Upload directory selection is unavailable on mobile".to_string());
 
-    Ok(folder.map(|f| f.to_string_lossy().to_string()))
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let folder = FileDialog::new()
+            .set_title("Select Directory to Upload")
+            .pick_folder();
+
+        Ok(folder.map(|f| f.to_string_lossy().to_string()))
+    }
 }
 
 /// Opens a directory dialog to pick a download location.
@@ -67,11 +107,33 @@ pub async fn pick_directory_for_upload() -> Result<Option<String>, String> {
 /// Returns `Ok(Some(path))` if a directory was selected, `Ok(None)` if cancelled.
 #[tauri::command]
 pub async fn pick_download_directory() -> Result<Option<String>, String> {
-    let folder = FileDialog::new()
-        .set_title("Select Download Location")
-        .pick_folder();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Err("Download directory selection is unavailable on mobile".to_string());
 
-    Ok(folder.map(|f| f.to_string_lossy().to_string()))
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let folder = FileDialog::new()
+            .set_title("Select Download Location")
+            .pick_folder();
+
+        Ok(folder.map(|f| f.to_string_lossy().to_string()))
+    }
+}
+
+/// Opens a directory dialog to select a local coding workspace.
+#[tauri::command]
+pub async fn pick_workspace_directory() -> Result<Option<String>, String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    return Err("Coding workspace selection is unavailable on mobile".to_string());
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let folder = FileDialog::new()
+            .set_title("Select Coding Workspace")
+            .pick_folder();
+
+        Ok(folder.map(|path| path.to_string_lossy().to_string()))
+    }
 }
 
 /// Reads the contents of an SSH key file.

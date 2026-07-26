@@ -9,10 +9,12 @@ use log::{debug, info};
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 use tauri::State;
+use tokio::io::AsyncReadExt;
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 
 use crate::commands::session::SessionAccessState;
@@ -218,6 +220,14 @@ impl Default for SftpState {
     }
 }
 
+fn ensure_native_path_transfer_supported() -> Result<(), String> {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        Err("Path-based file transfer is unavailable on mobile until native document pickers are implemented".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// SFTP entry returned to the frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -357,6 +367,7 @@ async fn remote_exec_command(session_id: &str, command: String) -> Result<(), St
     match ipc_send(IpcMessage::ExecCommand {
         session_id: session_id.to_string(),
         command,
+        stdin: None,
     })
     .await?
     {
@@ -383,6 +394,19 @@ fn get_mime_type(path: &str) -> String {
         "bmp" => "image/bmp",
         "ico" => "image/x-icon",
         "avif" => "image/avif",
+        // Video
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "ogv" => "video/ogg",
+        "3gp" => "video/3gpp",
+        // Audio
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" | "oga" | "opus" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "flac" => "audio/flac",
         // Text
         "txt" => "text/plain",
         "md" | "markdown" => "text/markdown",
@@ -419,6 +443,10 @@ fn get_mime_type(path: &str) -> String {
         "env" => "text/plain",
         // Documents
         "pdf" => "application/pdf",
+        // Archives
+        "zip" => "application/zip",
+        "tar" => "application/x-tar",
+        "gz" | "tgz" => "application/gzip",
         // Default
         _ => "application/octet-stream",
     }
@@ -839,6 +867,8 @@ pub async fn sftp_download_file(
     access_state: State<'_, Arc<SessionAccessState>>,
     request: SftpDownloadRequest,
 ) -> Result<TransferProgress, String> {
+    ensure_native_path_transfer_supported()?;
+
     if is_local_session(local_shell_manager.inner(), &request.session_id).await {
         let current_path = get_local_current_path(sftp_state.inner(), &request.session_id).await;
         let source_path = resolve_local_path(&request.remote_path, &current_path)?;
@@ -960,6 +990,8 @@ pub async fn sftp_upload_file(
     access_state: State<'_, Arc<SessionAccessState>>,
     request: SftpUploadRequest,
 ) -> Result<TransferProgress, String> {
+    ensure_native_path_transfer_supported()?;
+
     if is_local_session(local_shell_manager.inner(), &request.session_id).await {
         let current_path = get_local_current_path(sftp_state.inner(), &request.session_id).await;
         let source_path = resolve_local_path(&request.local_path, &current_path)?;
@@ -1081,6 +1113,8 @@ pub async fn sftp_upload_directory(
     access_state: State<'_, Arc<SessionAccessState>>,
     request: SftpUploadDirectoryRequest,
 ) -> Result<DirectoryTransferSummary, String> {
+    ensure_native_path_transfer_supported()?;
+
     let mode = request.mode.unwrap_or(DirectoryTransferMode::Upload);
     let options = effective_directory_transfer_options(
         request.excluded_paths.clone(),
@@ -1504,18 +1538,26 @@ pub async fn sftp_read_file(
             ));
         }
 
+        let read_limit = if as_binary {
+            file_size
+        } else {
+            max_size.min(file_size)
+        };
+        let mut file = std::fs::File::open(&resolved)
+            .map_err(|e| format!("Failed to open file {}: {}", resolved.display(), e))?;
+        let mut bytes = Vec::with_capacity(read_limit.min(usize::MAX as u64) as usize);
+        file.by_ref()
+            .take(read_limit)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("Failed to read file {}: {}", resolved.display(), e))?;
+
         let (content, truncated) = if as_binary {
-            let bytes = std::fs::read(&resolved)
-                .map_err(|e| format!("Failed to read binary file {}: {}", resolved.display(), e))?;
             let base64_content =
                 base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
             (base64_content, false)
         } else {
-            let bytes = std::fs::read(&resolved)
-                .map_err(|e| format!("Failed to read text file {}: {}", resolved.display(), e))?;
-            let read_size = std::cmp::min(file_size, max_size) as usize;
-            let truncated = read_size < bytes.len();
-            let content = String::from_utf8_lossy(&bytes[..read_size]).to_string();
+            let truncated = file_size > bytes.len() as u64;
+            let content = String::from_utf8_lossy(&bytes).to_string();
             (content, truncated)
         };
 
@@ -1568,9 +1610,20 @@ pub async fn sftp_read_file(
         ));
     }
 
-    // Read the file via SFTP (binary-safe!)
-    let bytes = sftp
-        .read(&path)
+    // Read only the requested preview window so a huge remote text file does
+    // not have to be transferred and allocated before it can be truncated.
+    let read_limit = if as_binary {
+        file_size
+    } else {
+        max_size.min(file_size)
+    };
+    let file = sftp
+        .open(&path)
+        .await
+        .map_err(|e| format!("Failed to open file {}: {}", path, e))?;
+    let mut bytes = Vec::with_capacity(read_limit.min(usize::MAX as u64) as usize);
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
         .await
         .map_err(|e| format!("Failed to read file {}: {}", path, e))?;
 
@@ -1579,10 +1632,8 @@ pub async fn sftp_read_file(
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
         (base64_content, false)
     } else {
-        let read_size = std::cmp::min(file_size as usize, max_size as usize);
-        let actual_size = std::cmp::min(read_size, bytes.len());
-        let truncated = actual_size < bytes.len();
-        let content = String::from_utf8_lossy(&bytes[..actual_size]).to_string();
+        let truncated = file_size > bytes.len() as u64;
+        let content = String::from_utf8_lossy(&bytes).to_string();
         (content, truncated)
     };
 
@@ -1706,6 +1757,16 @@ pub async fn sftp_extract(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_path_transfer_support_matches_the_target() {
+        let result = ensure_native_path_transfer_supported();
+        if cfg!(any(target_os = "android", target_os = "ios")) {
+            assert!(result.is_err());
+        } else {
+            assert!(result.is_ok());
+        }
+    }
 
     #[test]
     fn test_shell_escape() {

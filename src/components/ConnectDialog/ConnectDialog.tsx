@@ -4,6 +4,7 @@ import { cn } from '../../lib/utils';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useServerStore, type Server } from '../../stores/serverStore';
 import { safeInvoke } from '../../lib/tauri';
+import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
 
 interface ConnectDialogProps {
   isOpen: boolean;
@@ -27,6 +28,7 @@ function JumpHostBadge({ jumpHostId }: { jumpHostId: string }) {
 
 export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onConnected }: ConnectDialogProps) {
   const { connectWithCredentials } = useSessionStore();
+  const isMobile = useRuntimeCapabilitiesStore((state) => state.capabilities.isMobile);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -134,7 +136,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
 
     // Validate inputs
     if (isKeyAuth && !keyContent) {
-      setError('Please select an SSH private key file');
+      setError(isMobile ? 'Please paste an SSH private key' : 'Please select an SSH private key file');
       return;
     }
 
@@ -188,7 +190,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
     } finally {
       setIsConnecting(false);
     }
-  }, [server, password, keyContent, connectWithCredentials, forceNew, onConnected, onClose]);
+  }, [server, password, keyContent, isMobile, connectWithCredentials, forceNew, onConnected, onClose]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     const isKeyAuth = server?.auth_type === 'key' || server?.auth_type === 'key_with_passphrase';
@@ -211,7 +213,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
   const isKeyAuth = server.auth_type === 'key' || server.auth_type === 'key_with_passphrase';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="responsive-dialog-layer fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60"
@@ -219,20 +221,21 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
       />
 
       {/* Dialog */}
-      <div className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-md mx-4">
+      <div className="responsive-dialog-panel relative min-w-0 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-md mx-3 sm:mx-4">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
-          <div className="flex items-center gap-3">
+        <div className="responsive-dialog-header flex items-center justify-between gap-3 px-4 py-3 border-b border-tokyo-bg-hl">
+          <div className="flex min-w-0 items-center gap-3">
             {isKeyAuth ? (
               <Key className="w-5 h-5 text-tokyo-green" />
             ) : (
               <Lock className="w-5 h-5 text-tokyo-blue" />
             )}
-            <h2 className="text-lg font-semibold text-tokyo-fg">Connect to Server</h2>
+            <h2 className="min-w-0 text-lg font-semibold text-tokyo-fg">Connect to Server</h2>
           </div>
           <button
             className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
             onClick={onClose}
+            aria-label="Close connect dialog"
           >
             <X className="w-5 h-5" />
           </button>
@@ -243,8 +246,8 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
           {/* Server Info */}
           <div className="p-3 rounded-md bg-tokyo-bg border border-tokyo-bg-hl">
             <div className="text-sm text-tokyo-comment">Connecting to</div>
-            <div className="text-tokyo-fg font-medium">{server.name}</div>
-            <div className="text-sm text-tokyo-comment mt-1">
+            <div className="break-words text-tokyo-fg font-medium">{server.name}</div>
+            <div className="break-all text-sm text-tokyo-comment mt-1">
               {server.username}@{server.host}:{server.port}
             </div>
             {server.jump_host_id && (
@@ -280,13 +283,41 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
           {/* SSH Key File Browser (for key auth) */}
           {isKeyAuth && (
             <div>
-              <label className="block text-sm font-medium text-tokyo-fg mb-1">
-                SSH Private Key File
-              </label>
-              <div className="flex gap-2">
+              {isMobile ? (
+                <>
+                  <label htmlFor="mobileConnectionPrivateKey" className="block text-sm font-medium text-tokyo-fg mb-1">
+                    SSH Private Key
+                  </label>
+                  <textarea
+                    id="mobileConnectionPrivateKey"
+                    value={keyContent ?? ''}
+                    onChange={(event) => {
+                      setKeyContent(event.target.value || null);
+                      setError(null);
+                      setUsingSavedCredentials(false);
+                    }}
+                    rows={6}
+                    spellCheck={false}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    placeholder="Paste OpenSSH private key"
+                    className={cn(
+                      'w-full resize-y rounded-md px-3 py-2 font-mono text-sm',
+                      'bg-tokyo-bg border border-tokyo-bg-hl',
+                      'text-tokyo-fg placeholder-tokyo-comment',
+                      'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue'
+                    )}
+                  />
+                </>
+              ) : (
+                <>
+                  <label className="block text-sm font-medium text-tokyo-fg mb-1">
+                    SSH Private Key File
+                  </label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
                 <div
                   className={cn(
-                    'flex-1 flex items-center gap-2 px-3 py-2 rounded-md',
+                    'min-w-0 flex-1 flex items-center gap-2 px-3 py-2 rounded-md',
                     'bg-tokyo-bg border border-tokyo-bg-hl',
                     'text-tokyo-fg',
                     keyPath ? '' : 'text-tokyo-comment'
@@ -302,7 +333,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
                   onClick={handleBrowseKey}
                   disabled={isLoadingKey || isConnecting}
                   className={cn(
-                    'flex items-center gap-2 px-3 py-2 rounded-md',
+                    'flex items-center justify-center gap-2 px-3 py-2 rounded-md',
                     'bg-tokyo-bg-hl text-tokyo-fg',
                     'hover:bg-tokyo-blue/20 hover:text-tokyo-blue',
                     'disabled:opacity-50 disabled:cursor-not-allowed',
@@ -312,11 +343,13 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
                   <FolderOpen className="w-4 h-4" />
                   <span className="text-sm">{isLoadingKey ? 'Loading...' : 'Browse'}</span>
                 </button>
-              </div>
-              {keyPath && (
-                <p className="mt-1 text-xs text-tokyo-comment truncate" title={keyPath}>
-                  {keyPath}
-                </p>
+                  </div>
+                  {keyPath && (
+                    <p className="mt-1 text-xs text-tokyo-comment truncate" title={keyPath}>
+                      {keyPath}
+                    </p>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -359,7 +392,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
           </div>
 
           {/* Actions */}
-          <div className="flex justify-end gap-3 pt-2">
+          <div className="responsive-dialog-actions flex justify-end gap-3 pt-2">
             <button
               type="button"
               onClick={onClose}

@@ -77,7 +77,7 @@ export function AgentActivityPanel({ open, onClose, onSessionsChanged }: AgentAc
   return (
     <aside
       className={cn(
-        'min-h-0 w-80 flex-shrink-0 flex-col border-l border-tokyo-bg-hl bg-tokyo-bg-dark',
+        'agent-activity-panel min-h-0 w-80 flex-shrink-0 flex-col border-l border-tokyo-bg-hl bg-tokyo-bg-dark',
         open ? 'flex' : 'hidden'
       )}
       aria-label={t('agentActivity.title')}

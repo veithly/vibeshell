@@ -10,6 +10,9 @@ import {
 const MAX_HISTORY_SIZE = 500;
 const HISTORY_STORAGE_KEY = 'vibeshell_command_history';
 const AUTO_TRIGGER_MIN_CHARS = 2;
+// Debounce local completion (fuzzy match + ghost text) so rapid keystrokes
+// don't run the full O(n*m) scan on every keypress and block the main thread.
+const LOCAL_COMPLETION_DEBOUNCE_MS = 90;
 
 const COMMON_ENV_VARS = [
   { name: 'HOME', description: 'User home directory' },
@@ -185,8 +188,25 @@ export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [Com
   const aiPredictionRequestIdRef = useRef(0);
   const latestInputRef = useRef('');
 
+  // Debounce refs for local completion (autoTrigger/updateCompletions).
+  // Pending calls are guarded by a monotonically increasing request id, so a
+  // late callback from a superseded keystroke is discarded without state writes.
+  const localCompletionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const localCompletionRequestIdRef = useRef(0);
+
   useEffect(() => {
     historyRef.current = loadHistory();
+  }, []);
+
+  // Clear any pending debounced local completion timer on unmount to avoid
+  // leaking a setTimeout that fires setState after the component is gone.
+  useEffect(() => {
+    return () => {
+      if (localCompletionTimerRef.current) {
+        clearTimeout(localCompletionTimerRef.current);
+        localCompletionTimerRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -204,6 +224,18 @@ export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [Com
     if (aiPredictionAbortRef.current) {
       aiPredictionAbortRef.current.abort();
       aiPredictionAbortRef.current = null;
+    }
+  }, []);
+
+  // Cancel any pending debounced local completion (autoTrigger/updateCompletions).
+  // Called synchronously from hideCompletions/clearGhostText so ESC/Enter/Tab
+  // close the popup immediately rather than after the debounce window.
+  const cancelPendingLocalCompletion = useCallback(() => {
+    localCompletionRequestIdRef.current++;
+
+    if (localCompletionTimerRef.current) {
+      clearTimeout(localCompletionTimerRef.current);
+      localCompletionTimerRef.current = null;
     }
   }, []);
 
@@ -363,7 +395,10 @@ export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [Com
     }
   }, [generateCompletions, calculateLocalGhostText, scheduleAiPrediction]);
 
-  const autoTrigger = useCallback((input: string, pos: { x: number; y: number }) => {
+  // Synchronous implementation of autoTrigger. Wrapped by the debounced
+  // autoTrigger below so the heavy generateCompletions/calculateLocalGhostText
+  // work runs at most once per debounce window instead of on every keystroke.
+  const performAutoTrigger = useCallback((input: string, pos: { x: number; y: number }) => {
     const trimmedInput = input.trim();
 
     if (trimmedInput.length < AUTO_TRIGGER_MIN_CHARS) {
@@ -387,7 +422,28 @@ export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [Com
     scheduleAiPrediction(input, completions);
   }, [generateCompletions, calculateLocalGhostText, scheduleAiPrediction, cancelAiPrediction]);
 
-  const updateCompletions = useCallback((input: string) => {
+  const autoTrigger = useCallback((input: string, pos: { x: number; y: number }) => {
+    // Short input clears synchronously (cheap, and keeps the popup responsive
+    // when the user deletes back below the trigger threshold).
+    if (input.trim().length < AUTO_TRIGGER_MIN_CHARS) {
+      cancelPendingLocalCompletion();
+      performAutoTrigger(input, pos);
+      return;
+    }
+
+    cancelPendingLocalCompletion();
+    const requestId = ++localCompletionRequestIdRef.current;
+
+    localCompletionTimerRef.current = setTimeout(() => {
+      localCompletionTimerRef.current = null;
+      // Discard if a newer keystroke superseded this one.
+      if (requestId !== localCompletionRequestIdRef.current) return;
+      performAutoTrigger(input, pos);
+    }, LOCAL_COMPLETION_DEBOUNCE_MS);
+  }, [performAutoTrigger, cancelPendingLocalCompletion]);
+
+  // Synchronous implementation of updateCompletions (debounced below).
+  const performUpdateCompletions = useCallback((input: string) => {
     const completions = generateCompletions(input);
     const ghost = calculateLocalGhostText(input);
     latestInputRef.current = input;
@@ -406,18 +462,31 @@ export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [Com
     }
   }, [generateCompletions, calculateLocalGhostText, scheduleAiPrediction]);
 
+  const updateCompletions = useCallback((input: string) => {
+    cancelPendingLocalCompletion();
+    const requestId = ++localCompletionRequestIdRef.current;
+
+    localCompletionTimerRef.current = setTimeout(() => {
+      localCompletionTimerRef.current = null;
+      if (requestId !== localCompletionRequestIdRef.current) return;
+      performUpdateCompletions(input);
+    }, LOCAL_COMPLETION_DEBOUNCE_MS);
+  }, [performUpdateCompletions, cancelPendingLocalCompletion]);
+
   const hideCompletions = useCallback(() => {
+    cancelPendingLocalCompletion();
     setVisible(false);
     setItems([]);
     setSelectedIndex(0);
     setGhostText('');
     cancelAiPrediction();
-  }, [cancelAiPrediction]);
+  }, [cancelAiPrediction, cancelPendingLocalCompletion]);
 
   const clearGhostText = useCallback(() => {
+    cancelPendingLocalCompletion();
     setGhostText('');
     cancelAiPrediction();
-  }, [cancelAiPrediction]);
+  }, [cancelAiPrediction, cancelPendingLocalCompletion]);
 
   const getGhostText = useCallback(() => ghostText, [ghostText]);
 

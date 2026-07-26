@@ -25,6 +25,14 @@ fn default_true() -> bool {
     true
 }
 
+fn ensure_runtime_tunnels_supported() -> Result<(), String> {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        Err("SSH tunnels are unavailable on mobile in this release".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 fn parse_tunnel_type(s: &str) -> TunnelType {
     match s {
         "local" => TunnelType::Local,
@@ -110,6 +118,8 @@ pub async fn tunnel_start(
     session_id: String,
     config: TunnelConfigInput,
 ) -> Result<TunnelInfo, String> {
+    ensure_runtime_tunnels_supported()?;
+
     // Get the session to access SSH handle
     let session = session_mgr
         .get(&session_id)
@@ -146,6 +156,8 @@ pub async fn tunnel_stop(
     tunnel_mgr: State<'_, Arc<TunnelManager>>,
     tunnel_id: String,
 ) -> Result<(), String> {
+    ensure_runtime_tunnels_supported()?;
+
     tunnel_mgr
         .stop_tunnel(&tunnel_id)
         .await
@@ -158,6 +170,7 @@ pub async fn tunnel_list_active(
     tunnel_mgr: State<'_, Arc<TunnelManager>>,
     session_id: Option<String>,
 ) -> Result<Vec<TunnelInfo>, String> {
+    ensure_runtime_tunnels_supported()?;
     Ok(tunnel_mgr.list_tunnels(session_id.as_deref()).await)
 }
 
@@ -167,6 +180,22 @@ pub async fn tunnel_stop_all_for_session(
     tunnel_mgr: State<'_, Arc<TunnelManager>>,
     session_id: String,
 ) -> Result<(), String> {
+    ensure_runtime_tunnels_supported()?;
     tunnel_mgr.stop_all_for_session(&session_id).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_runtime_tunnels_supported;
+
+    #[test]
+    fn runtime_tunnel_support_matches_the_target() {
+        let result = ensure_runtime_tunnels_supported();
+        if cfg!(any(target_os = "android", target_os = "ios")) {
+            assert!(result.is_err());
+        } else {
+            assert!(result.is_ok());
+        }
+    }
 }

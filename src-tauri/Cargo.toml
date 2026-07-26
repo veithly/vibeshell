@@ -21,7 +21,6 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", default-features = false, features = ["wry", "compression", "dynamic-acl", "x11", "devtools"] }
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
-rfd = { version = "0.16", default-features = false, features = ["gtk3"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -35,6 +34,7 @@ rand = "0.8"
 base64 = "0.21"
 sha2 = "0.10"
 subtle = "2"
+zeroize = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 russh = "0.44"
@@ -42,15 +42,19 @@ russh-keys = "0.44"
 russh-sftp = "2"
 ignore = "0.4"
 async-trait = "0.1"
-tokio = { version = "1", features = ["sync", "io-std", "io-util", "rt-multi-thread"] }
+tokio = { version = "1", features = ["sync", "io-std", "io-util", "rt-multi-thread", "macros", "time"] }
 interprocess = "2"
 axum = "0.7"
 tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 portable-pty = "0.8"
-which = "7"
+rfd = { version = "0.16", default-features = false, features = ["gtk3"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
+which = "7"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }

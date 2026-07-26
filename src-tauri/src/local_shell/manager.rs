@@ -2,7 +2,9 @@
 
 use anyhow::{anyhow, Result};
 use log::{error, info, warn};
+use portable_pty::CommandBuilder;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -68,20 +70,39 @@ impl LocalShellManager {
             anyhow!("Shell not found: {}", shell_id)
         })?;
 
-        // Create the session
         let session = LocalShellSession::new(shell_info, cols, rows)?;
-        let session = Arc::new(session);
+        Ok(self.register_session(session).await)
+    }
 
+    /// Create a PTY-backed session for a known executable and argv.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_process_session(
+        &self,
+        shell_id: String,
+        shell_name: String,
+        cwd: Option<PathBuf>,
+        agent_id: Option<String>,
+        command: CommandBuilder,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Arc<LocalShellSession>> {
+        let session = LocalShellSession::new_process(
+            shell_id, shell_name, cwd, agent_id, command, cols, rows,
+        )?;
+        Ok(self.register_session(session).await)
+    }
+
+    async fn register_session(&self, session: LocalShellSession) -> Arc<LocalShellSession> {
+        let session = Arc::new(session);
         info!(
             "[LocalShellManager] Session created with ID: {}",
             session.id
         );
-
-        // Store the session
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(session.id.clone(), session.clone());
-
-        Ok(session)
+        self.sessions
+            .write()
+            .await
+            .insert(session.id.clone(), session.clone());
+        session
     }
 
     /// Create a session with the default shell

@@ -1,19 +1,12 @@
 import { memo, useCallback, useState, useEffect } from 'react';
-import { AlertCircle, Loader2, Maximize2, Minimize2, Minus, Monitor, Wifi, X } from 'lucide-react';
+import { AlertCircle, Code2, Loader2, Maximize2, Minimize2, Minus, Monitor, Wifi, X } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useRuntimeCapabilitiesStore } from '../stores/runtimeCapabilitiesStore';
 
-type DesktopPlatform = 'macos' | 'windows' | 'linux';
 const MACOS_FULLSCREEN_TRANSITION_MS = 700;
 
 function waitForMacosFullscreenTransition(): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, MACOS_FULLSCREEN_TRANSITION_MS));
-}
-
-function detectDesktopPlatform(): DesktopPlatform {
-  const platform = `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
-  if (platform.includes('mac')) return 'macos';
-  if (platform.includes('win')) return 'windows';
-  return 'linux';
 }
 
 /**
@@ -25,17 +18,30 @@ export const TitleBar = memo(function TitleBar({
   activeSessionName,
   activeSessionType,
   activeSessionState,
+  activeSessionPurpose,
 }: {
   activeSessionName?: string;
   activeSessionType?: string;
   activeSessionState?: string;
+  activeSessionPurpose?: string;
 }) {
   const [isMaximized, setIsMaximized] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [platform] = useState<DesktopPlatform>(detectDesktopPlatform);
+  const platform = useRuntimeCapabilitiesStore((state) => state.capabilities.platform);
+  const supportsWindowControls = useRuntimeCapabilitiesStore(
+    (state) => state.capabilities.windowControls
+  );
+  const loadRuntimeCapabilities = useRuntimeCapabilitiesStore((state) => state.load);
+
+  useEffect(() => {
+    void loadRuntimeCapabilities();
+  }, [loadRuntimeCapabilities]);
 
   // Keep the custom controls synchronized with native window transitions.
   useEffect(() => {
+    if (!supportsWindowControls) return;
+
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
 
     const setup = async () => {
@@ -47,21 +53,31 @@ export const TitleBar = memo(function TitleBar({
             win.isMaximized(),
             win.isFullscreen(),
           ]);
+          if (cancelled) return;
           setIsMaximized(maximized);
           setIsFullscreen(fullscreen);
         };
         await updateWindowState();
 
         const { listen } = await import('@tauri-apps/api/event');
-        unlisten = await listen('tauri://resize', updateWindowState);
+        const stop = await listen('tauri://resize', updateWindowState);
+        if (cancelled) {
+          // Effect tore down while we were awaiting listen(); release it now.
+          stop();
+        } else {
+          unlisten = stop;
+        }
       } catch {
         // Fallback for non-Tauri environment
       }
     };
 
     setup();
-    return () => { unlisten?.(); };
-  }, []);
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [supportsWindowControls]);
 
   const handleMinimize = useCallback(async () => {
     try {
@@ -110,7 +126,7 @@ export const TitleBar = memo(function TitleBar({
     }
   }, [platform]);
 
-  const windowControls = platform === 'macos' ? (
+  const windowControls = !supportsWindowControls ? null : platform === 'macos' ? (
     <div className="window-controls-macos" aria-label="Window controls">
       <button className="window-control-macos macos-close" onClick={handleClose} aria-label="Close">
         <X aria-hidden="true" />
@@ -140,42 +156,46 @@ export const TitleBar = memo(function TitleBar({
     </div>
   );
 
-  const sessionKind = activeSessionType === 'local' ? 'Local' : 'SSH';
+  const sessionKind = activeSessionPurpose === 'coding_agent'
+    ? 'Agent'
+    : activeSessionType === 'local' ? 'Local' : 'SSH';
   const stateLabel = activeSessionState && activeSessionState !== 'connected' ? activeSessionState : null;
   const StatusIcon = activeSessionState === 'connecting'
     ? Loader2
     : activeSessionState === 'error'
       ? AlertCircle
-      : activeSessionType === 'local'
-        ? Monitor
-        : Wifi;
+      : activeSessionPurpose === 'coding_agent'
+        ? Code2
+        : activeSessionType === 'local'
+          ? Monitor
+          : Wifi;
 
   return (
     <div
       className={cn('titlebar-shell h-9 flex items-center justify-between select-none shrink-0', `platform-${platform}`)}
     >
       {platform === 'macos' && windowControls}
-      {/* Left: App branding + drag region */}
-      <div
-        className={cn('flex items-center gap-3 flex-1 h-full min-w-0', platform === 'macos' ? 'pl-2' : 'pl-3')}
-        data-tauri-drag-region
-      >
-        <span className="titlebar-brand" data-tauri-drag-region>
+      {/*
+        Drag region is intentionally split into narrow gutter strips instead of
+        covering the whole titlebar. A single large data-tauri-drag-region makes
+        Tauri's native startDragging() capture mouse events over interactive
+        elements, which eats rapid clicks and makes the UI feel frozen. Keep the
+        brand, session info, and any future controls outside the drag surface.
+      */}
+      <div className="flex items-center gap-3 flex-1 h-full min-w-0">
+        <div
+          className="titlebar-drag-gutter h-full"
+          data-tauri-drag-region
+          aria-hidden="true"
+        />
+        <span className={cn('titlebar-brand', platform === 'macos' ? '' : 'pl-1')}>
           <img src="/app-icon.svg" className="h-5 w-5" alt="" aria-hidden="true" />
         </span>
-        <span
-          className="text-xs font-semibold text-tokyo-fg"
-          data-tauri-drag-region
-        >
-          VibeShell
-        </span>
+        <span className="text-xs font-semibold text-tokyo-fg">VibeShell</span>
 
         {/* Session info */}
         {activeSessionName && (
-          <div
-            className="titlebar-session min-w-0"
-            data-tauri-drag-region
-          >
+          <div className="titlebar-session min-w-0">
             <StatusIcon
               className={cn(
                 'w-3.5 h-3.5 flex-shrink-0',
@@ -191,6 +211,12 @@ export const TitleBar = memo(function TitleBar({
             {stateLabel && <span className="flex-shrink-0 text-tokyo-comment">({stateLabel})</span>}
           </div>
         )}
+
+        <div
+          className="titlebar-drag-gutter flex-1 h-full"
+          data-tauri-drag-region
+          aria-hidden="true"
+        />
       </div>
 
       {platform !== 'macos' && windowControls}

@@ -10,7 +10,7 @@ use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Represents a stored SSH host key fingerprint
@@ -67,6 +67,12 @@ impl FingerprintStore {
     /// Create a new fingerprint store, loading existing fingerprints from disk
     pub fn new() -> Result<Self> {
         let file_path = Self::get_store_path()?;
+        Self::new_at(file_path)
+    }
+
+    /// Create a fingerprint store at an explicit application-owned path.
+    pub fn new_at(path: impl AsRef<Path>) -> Result<Self> {
+        let file_path = path.as_ref().to_path_buf();
         debug!("[FingerprintStore] Using store path: {:?}", file_path);
 
         // Ensure parent directory exists
@@ -346,11 +352,25 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test_fingerprints.json");
 
-        let store = FingerprintStore {
-            fingerprints: Mutex::new(HashMap::new()),
-            file_path: path,
-        };
+        let store = FingerprintStore::new_at(path).unwrap();
         (dir, store)
+    }
+
+    #[test]
+    fn new_at_reloads_fingerprints_from_the_injected_path() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nested").join("fingerprints.json");
+        let store = FingerprintStore::new_at(&path).unwrap();
+        store
+            .save("example.com", 22, "SHA256:abc", "ssh-ed25519", None)
+            .unwrap();
+        drop(store);
+
+        let reopened = FingerprintStore::new_at(&path).unwrap();
+        assert_eq!(
+            reopened.get("example.com", 22).unwrap().fingerprint,
+            "SHA256:abc"
+        );
     }
 
     #[test]

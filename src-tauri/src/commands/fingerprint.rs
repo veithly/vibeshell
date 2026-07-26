@@ -4,6 +4,7 @@
 //! for verifying SSH server host keys and managing trusted hosts.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 
@@ -113,6 +114,14 @@ pub struct FingerprintState {
 impl FingerprintState {
     pub fn new() -> Result<Self, String> {
         let store = FingerprintStore::new()
+            .map_err(|e| format!("Failed to initialize fingerprint store: {}", e))?;
+        Ok(Self {
+            store: Arc::new(store),
+        })
+    }
+
+    pub fn new_at(path: impl AsRef<Path>) -> Result<Self, String> {
+        let store = FingerprintStore::new_at(path)
             .map_err(|e| format!("Failed to initialize fingerprint store: {}", e))?;
         Ok(Self {
             store: Arc::new(store),

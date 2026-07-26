@@ -1283,6 +1283,7 @@ echo "===NETDEV==="; cat /proc/net/dev
         match ipc_send(IpcMessage::ExecCommand {
             session_id: request.session_id.clone(),
             command: combined_cmd.to_string(),
+            stdin: None,
         })
         .await?
         {

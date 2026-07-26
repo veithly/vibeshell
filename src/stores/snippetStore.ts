@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { safeInvoke } from '../lib/tauri';
 import type { CommandSnippet, CreateSnippetInput } from '../types/tunnel';
+import { scheduleCloudSync } from './cloudSyncStore';
 
 interface SnippetStore {
   snippets: CommandSnippet[];
@@ -38,6 +39,7 @@ export const useSnippetStore = create<SnippetStore>((set) => ({
         snippets: [result.data, ...state.snippets],
         loading: false,
       }));
+      scheduleCloudSync();
       return result.data;
     } else {
       set({ error: result.error.message, loading: false });
@@ -55,6 +57,7 @@ export const useSnippetStore = create<SnippetStore>((set) => ({
         ),
         loading: false,
       }));
+      scheduleCloudSync();
     } else {
       set({ error: result.error.message, loading: false });
     }
@@ -68,6 +71,7 @@ export const useSnippetStore = create<SnippetStore>((set) => ({
         snippets: state.snippets.filter((s) => s.id !== id),
         loading: false,
       }));
+      scheduleCloudSync();
     } else {
       set({ error: result.error.message, loading: false });
     }

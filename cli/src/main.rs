@@ -398,13 +398,13 @@ enum DaemonCommand {
 
 #[derive(Args)]
 struct InstallArgs {
-    /// Tool name (claude-code, cursor, codex, opencode) or "all"
+    /// Tool name (claude-code, cursor, codex, opencode, pi) or "all"
     tool: String,
 }
 
 #[derive(Args)]
 struct UninstallArgs {
-    /// Tool name (claude-code, cursor, codex, opencode) or "all"
+    /// Tool name (claude-code, cursor, codex, opencode, pi) or "all"
     tool: String,
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useId, useRef } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
@@ -27,6 +27,8 @@ export function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  const messageId = useId();
 
   // Focus confirm button when dialog opens
   useEffect(() => {
@@ -60,14 +62,20 @@ export function ConfirmDialog({
       />
 
       {/* Dialog */}
-      <div className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-sm mx-4">
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={messageId}
+        className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-sm mx-4"
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
           <div className="flex items-center gap-2">
             {isDanger && (
               <AlertTriangle className="w-5 h-5 text-tokyo-red" />
             )}
-            <h2 className="text-lg font-semibold text-tokyo-fg">{title}</h2>
+            <h2 id={titleId} className="text-lg font-semibold text-tokyo-fg">{title}</h2>
           </div>
           <button
             className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
@@ -79,7 +87,7 @@ export function ConfirmDialog({
 
         {/* Content */}
         <div className="p-4">
-          <p className="text-tokyo-fg">{message}</p>
+          <p id={messageId} className="text-tokyo-fg">{message}</p>
         </div>
 
         {/* Footer */}

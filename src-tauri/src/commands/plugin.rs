@@ -13,10 +13,11 @@ use tauri::State;
 
 use crate::commands::SessionAccessState;
 use crate::ipc::{IpcClient, IpcMessage};
+use crate::local_shell::LocalShellManager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::plugins::MAX_MANIFEST_BYTES;
 use crate::plugins::{
-    builtin_catalog, parse_manifest, render_remote_command, ManifestValidationPolicy, PluginEntry,
+    builtin_catalog, parse_manifest, render_command, ManifestValidationPolicy, PluginEntry,
     PluginExecuteRequest, PluginExecutionResult, PluginManifest, PluginPermission, PluginRecord,
     PluginSource, MAX_PLUGIN_OUTPUT_BYTES, MAX_PLUGIN_SETTINGS_BYTES,
 };
@@ -149,6 +150,7 @@ pub async fn plugin_execute(
     access_state: State<'_, Arc<SessionAccessState>>,
     db: State<'_, Arc<Database>>,
     request: PluginExecuteRequest,
+    local_shell_manager: State<'_, Arc<LocalShellManager>>,
 ) -> Result<PluginExecutionResult, String> {
     let installation = db
         .plugin_installation_get(&request.plugin_id)
@@ -164,10 +166,20 @@ pub async fn plugin_execute(
     let granted_permissions: Vec<PluginPermission> =
         serde_json::from_str(&installation.granted_permissions_json)
             .map_err(|error| format!("Stored plugin permissions are invalid: {}", error))?;
-    if !granted_permissions.contains(&PluginPermission::RemoteExec) {
+
+    // Determine whether the target session is local or remote, then enforce the
+    // matching permission. Local shell sessions are only available on desktop.
+    let is_local = is_local_session(&manager, &request.session_id, &local_shell_manager).await;
+    let required_permission = if is_local {
+        PluginPermission::LocalExec
+    } else {
+        PluginPermission::RemoteExec
+    };
+    if !granted_permissions.contains(&required_permission) {
         return Err(format!(
-            "Plugin {} has not been granted remote_exec permission",
-            request.plugin_id
+            "Plugin {} has not been granted {} permission",
+            request.plugin_id,
+            permission_label(&required_permission)
         ));
     }
 
@@ -186,32 +198,47 @@ pub async fn plugin_execute(
                 request.plugin_id, request.action_id
             )
         })?;
-    let command = bound_remote_output(&render_remote_command(action, &request.inputs)?);
+
+    if request.try_sudo && !action.allow_sudo {
+        return Err(format!(
+            "Plugin action does not support optional sudo: {}/{}",
+            request.plugin_id, request.action_id
+        ));
+    }
+    let use_sudo = action.elevate || request.try_sudo;
+    let has_password = use_sudo
+        && request
+            .sudo_password
+            .as_deref()
+            .is_some_and(|password| !password.is_empty());
+    let command = render_command(action, &request.inputs, use_sudo, has_password)?;
+    let stdin = if has_password {
+        request.sudo_password.clone()
+    } else {
+        None
+    };
 
     let started = Instant::now();
-    let output = if let Some(session) = manager.get(&request.session_id).await {
-        session
-            .exec_command(&command)
-            .await
-            .map_err(|error| format!("Plugin command failed: {}", error))?
-    } else if access_state.is_remote() {
-        match ipc_send(IpcMessage::ExecCommand {
-            session_id: request.session_id.clone(),
-            command,
-        })
-        .await?
+    let output = if is_local {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
-            IpcMessage::CommandOutput { output } => output,
-            IpcMessage::Error { message } => return Err(message),
-            other => {
-                return Err(format!(
-                    "Unexpected IPC response while running plugin: {:?}",
-                    other
-                ));
-            }
+            run_local_command(&command, stdin.as_deref()).await?
+        }
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let _ = stdin;
+            return Err("Local plugin execution is not available on mobile".to_string());
         }
     } else {
-        return Err(format!("Session not found: {}", request.session_id));
+        let bounded = bound_remote_output(&command);
+        run_remote_command(
+            &manager,
+            &access_state,
+            &request.session_id,
+            &bounded,
+            stdin.as_deref(),
+        )
+        .await?
     };
 
     let (output, truncated) = truncate_output(output);
@@ -222,6 +249,99 @@ pub async fn plugin_execute(
         duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
         truncated,
     })
+}
+
+/// Returns true when `session_id` belongs to a local shell session rather than
+/// an SSH session. Desktop-only because local shells are desktop-only.
+async fn is_local_session(
+    ssh_manager: &State<'_, Arc<SessionManager>>,
+    session_id: &str,
+    local_shell_manager: &State<'_, Arc<LocalShellManager>>,
+) -> bool {
+    // An SSH session with this id means it's remote.
+    if ssh_manager.get(session_id).await.is_some() {
+        return false;
+    }
+    local_shell_manager.get_session(session_id).await.is_some()
+}
+
+fn permission_label(permission: &PluginPermission) -> &'static str {
+    match permission {
+        PluginPermission::RemoteExec => "remote_exec",
+        PluginPermission::LocalExec => "local_exec",
+        PluginPermission::LocalSystemRead => "local_system_read",
+    }
+}
+
+/// Execute a one-shot command on the local machine. Uses a plain process
+/// (not a PTY) so output is captured the same way remote plugin output is.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn run_local_command(command: &str, stdin: Option<&str>) -> Result<String, String> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    // Run through the user's shell so shell operators (pipes, the `head -c`
+    // output bound, etc.) behave identically to the remote path.
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let mut child = tokio::process::Command::new(&shell)
+        .arg("-c")
+        .arg(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| format!("Failed to spawn local command: {}", error))?;
+
+    if let (Some(password), Some(mut stdin_handle)) = (stdin, child.stdin.take()) {
+        let _ = stdin_handle
+            .write_all(format!("{password}\n").as_bytes())
+            .await;
+        // Drop closes stdin, signalling EOF to sudo -S.
+        drop(stdin_handle);
+    }
+
+    let output = tokio::time::timeout(std::time::Duration::from_secs(60), child.wait_with_output())
+        .await
+        .map_err(|_| "Local command timed out after 60s".to_string())?
+        .map_err(|error| format!("Local command failed: {}", error))?;
+
+    // Merge stdout + stderr to match the remote 2>&1 behaviour.
+    let mut combined = output.stdout;
+    combined.extend_from_slice(&output.stderr);
+    Ok(String::from_utf8_lossy(&combined).into_owned())
+}
+
+async fn run_remote_command(
+    manager: &State<'_, Arc<SessionManager>>,
+    access_state: &State<'_, Arc<SessionAccessState>>,
+    session_id: &str,
+    command: &str,
+    stdin: Option<&str>,
+) -> Result<String, String> {
+    if let Some(session) = manager.get(session_id).await {
+        session
+            .exec_command_with_stdin(command, stdin)
+            .await
+            .map_err(|error| format!("Plugin command failed: {}", error))
+    } else if access_state.is_remote() {
+        match ipc_send(IpcMessage::ExecCommand {
+            session_id: session_id.to_string(),
+            command: command.to_string(),
+            stdin: stdin.map(|s| s.to_string()),
+        })
+        .await?
+        {
+            IpcMessage::CommandOutput { output } => Ok(output),
+            IpcMessage::Error { message } => Err(message),
+            other => Err(format!(
+                "Unexpected IPC response while running plugin: {:?}",
+                other
+            )),
+        }
+    } else {
+        Err(format!("Session not found: {}", session_id))
+    }
 }
 
 fn list_plugins(db: &Database) -> Result<Vec<PluginRecord>, String> {

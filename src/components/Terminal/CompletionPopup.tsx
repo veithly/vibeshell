@@ -350,21 +350,29 @@ export const CompletionPopup = memo(function CompletionPopup({
   // Calculate popup position to stay within viewport
   const maxWidth = 400;
   const maxHeight = 300;
-  const estimatedHeight = Math.min(maxHeight, 38 + (items.length * 34) + 8);
+  const viewportPadding = 10;
+  const visualViewport = typeof window !== 'undefined' ? window.visualViewport : null;
+  const viewportWidth = visualViewport?.width ?? (typeof window !== 'undefined' ? window.innerWidth : maxWidth);
+  const viewportHeight = visualViewport?.height ?? (typeof window !== 'undefined' ? window.innerHeight : maxHeight);
+  const viewportLeft = visualViewport?.offsetLeft ?? 0;
+  const viewportTop = visualViewport?.offsetTop ?? 0;
+  const popupWidth = Math.max(1, Math.min(maxWidth, viewportWidth - (viewportPadding * 2)));
+  const popupMaxHeight = Math.max(1, Math.min(maxHeight, viewportHeight - (viewportPadding * 2)));
+  const estimatedHeight = Math.min(popupMaxHeight, 38 + (items.length * 34) + 8);
   let left = position.x;
   let top = position.y;
 
   // Ensure popup stays within viewport bounds
   if (typeof window !== 'undefined') {
-    if (left + maxWidth > window.innerWidth) {
-      left = window.innerWidth - maxWidth - 10;
+    if (left + popupWidth > viewportLeft + viewportWidth - viewportPadding) {
+      left = viewportLeft + viewportWidth - popupWidth - viewportPadding;
     }
-    if (left < 10) {
-      left = 10;
+    if (left < viewportLeft + viewportPadding) {
+      left = viewportLeft + viewportPadding;
     }
-    if (top + estimatedHeight > window.innerHeight) {
+    if (top + estimatedHeight > viewportTop + viewportHeight - viewportPadding) {
       // Position above cursor if not enough space below
-      top = Math.max(10, position.y - estimatedHeight - 20);
+      top = Math.max(viewportTop + viewportPadding, position.y - estimatedHeight - 20);
     }
   }
 
@@ -376,12 +384,15 @@ export const CompletionPopup = memo(function CompletionPopup({
         'fixed overflow-hidden rounded-lg shadow-2xl',
         'border border-opacity-40'
       )}
+      role="listbox"
+      aria-label="Command suggestions"
       style={{
         left: `${left}px`,
         top: `${top}px`,
-        minWidth: '200px',
-        maxWidth: `${maxWidth}px`,
-        maxHeight: `${maxHeight}px`,
+        width: `${popupWidth}px`,
+        minWidth: `${Math.min(200, popupWidth)}px`,
+        maxWidth: `calc(100vw - ${viewportPadding * 2}px)`,
+        maxHeight: `${popupMaxHeight}px`,
         zIndex: 99999,
         backgroundColor: themeColors.bgDark,
         borderColor: themeColors.bgHl,
@@ -417,7 +428,7 @@ export const CompletionPopup = memo(function CompletionPopup({
       {/* Items list */}
       <div
         className="overflow-y-auto overflow-x-hidden py-1"
-        style={{ maxHeight: `${maxHeight - 64}px` }}
+        style={{ maxHeight: `${Math.max(0, popupMaxHeight - 64)}px` }}
       >
         {items.map((item, index) => {
           const isSelected = index === selectedIndex;
@@ -430,6 +441,8 @@ export const CompletionPopup = memo(function CompletionPopup({
                 'flex items-center gap-2.5 px-3 py-1.5 cursor-pointer mx-1 rounded-md',
                 'transition-all duration-75'
               )}
+              role="option"
+              aria-selected={isSelected}
               style={{
                 backgroundColor: isSelected ? themeColors.bgHl : 'transparent',
                 transform: isSelected ? 'scale(1)' : 'scale(1)',
@@ -501,7 +514,7 @@ export const CompletionPopup = memo(function CompletionPopup({
 
       {/* Footer with keyboard hints */}
       <div
-        className="px-3 py-1.5 text-xs border-t flex gap-4 items-center"
+        className="px-3 py-1.5 text-xs border-t flex flex-wrap gap-x-4 gap-y-1 items-center"
         style={{
           backgroundColor: themeColors.bg,
           borderColor: themeColors.bgHl,

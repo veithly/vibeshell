@@ -1,13 +1,18 @@
 #[cfg(test)]
 mod acl_tests;
+pub mod cloud_sync;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub mod coding_agent;
 pub mod commands;
 pub mod install;
 pub mod ipc;
 pub mod local_shell;
 pub mod logging;
 pub mod mcp;
+pub mod platform;
 pub mod plugins;
 pub mod remote_tools;
+pub mod replay;
 pub mod session;
 pub mod sftp;
 pub mod ssh;
@@ -26,6 +31,17 @@ use commands::{
     add_group,
     add_server,
     clear_fingerprints,
+    cloud_sync_create_vault,
+    cloud_sync_export_file,
+    cloud_sync_import_file,
+    cloud_sync_join_vault,
+    cloud_sync_lock,
+    cloud_sync_now,
+    cloud_sync_status,
+    coding_agent_launch,
+    coding_agent_list,
+    coding_agent_workspace_diff,
+    coding_agent_workspace_status,
     delete_credential,
     delete_fingerprint,
     delete_fingerprint_by_id,
@@ -39,6 +55,7 @@ use commands::{
     get_fingerprint,
     get_groups,
     get_recording_content,
+    get_runtime_capabilities,
     get_server_status,
     get_servers,
     get_session_recording_id,
@@ -62,8 +79,10 @@ use commands::{
     pick_directory_for_upload,
     pick_download_directory,
     pick_file_for_upload,
+    pick_files_for_upload,
     // Dialog commands
     pick_ssh_key_file,
+    pick_workspace_directory,
     plugin_execute,
     plugin_import,
     plugin_install,
@@ -129,8 +148,11 @@ use commands::{
     SftpState,
 };
 
+use cloud_sync::CloudSyncManager;
 use local_shell::LocalShellManager;
-use tauri::{Emitter, Manager};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::Emitter;
+use tauri::Manager;
 
 /// Returns the current version of VibeShell
 pub fn version() -> &'static str {
@@ -150,8 +172,21 @@ fn open_devtools(webview: tauri::WebviewWindow) {
 }
 
 #[tauri::command]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn get_agent_gateway_status(gateway: tauri::State<'_, AgentGateway>) -> AgentGatewayStatus {
     gateway.status()
+}
+
+#[tauri::command]
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn get_agent_gateway_status() -> AgentGatewayStatus {
+    AgentGatewayStatus {
+        running: false,
+        endpoint: None,
+        manifest_path: String::new(),
+        pid: None,
+        protocol_version: String::new(),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -162,20 +197,10 @@ pub fn run() {
 
     log::info!("[VibeShell] Starting application v{}", version());
 
-    let database = Arc::new(Database::new().expect("Failed to initialize database"));
-    let session_manager = Arc::new(SessionManager::new(database.clone()));
-    let sftp_state = Arc::new(SftpState::new());
-    let fingerprint_state =
-        FingerprintState::new().expect("Failed to initialize fingerprint store");
-    let local_shell_manager = Arc::new(LocalShellManager::new());
-    let tunnel_manager = Arc::new(tunnel::TunnelManager::new());
-    let session_logger = Arc::new(logging::SessionLogger::new(database.clone()));
-    let session_access_state = Arc::new(SessionAccessState::new(SessionAccessMode::Local));
+    let builder = tauri::Builder::default();
 
-    let gateway_database = database.clone();
-    let gateway_session_manager = session_manager.clone();
-
-    tauri::Builder::default()
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -184,36 +209,75 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
-        .setup(move |app| {
-            let app_handle = app.handle().clone();
-            let activity_emitter = Arc::new(move |event| {
-                let _ = app_handle.emit("agent-gateway-activity", event);
-            });
-            let gateway = AgentGateway::start(
-                gateway_database.clone(),
-                gateway_session_manager.clone(),
-                activity_emitter,
-            )?;
-            app.manage(gateway);
+        .setup(|app| {
+            let app_data_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&app_data_dir)?;
+
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            platform::copy_legacy_app_data(&app_data_dir)?;
+
+            let database = Arc::new(Database::new_at(platform::database_path(&app_data_dir))?);
+            let session_manager = Arc::new(SessionManager::new(database.clone()));
+            let sftp_state = Arc::new(SftpState::new());
+            let fingerprint_state =
+                FingerprintState::new_at(platform::fingerprint_path(&app_data_dir))
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
+            let local_shell_manager = Arc::new(LocalShellManager::new());
+            let tunnel_manager = Arc::new(tunnel::TunnelManager::new());
+            let session_logger = Arc::new(logging::SessionLogger::new(database.clone()));
+            let session_access_state = Arc::new(SessionAccessState::new(SessionAccessMode::Local));
+            let cloud_sync_manager = Arc::new(CloudSyncManager::new(database.clone())?);
+
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                let app_handle = app.handle().clone();
+                let activity_emitter = Arc::new(move |event| {
+                    let _ = app_handle.emit("agent-gateway-activity", event);
+                });
+                let gateway = AgentGateway::start(
+                    database.clone(),
+                    session_manager.clone(),
+                    activity_emitter,
+                )?;
+                app.manage(gateway);
+            }
+
+            app.manage(database);
+            app.manage(session_manager);
+            app.manage(sftp_state);
+            app.manage(fingerprint_state);
+            app.manage(local_shell_manager);
+            app.manage(tunnel_manager);
+            app.manage(session_logger);
+            app.manage(session_access_state);
+            app.manage(cloud_sync_manager);
             Ok(())
         })
-        .manage(database)
-        .manage(session_manager)
-        .manage(sftp_state)
-        .manage(fingerprint_state)
-        .manage(local_shell_manager)
-        .manage(tunnel_manager)
-        .manage(session_logger)
-        .manage(session_access_state)
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
             open_external_url,
             get_app_version,
+            get_runtime_capabilities,
             get_agent_gateway_status,
+            // End-to-end encrypted cloud sync
+            cloud_sync_create_vault,
+            cloud_sync_export_file,
+            cloud_sync_import_file,
+            cloud_sync_join_vault,
+            cloud_sync_lock,
+            cloud_sync_status,
+            cloud_sync_now,
+            // Coding agents launched inside VibeShell PTYs
+            coding_agent_list,
+            coding_agent_launch,
+            coding_agent_workspace_status,
+            coding_agent_workspace_diff,
             // Plugin marketplace commands
             plugin_list,
             plugin_install,
@@ -253,8 +317,10 @@ pub fn run() {
             // Dialog commands
             pick_ssh_key_file,
             pick_file_for_upload,
+            pick_files_for_upload,
             pick_directory_for_upload,
             pick_download_directory,
+            pick_workspace_directory,
             read_ssh_key_file,
             // SFTP commands
             sftp_init,

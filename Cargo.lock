@@ -6193,6 +6193,7 @@ dependencies = [
  "log",
  "portable-pty",
  "rand 0.8.5",
+ "reqwest",
  "rfd",
  "ring",
  "rusqlite",
@@ -6216,6 +6217,7 @@ dependencies = [
  "uuid",
  "which",
  "windows-sys 0.59.0",
+ "zeroize",
 ]
 
 [[package]]

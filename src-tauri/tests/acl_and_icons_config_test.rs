@@ -58,6 +58,42 @@ fn capability_allows_localhost_dev_origins() {
 }
 
 #[test]
+fn capabilities_separate_desktop_and_mobile_permissions() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let desktop_path = manifest_dir.join("capabilities").join("default.json");
+    let mobile_path = manifest_dir.join("capabilities").join("mobile.json");
+    let desktop = read_json(&desktop_path);
+    let mobile = read_json(&mobile_path);
+
+    assert_eq!(
+        desktop["platforms"],
+        serde_json::json!(["macOS", "windows", "linux"])
+    );
+    assert_eq!(mobile["platforms"], serde_json::json!(["iOS", "android"]));
+
+    let mobile_permissions = mobile["permissions"]
+        .as_array()
+        .expect("mobile capability permissions must be an array");
+    for desktop_only in [
+        "updater:default",
+        "process:default",
+        "shell:default",
+        "shell:allow-open",
+        "fs:read-all",
+        "fs:write-all",
+        "fs:scope-home",
+        "core:window:default",
+    ] {
+        assert!(
+            !mobile_permissions
+                .iter()
+                .any(|entry| entry.as_str() == Some(desktop_only)),
+            "mobile capability must not include `{desktop_only}`"
+        );
+    }
+}
+
+#[test]
 fn frontend_uses_vibeshell_favicon() {
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()

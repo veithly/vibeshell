@@ -57,7 +57,8 @@ Desktop.ini
 # Tauri bundle artifacts
 # ============================================
 src-tauri/target/
-src-tauri/gen/
+# Tauri regenerates ACL schemas, while mobile platform projects are source artifacts.
+src-tauri/gen/schemas/
 # Legacy standalone CLI build artifacts are not bundled with the desktop app.
 src-tauri/binaries/vshell*
 !src-tauri/binaries/.gitkeep
@@ -115,3 +116,5 @@ pnpm-lock.yaml
 *.tsbuildinfo
 *.backup.*
 *.debug.*
+.codegraph/
+.zcode/

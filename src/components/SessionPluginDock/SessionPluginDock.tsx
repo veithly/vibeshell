@@ -5,6 +5,7 @@ import {
   Loader2,
   Play,
   RefreshCw,
+  ShieldCheck,
   Store,
   X,
 } from 'lucide-react';
@@ -82,6 +83,14 @@ export function SessionPluginDock({
   const [activeActionId, setActiveActionId] = useState<string | null>(null);
   const [inputValues, setInputValues] = useState<PluginInputValues>({});
   const [result, setResult] = useState<PluginExecutionResult | null>(null);
+  // When an elevated action's Run button is clicked, capture it here and open
+  // the sudo password prompt instead of executing directly.
+  const [pendingSudoAction, setPendingSudoAction] = useState<{
+    pluginId: string;
+    actionId: string;
+    trySudo: boolean;
+  } | null>(null);
+  const sudoInputRef = useRef<HTMLInputElement>(null);
   const requestSequenceRef = useRef(0);
 
   const activePlugin = compatiblePlugins.find(
@@ -108,10 +117,44 @@ export function SessionPluginDock({
     setActiveActionId(actions[0]?.id ?? null);
     setInputValues({});
     setResult(null);
+    setPendingSudoAction(null);
     clearError();
   }, [activePlugin?.manifest.id, sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (pendingSudoAction) {
+      // Belt-and-suspenders focus: autoFocus may miss if the input mounts
+      // during a React flush, and we want the password field focused so
+      // Enter immediately submits and Escape can be wired next.
+      sudoInputRef.current?.focus();
+    }
+  }, [pendingSudoAction]);
+
   if (!open) return null;
+
+  const runAction = async (
+    pluginId: string,
+    actionId: string,
+    sudoPassword: string | null,
+    trySudo: boolean
+  ) => {
+    const requestSequence = ++requestSequenceRef.current;
+    const requestContext = executionContext;
+    const nextResult = await executePluginAction(
+      pluginId,
+      actionId,
+      sessionId,
+      inputValues,
+      sudoPassword,
+      trySudo
+    );
+    if (
+      requestSequence === requestSequenceRef.current
+      && requestContext === executionContextRef.current
+    ) {
+      setResult(nextResult);
+    }
+  };
 
   const handleRun = async () => {
     if (!activePlugin || !activeAction) return;
@@ -121,20 +164,50 @@ export function SessionPluginDock({
     ) {
       return;
     }
-    const requestSequence = ++requestSequenceRef.current;
-    const requestContext = executionContext;
-    const nextResult = await executePluginAction(
-      activePlugin.manifest.id,
-      activeAction.id,
-      sessionId,
-      inputValues
-    );
-    if (
-      requestSequence === requestSequenceRef.current
-      && requestContext === executionContextRef.current
-    ) {
-      setResult(nextResult);
+    if (activeAction.elevate) {
+      // Open the sudo prompt instead of running — the prompt's Submit handler
+      // completes the execution so the password never lingers in component
+      // state longer than necessary.
+      setPendingSudoAction({
+        pluginId: activePlugin.manifest.id,
+        actionId: activeAction.id,
+        trySudo: false,
+      });
+      return;
     }
+    await runAction(activePlugin.manifest.id, activeAction.id, null, false);
+  };
+
+  const handleTrySudo = () => {
+    if (!activePlugin || !activeAction?.allowSudo) return;
+    if (
+      activeAction.requiresConfirmation
+      && !window.confirm(t('plugins.actionConfirm', { name: activeAction.name }))
+    ) {
+      return;
+    }
+    setPendingSudoAction({
+      pluginId: activePlugin.manifest.id,
+      actionId: activeAction.id,
+      trySudo: true,
+    });
+  };
+
+  const handleSudoSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!pendingSudoAction) return;
+    const formData = new FormData(event.currentTarget);
+    const password = String(formData.get('sudoPassword') ?? '');
+    const target = pendingSudoAction;
+    // Clear immediately so the password stays in this form-data scratch space
+    // for the minimum amount of time.
+    setPendingSudoAction(null);
+    await runAction(
+      target.pluginId,
+      target.actionId,
+      password.length > 0 ? password : null,
+      target.trySudo
+    );
   };
 
   const handleClose = () => {
@@ -238,7 +311,19 @@ export function SessionPluginDock({
                   clearError();
                 }}
               >
-                <span className="block text-xs font-medium">{action.name}</span>
+                <span className="flex items-center gap-1.5 text-xs font-medium">
+                  <span className="min-w-0 flex-1 truncate">{action.name}</span>
+                  {action.elevate && (
+                    <span
+                      className="flex items-center gap-0.5 rounded bg-tokyo-orange/20 px-1 text-[9px] font-semibold uppercase text-tokyo-orange"
+                      title={t('plugins.elevate')}
+                      aria-label={t('plugins.elevate')}
+                    >
+                      <ShieldCheck className="h-2.5 w-2.5" aria-hidden="true" />
+                      {t('plugins.elevateBadge')}
+                    </span>
+                  )}
+                </span>
                 <span className="mt-0.5 block overflow-hidden text-[10px] leading-4 opacity-75">
                   {action.description}
                 </span>
@@ -251,7 +336,18 @@ export function SessionPluginDock({
               <>
                 <div className="flex min-h-[62px] flex-wrap items-center gap-3 border-b border-tokyo-bg-hl px-4 py-2">
                   <div className="mr-auto min-w-[180px]">
-                    <h3 className="text-sm font-semibold text-tokyo-fg">{activeAction.name}</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-semibold text-tokyo-fg">{activeAction.name}</h3>
+                      {activeAction.elevate && (
+                        <span
+                          className="flex items-center gap-1 rounded bg-tokyo-orange/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-tokyo-orange"
+                          title={t('plugins.elevate')}
+                        >
+                          <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+                          {t('plugins.elevateBadge')}
+                        </span>
+                      )}
+                    </div>
                     <p className="mt-0.5 text-xs text-tokyo-comment">{activeAction.description}</p>
                   </div>
 
@@ -312,6 +408,19 @@ export function SessionPluginDock({
                         : <Play className="h-4 w-4" />}
                     {result?.actionId === activeAction.id ? t('plugins.runAgain') : t('plugins.run')}
                   </button>
+                  {activeAction.allowSudo && (
+                    <button
+                      className="mt-4 flex h-8 items-center gap-2 rounded-md border border-tokyo-orange/60 bg-tokyo-orange/10 px-3 text-xs font-medium text-tokyo-orange hover:bg-tokyo-orange/20 disabled:opacity-50"
+                      onClick={handleTrySudo}
+                      disabled={
+                        operationId === `${activePlugin.manifest.id}:${activeAction.id}`
+                        || actionHasMissingInputs(activeAction, inputValues)
+                      }
+                    >
+                      <ShieldCheck className="h-4 w-4" aria-hidden="true" />
+                      {t('plugins.trySudo')}
+                    </button>
+                  )}
                 </div>
 
                 {error && (
@@ -367,6 +476,57 @@ export function SessionPluginDock({
               </>
             )}
           </div>
+        </div>
+      )}
+
+      {pendingSudoAction && (
+        <div
+          className="responsive-dialog-layer fixed inset-0 z-[120] flex items-center justify-center bg-tokyo-bg-dark/60 px-3"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('plugins.elevate')}
+        >
+          <form
+            onSubmit={handleSudoSubmit}
+            className="w-full max-w-sm rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark p-5 shadow-xl"
+          >
+            <div className="flex items-center gap-2 text-tokyo-orange">
+              <ShieldCheck className="h-5 w-5" aria-hidden="true" />
+              <h4 className="text-sm font-semibold">{t('plugins.elevate')}</h4>
+            </div>
+            <p className="mt-2 text-xs text-tokyo-comment">
+              {t('plugins.sudoPasswordOptional')}
+            </p>
+            <label className="mt-4 block">
+              <span className="mb-1 block text-[10px] font-medium text-tokyo-comment">
+                {t('plugins.sudoPassword')}
+              </span>
+              <input
+                ref={sudoInputRef}
+                name="sudoPassword"
+                type="password"
+                autoComplete="off"
+                autoFocus
+                className="h-9 w-full rounded-md border border-tokyo-bg-hl bg-tokyo-bg px-3 text-sm text-tokyo-fg outline-none focus:border-tokyo-cyan"
+              />
+            </label>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="flex h-8 items-center rounded-md border border-tokyo-bg-hl bg-tokyo-bg px-3 text-xs text-tokyo-fg hover:border-tokyo-comment"
+                onClick={() => setPendingSudoAction(null)}
+              >
+                {t('plugins.sudoCancel')}
+              </button>
+              <button
+                type="submit"
+                className="flex h-8 items-center gap-1.5 rounded-md bg-tokyo-orange px-3 text-xs font-medium text-tokyo-bg hover:opacity-90"
+              >
+                <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                {t('plugins.sudoSubmit')}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </section>

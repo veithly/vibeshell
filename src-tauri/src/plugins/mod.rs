@@ -15,6 +15,7 @@ pub const MAX_PLUGIN_SETTINGS_BYTES: usize = 16 * 1024;
 pub enum PluginPermission {
     RemoteExec,
     LocalSystemRead,
+    LocalExec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -93,6 +94,14 @@ pub struct PluginAction {
     pub inputs: Vec<PluginInput>,
     #[serde(default)]
     pub requires_confirmation: bool,
+    /// When true the command runs under `sudo` so privileged actions (docker
+    /// restart, systemctl, etc.) work without a dedicated interactive shell.
+    #[serde(default)]
+    pub elevate: bool,
+    /// Allows the user to explicitly retry this action with `sudo` while the
+    /// default execution path remains unprivileged.
+    #[serde(default)]
+    pub allow_sudo: bool,
     #[serde(default)]
     pub output: PluginOutput,
 }
@@ -173,6 +182,14 @@ pub struct PluginExecuteRequest {
     pub session_id: String,
     #[serde(default)]
     pub inputs: BTreeMap<String, Value>,
+    /// Optional sudo password for elevated actions. Lives in memory only and is
+    /// never persisted. When omitted the action falls back to `sudo -n`
+    /// (non-interactive), which works when the host is configured NOPASSWD.
+    #[serde(default)]
+    pub sudo_password: Option<String>,
+    /// Explicitly use sudo for an action that declares `allowSudo`.
+    #[serde(default)]
+    pub try_sudo: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,12 +279,16 @@ pub fn validate_manifest(
         }
     }
     if policy == ManifestValidationPolicy::External
-        && manifest
-            .permissions
-            .iter()
-            .any(|permission| permission != &PluginPermission::RemoteExec)
+        && manifest.permissions.iter().any(|permission| {
+            !matches!(
+                permission,
+                PluginPermission::RemoteExec | PluginPermission::LocalExec
+            )
+        })
     {
-        return Err("External plugins may only request remote_exec permission".to_string());
+        return Err(
+            "External plugins may only request remote_exec or local_exec permission".to_string(),
+        );
     }
 
     match &manifest.entry {
@@ -280,16 +301,25 @@ pub fn validate_manifest(
             }
         }
         PluginEntry::Commands { actions } => {
-            if !manifest.permissions.contains(&PluginPermission::RemoteExec) {
-                return Err("Command plugins must request remote_exec permission".to_string());
+            let needs_remote = manifest.session_types.contains(&PluginSessionType::Ssh);
+            let needs_local = manifest.session_types.contains(&PluginSessionType::Local);
+            if needs_remote && !manifest.permissions.contains(&PluginPermission::RemoteExec) {
+                return Err(
+                    "Command plugins supporting SSH sessions must request remote_exec permission"
+                        .to_string(),
+                );
+            }
+            if needs_local && !manifest.permissions.contains(&PluginPermission::LocalExec) {
+                return Err(
+                    "Command plugins supporting local sessions must request local_exec permission"
+                        .to_string(),
+                );
+            }
+            if !needs_remote && !needs_local {
+                return Err("Command plugins must support at least one executable session type (ssh or local)".to_string());
             }
             if actions.is_empty() || actions.len() > 24 {
                 return Err("Command plugins must declare between 1 and 24 actions".to_string());
-            }
-            if !manifest.session_types.contains(&PluginSessionType::Ssh)
-                || manifest.session_types.contains(&PluginSessionType::Local)
-            {
-                return Err("Command plugins currently support SSH sessions only".to_string());
             }
 
             let mut action_ids = HashSet::new();
@@ -310,6 +340,21 @@ fn validate_action(action: &PluginAction) -> Result<(), String> {
     validate_text(&action.name, "action name", 80)?;
     validate_text(&action.description, "action description", 300)?;
     validate_program(&action.program)?;
+
+    // Elevated actions must require confirmation so the user always opts in
+    // before a privileged command runs.
+    if action.elevate && !action.requires_confirmation {
+        return Err(format!(
+            "Action {} requests elevation and must set requiresConfirmation",
+            action.id
+        ));
+    }
+    if action.elevate && action.allow_sudo {
+        return Err(format!(
+            "Action {} cannot require sudo and offer optional sudo at the same time",
+            action.id
+        ));
+    }
 
     if action.args.len() > 32 {
         return Err(format!("Action {} has too many arguments", action.id));
@@ -466,6 +511,20 @@ pub fn render_remote_command(
     action: &PluginAction,
     inputs: &BTreeMap<String, Value>,
 ) -> Result<String, String> {
+    // Legacy entry point preserved for callers that don't supply a sudo
+    // password; elevated actions render as `sudo -n` (NOPASSWD).
+    render_command(action, inputs, action.elevate, false)
+}
+
+/// Render an action's command, optionally prefixed with sudo. `use_sudo`
+/// selects whether to elevate this invocation, while `has_password` selects
+/// `sudo -S -p ''` or the non-interactive NOPASSWD-compatible `sudo -n` mode.
+pub fn render_command(
+    action: &PluginAction,
+    inputs: &BTreeMap<String, Value>,
+    use_sudo: bool,
+    has_password: bool,
+) -> Result<String, String> {
     let declared_ids: HashSet<&str> = action
         .inputs
         .iter()
@@ -512,7 +571,22 @@ pub fn render_remote_command(
         command_parts.push(shell_quote(&rendered));
     }
 
-    Ok(command_parts.join(" "))
+    let body = command_parts.join(" ");
+    if use_sudo {
+        // `sudo -S -p ''` reads the password from stdin with an empty prompt so
+        // no prompt text leaks into the captured output; the caller writes the
+        // password to the exec channel's stdin. Without a password we use
+        // `sudo -n` which fails immediately instead of hanging when NOPASSWD is
+        // not configured.
+        let prefix = if has_password {
+            "sudo -S -p '' "
+        } else {
+            "sudo -n "
+        };
+        Ok(format!("{prefix}{body}"))
+    } else {
+        Ok(body)
+    }
 }
 
 fn normalize_input(input: &PluginInput, value: &Value) -> Result<String, String> {
@@ -588,6 +662,8 @@ mod tests {
                 args: vec!["--version".to_string()],
                 inputs: Vec::new(),
                 requires_confirmation: false,
+                elevate: false,
+                allow_sudo: false,
                 output: PluginOutput::default(),
             }],
         }
@@ -602,6 +678,45 @@ mod tests {
         assert!(ids.contains("docker-containers"));
         assert!(ids.contains("kubernetes-pods"));
         assert!(ids.contains("database-inspector"));
+    }
+
+    #[test]
+    fn docker_actions_offer_sudo_without_forcing_it() {
+        let catalog = builtin_catalog().expect("built-in catalog should be valid");
+        let docker = catalog
+            .iter()
+            .find(|plugin| plugin.id == "docker-containers")
+            .expect("Docker plugin should be present");
+        let PluginEntry::Commands { actions } = &docker.entry else {
+            panic!("Docker plugin should expose command actions");
+        };
+
+        let action_ids: HashSet<&str> = actions.iter().map(|action| action.id.as_str()).collect();
+        assert_eq!(
+            action_ids,
+            HashSet::from([
+                "containers",
+                "stats",
+                "images",
+                "logs",
+                "inspect",
+                "exec-command",
+            ])
+        );
+        assert!(actions.iter().all(|action| action.allow_sudo));
+        assert!(actions.iter().all(|action| !action.elevate));
+
+        let containers = actions
+            .iter()
+            .find(|action| action.id == "containers")
+            .expect("Docker container list action should be present");
+        let inputs = BTreeMap::new();
+        assert!(render_command(containers, &inputs, false, false)
+            .unwrap()
+            .starts_with("docker ps"));
+        assert!(render_command(containers, &inputs, true, false)
+            .unwrap()
+            .starts_with("sudo -n docker ps"));
     }
 
     #[test]
@@ -629,17 +744,19 @@ mod tests {
         manifest.permissions.push(PluginPermission::LocalSystemRead);
         assert_eq!(
             validate_manifest(&manifest, ManifestValidationPolicy::External).unwrap_err(),
-            "External plugins may only request remote_exec permission"
+            "External plugins may only request remote_exec or local_exec permission"
         );
     }
 
     #[test]
-    fn command_plugins_cannot_claim_local_session_support() {
+    fn command_plugins_claiming_local_session_support_require_local_exec_permission() {
+        // The old "currently support SSH sessions only" restriction is gone:
+        // local session support is allowed but demands the local_exec permission.
         let mut manifest = external_manifest(command_entry());
         manifest.session_types = vec![PluginSessionType::Local];
         assert_eq!(
             validate_manifest(&manifest, ManifestValidationPolicy::External).unwrap_err(),
-            "Command plugins currently support SSH sessions only"
+            "Command plugins supporting local sessions must request local_exec permission"
         );
     }
 
@@ -724,6 +841,8 @@ mod tests {
                 options: Vec::new(),
             }],
             requires_confirmation: false,
+            elevate: false,
+            allow_sudo: false,
             output: PluginOutput::default(),
         };
         let inputs = BTreeMap::from([(
@@ -769,6 +888,8 @@ mod tests {
                 },
             ],
             requires_confirmation: false,
+            elevate: false,
+            allow_sudo: false,
             output: PluginOutput::default(),
         };
         let inputs = BTreeMap::from([
@@ -795,6 +916,8 @@ mod tests {
             args: vec!["{{input.target}}".to_string()],
             inputs: Vec::new(),
             requires_confirmation: false,
+            elevate: false,
+            allow_sudo: false,
             output: PluginOutput::default(),
         };
         let manifest = external_manifest(PluginEntry::Commands {
@@ -826,6 +949,8 @@ mod tests {
                 options: Vec::new(),
             }],
             requires_confirmation: false,
+            elevate: false,
+            allow_sudo: false,
             output: PluginOutput::default(),
         };
         let manifest = external_manifest(PluginEntry::Commands {
@@ -837,5 +962,125 @@ mod tests {
                 .unwrap_err()
                 .contains("input templates must occupy a complete argument")
         );
+    }
+
+    #[test]
+    fn elevated_action_requires_explicit_confirmation() {
+        let mut entry = command_entry();
+        let PluginEntry::Commands { actions } = &mut entry else {
+            unreachable!();
+        };
+        actions[0].elevate = true;
+        actions[0].requires_confirmation = false;
+        let manifest = external_manifest(entry);
+
+        assert_eq!(
+            validate_manifest(&manifest, ManifestValidationPolicy::External).unwrap_err(),
+            "Action version requests elevation and must set requiresConfirmation"
+        );
+    }
+
+    #[test]
+    fn elevated_action_renders_sudo_stdin_flag_when_password_supplied() {
+        let mut action = PluginAction {
+            id: "restart".to_string(),
+            name: "Restart".to_string(),
+            description: "Restart a docker container".to_string(),
+            program: "docker".to_string(),
+            args: vec!["restart".to_string(), "{{input.container}}".to_string()],
+            inputs: vec![PluginInput {
+                id: "container".to_string(),
+                label: "Container".to_string(),
+                description: String::new(),
+                placeholder: String::new(),
+                required: true,
+                kind: PluginInputKind::Text,
+                options: Vec::new(),
+            }],
+            requires_confirmation: true,
+            elevate: true,
+            allow_sudo: false,
+            output: PluginOutput::default(),
+        };
+        let inputs = BTreeMap::from([("container".to_string(), Value::String("web".to_string()))]);
+
+        // With a password → `sudo -S -p ''` so we can feed stdin.
+        assert_eq!(
+            render_command(&action, &inputs, true, true).unwrap(),
+            "sudo -S -p '' docker restart web"
+        );
+
+        // Without a password → `sudo -n` for NOPASSWD hosts.
+        assert_eq!(
+            render_command(&action, &inputs, true, false).unwrap(),
+            "sudo -n docker restart web"
+        );
+
+        // Non-elevated actions ignore the password flag.
+        action.elevate = false;
+        assert_eq!(
+            render_command(&action, &inputs, false, true).unwrap(),
+            "docker restart web"
+        );
+
+        // Re-enable elevation for the injection-safety case below.
+        action.elevate = true;
+
+        // Input values with shell metacharacters stay quoted even after the
+        // sudo prefix is added, so the existing injection-safety guarantees
+        // are preserved for elevated actions.
+        let dangerous = BTreeMap::from([(
+            "container".to_string(),
+            Value::String("web; rm -rf /".to_string()),
+        )]);
+        assert_eq!(
+            render_command(&action, &dangerous, true, true).unwrap(),
+            "sudo -S -p '' docker restart 'web; rm -rf /'"
+        );
+    }
+
+    #[test]
+    fn legacy_render_remote_command_defaults_to_sudo_n_when_elevated() {
+        let action = PluginAction {
+            id: "rollback".to_string(),
+            name: "Rollback".to_string(),
+            description: "Kernel rollback".to_string(),
+            program: "reboot".to_string(),
+            args: Vec::new(),
+            inputs: Vec::new(),
+            requires_confirmation: true,
+            elevate: true,
+            allow_sudo: false,
+            output: PluginOutput::default(),
+        };
+        let inputs = BTreeMap::new();
+
+        assert_eq!(
+            render_remote_command(&action, &inputs).unwrap(),
+            "sudo -n reboot"
+        );
+    }
+
+    #[test]
+    fn command_plugin_with_local_session_type_must_request_local_exec_permission() {
+        let mut manifest = external_manifest(command_entry());
+        manifest.session_types = vec![PluginSessionType::Ssh, PluginSessionType::Local];
+        // built-in helpers only grant RemoteExec; this should now require
+        // LocalExec as well.
+        assert_eq!(
+            validate_manifest(&manifest, ManifestValidationPolicy::Builtin).unwrap_err(),
+            "Command plugins supporting local sessions must request local_exec permission"
+        );
+
+        manifest.permissions.push(PluginPermission::LocalExec);
+        assert!(validate_manifest(&manifest, ManifestValidationPolicy::Builtin).is_ok());
+    }
+
+    #[test]
+    fn external_plugin_can_request_local_exec_permission() {
+        let mut manifest = external_manifest(command_entry());
+        manifest.session_types = vec![PluginSessionType::Local];
+        manifest.permissions = vec![PluginPermission::LocalExec];
+        assert!(validate_manifest(&manifest, ManifestValidationPolicy::External).is_ok());
     }
 }

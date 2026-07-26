@@ -215,66 +215,87 @@ interface InputBatchState {
   rafId: number | null;
 }
 
-const inputBatch: InputBatchState = {
-  command: 'session_send_input',
-  sessionId: '',
-  data: '',
-  rafId: null,
-};
+// Per-session batch map. Each terminal pane owns its own batch so that input
+// from multiple simultaneous panes never cross-contaminates (the previous
+// module-level singleton flushed pane A's buffered keystrokes the moment pane
+// B typed, and left dangling RAFs after unmount).
+const inputBatches = new Map<string, InputBatchState>();
 
 /**
  * Batched input send using requestAnimationFrame.
  * Combines rapid keystrokes into a single IPC call for better performance.
  *
- * PERFORMANCE: Groups multiple keystrokes within a single animation frame
+ * PERFORMANCE: Groups multiple keystrokes within a single animation frame.
+ * Batches are tracked per session so concurrent panes do not interfere.
  */
 export function sendInputBatched(
   sessionId: string,
   data: string,
   command = 'session_send_input'
 ): void {
-  // If batch is for a different target, flush first
-  if (inputBatch.sessionId && (inputBatch.sessionId !== sessionId || inputBatch.command !== command)) {
-    flushInputBatch();
+  const batch = inputBatches.get(sessionId);
+
+  if (batch) {
+    // Command should not change for an existing session batch, but guard anyway.
+    if (batch.command !== command) {
+      flushInputBatch(sessionId);
+      inputBatches.set(sessionId, { command, sessionId, data, rafId: null });
+    } else {
+      batch.data += data;
+    }
+  } else {
+    inputBatches.set(sessionId, { command, sessionId, data, rafId: null });
   }
 
-  // Add to batch
-  inputBatch.command = command;
-  inputBatch.sessionId = sessionId;
-  inputBatch.data += data;
-
-  // Schedule flush on next animation frame if not already scheduled
-  if (inputBatch.rafId === null) {
-    inputBatch.rafId = requestAnimationFrame(flushInputBatch);
+  const current = inputBatches.get(sessionId)!;
+  // Schedule flush on next animation frame if not already scheduled.
+  if (current.rafId === null) {
+    current.rafId = requestAnimationFrame(() => flushInputBatch(sessionId));
   }
 }
 
 /**
- * Flush the input batch immediately
+ * Flush the input batch immediately.
+ *
+ * Pass a sessionId to flush only that session's pending batch (used on
+ * terminal unmount). Omit it to flush every active batch.
  */
-function flushInputBatch(): void {
-  if (inputBatch.rafId !== null) {
-    cancelAnimationFrame(inputBatch.rafId);
-    inputBatch.rafId = null;
-  }
+export function flushInputBatch(sessionId?: string): void {
+  const flushOne = (key: string) => {
+    const batch = inputBatches.get(key);
+    if (!batch) return;
 
-  if (inputBatch.data && inputBatch.sessionId) {
-    const command = inputBatch.command;
-    const sessionId = inputBatch.sessionId;
-    const data = inputBatch.data;
+    if (batch.rafId !== null) {
+      cancelAnimationFrame(batch.rafId);
+      batch.rafId = null;
+    }
 
-    // Clear batch
-    inputBatch.command = 'session_send_input';
-    inputBatch.sessionId = '';
-    inputBatch.data = '';
+    if (batch.data && batch.sessionId) {
+      const command = batch.command;
+      const sid = batch.sessionId;
+      const data = batch.data;
 
-    // Send batched data
-    fireAndForgetInvoke(command, {
-      request: {
-        sessionId,
-        data,
-      },
-    });
+      // Clear batch data before dispatching so concurrent writes start fresh.
+      batch.data = '';
+      batch.sessionId = '';
+
+      fireAndForgetInvoke(command, {
+        request: {
+          sessionId: sid,
+          data,
+        },
+      });
+    }
+
+    inputBatches.delete(key);
+  };
+
+  if (sessionId) {
+    flushOne(sessionId);
+  } else {
+    for (const key of Array.from(inputBatches.keys())) {
+      flushOne(key);
+    }
   }
 }
 

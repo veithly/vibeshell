@@ -4,6 +4,7 @@ import { cn } from '../../lib/utils';
 import { useServerStore } from '../../stores/serverStore';
 import { safeInvoke } from '../../lib/tauri';
 import { useNotificationStore } from '../../stores/notificationStore';
+import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
 
 interface AddServerDialogProps {
   isOpen: boolean;
@@ -11,8 +12,9 @@ interface AddServerDialogProps {
 }
 
 export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
-  const { addServer, loading, error, clearError } = useServerStore();
+  const { addServer, updateServer, loading, error, clearError } = useServerStore();
   const { success: notifySuccess } = useNotificationStore();
+  const isMobile = useRuntimeCapabilitiesStore((state) => state.capabilities.isMobile);
 
   const { servers } = useServerStore();
 
@@ -25,7 +27,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
     password: '',
     keyPath: '',
     keyPassphrase: '',
-    saveCredentials: true,
+    saveCredentials: false,
     jumpHostId: '',
     agentForwarding: false,
     postLoginCommand: '',
@@ -88,51 +90,48 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
     const isKeyAuth = formData.authType === 'key' || formData.authType === 'key_with_passphrase';
 
     if (isKeyAuth && !keyContent) {
-      setLocalError('Please select an SSH private key file');
+      setLocalError(isMobile ? 'Please paste an SSH private key' : 'Please select an SSH private key file');
       return;
     }
 
-    if (!isKeyAuth && !formData.password && formData.saveCredentials) {
+    if (!isMobile && !isKeyAuth && !formData.password && formData.saveCredentials) {
       setLocalError('Password is required when saving credentials');
       return;
     }
 
     try {
-      // First, save credentials if enabled
-      let credentialId: string | undefined;
-
-      if (formData.saveCredentials) {
-        const credentialResult = await safeInvoke<string>('save_credential', {
-          request: {
-            serverName: formData.name.trim(),
-            authType: formData.authType,
-            credential: isKeyAuth ? keyContent : formData.password,
-            passphrase: isKeyAuth && formData.authType === 'key_with_passphrase' ? formData.keyPassphrase : null,
-            keyPath: isKeyAuth ? formData.keyPath : null,
-          },
-        });
-
-        if (credentialResult.success) {
-          credentialId = credentialResult.data;
-        } else {
-          console.warn('Failed to save credentials, will prompt on connect:', credentialResult.error.message);
-        }
-      }
-
-      // Add the server
-      await addServer({
+      // Create the stable server identity before writing name-keyed local credentials.
+      const createdServer = await addServer({
         name: formData.name.trim(),
         host: formData.host.trim(),
         port: formData.port,
         username: formData.username.trim(),
         auth_type: formData.authType,
-        credential_id: credentialId,
+        credential_id: undefined,
         group_id: undefined,
         tags: [],
         jump_host_id: formData.jumpHostId || undefined,
         agent_forwarding: formData.agentForwarding,
         post_login_command: formData.postLoginCommand.trim() || undefined,
       });
+
+      if (!isMobile && formData.saveCredentials) {
+        const credentialResult = await safeInvoke<string>('save_credential', {
+          request: {
+            serverName: createdServer.name,
+            authType: formData.authType,
+            credential: isKeyAuth ? keyContent : formData.password,
+            passphrase: isKeyAuth && formData.authType === 'key_with_passphrase' ? formData.keyPassphrase : null,
+            keyPath: isKeyAuth ? formData.keyPath || null : null,
+          },
+        });
+
+        if (credentialResult.success) {
+          await updateServer(createdServer.id, { credential_id: credentialResult.data });
+        } else {
+          console.warn('Failed to save credentials, will prompt on connect:', credentialResult.error.message);
+        }
+      }
 
       notifySuccess('Server Added', `${formData.name} has been added successfully.`);
 
@@ -146,7 +145,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
         password: '',
         keyPath: '',
         keyPassphrase: '',
-        saveCredentials: true,
+        saveCredentials: false,
         jumpHostId: '',
         agentForwarding: false,
         postLoginCommand: '',
@@ -156,7 +155,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
     } catch (err) {
       console.error('Failed to add server:', err);
     }
-  }, [formData, keyContent, addServer, notifySuccess, onClose]);
+  }, [formData, keyContent, isMobile, addServer, updateServer, notifySuccess, onClose]);
 
   const handleChange = useCallback((field: string, value: string | number | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -183,7 +182,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
   const isKeyAuth = formData.authType === 'key' || formData.authType === 'key_with_passphrase';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="responsive-dialog-layer fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60"
@@ -191,16 +190,17 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
       />
 
       {/* Dialog */}
-      <div className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+      <div className="responsive-dialog-panel relative min-w-0 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-lg mx-3 sm:mx-4">
         {/* Header */}
-        <div className="sticky top-0 bg-tokyo-bg-dark flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
-          <div className="flex items-center gap-2">
+        <div className="responsive-dialog-header flex items-center justify-between gap-3 px-4 py-3 border-b border-tokyo-bg-hl">
+          <div className="flex min-w-0 items-center gap-2">
             <Server className="w-5 h-5 text-tokyo-blue" />
             <h2 className="text-lg font-semibold text-tokyo-fg">Add Server</h2>
           </div>
           <button
             className="p-1 rounded-md text-tokyo-comment hover:text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors"
             onClick={onClose}
+            aria-label="Close add server dialog"
           >
             <X className="w-5 h-5" />
           </button>
@@ -239,8 +239,8 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
             </div>
 
             {/* Host & Port */}
-            <div className="grid grid-cols-3 gap-4">
-              <div className="col-span-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="sm:col-span-2">
                 <label className="block text-sm font-medium text-tokyo-fg mb-1">
                   Host
                 </label>
@@ -304,7 +304,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
                 Method
               </label>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <button
                   type="button"
                   onClick={() => handleChange('authType', 'password')}
@@ -380,14 +380,40 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
             {/* Key Auth */}
             {isKeyAuth && (
               <>
+                {isMobile ? (
+                  <div>
+                    <label htmlFor="mobilePrivateKey" className="block text-sm font-medium text-tokyo-fg mb-1">
+                      Private Key
+                    </label>
+                    <textarea
+                      id="mobilePrivateKey"
+                      value={keyContent ?? ''}
+                      onChange={(event) => {
+                        setKeyContent(event.target.value || null);
+                        setLocalError(null);
+                      }}
+                      rows={6}
+                      spellCheck={false}
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      placeholder="Paste OpenSSH private key"
+                      className={cn(
+                        'w-full resize-y rounded-md px-3 py-2 font-mono text-sm',
+                        'bg-tokyo-bg border border-tokyo-bg-hl',
+                        'text-tokyo-fg placeholder-tokyo-comment',
+                        'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue'
+                      )}
+                    />
+                  </div>
+                ) : (
                 <div>
                   <label className="block text-sm font-medium text-tokyo-fg mb-1">
                     Private Key File
                   </label>
-                  <div className="flex gap-2">
+                  <div className="flex flex-col gap-2 sm:flex-row">
                     <div
                       className={cn(
-                        'flex-1 flex items-center gap-2 px-3 py-2 rounded-md',
+                        'min-w-0 flex-1 flex items-center gap-2 px-3 py-2 rounded-md',
                         'bg-tokyo-bg border border-tokyo-bg-hl',
                         'text-tokyo-fg',
                         formData.keyPath ? '' : 'text-tokyo-comment'
@@ -403,7 +429,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                       onClick={handleBrowseKey}
                       disabled={isLoadingKey || loading}
                       className={cn(
-                        'flex items-center gap-2 px-3 py-2 rounded-md',
+                        'flex items-center justify-center gap-2 px-3 py-2 rounded-md',
                         'bg-tokyo-bg-hl text-tokyo-fg',
                         'hover:bg-tokyo-green/20 hover:text-tokyo-green',
                         'disabled:opacity-50 disabled:cursor-not-allowed',
@@ -420,6 +446,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                     </p>
                   )}
                 </div>
+                )}
 
                 {formData.authType === 'key_with_passphrase' && (
                   <div>
@@ -452,19 +479,20 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
               </>
             )}
 
-            {/* Save Credentials Option */}
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="saveCredentials"
-                checked={formData.saveCredentials}
-                onChange={(e) => handleChange('saveCredentials', e.target.checked)}
-                className="w-4 h-4 rounded border-tokyo-bg-hl bg-tokyo-bg text-tokyo-blue focus:ring-tokyo-blue"
-              />
-              <label htmlFor="saveCredentials" className="text-sm text-tokyo-fg">
-                Save credentials for quick connect
-              </label>
-            </div>
+            {!isMobile && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="saveCredentials"
+                  checked={formData.saveCredentials}
+                  onChange={(e) => handleChange('saveCredentials', e.target.checked)}
+                  className="w-4 h-4 rounded border-tokyo-bg-hl bg-tokyo-bg text-tokyo-blue focus:ring-tokyo-blue"
+                />
+                <label htmlFor="saveCredentials" className="text-sm text-tokyo-fg">
+                  Save credentials on this device
+                </label>
+              </div>
+            )}
           </div>
 
           {/* Advanced Section */}
@@ -534,7 +562,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
           </div>
 
           {/* Actions */}
-          <div className="flex justify-end gap-3 pt-4 border-t border-tokyo-bg-hl">
+          <div className="responsive-dialog-actions flex justify-end gap-3 pt-4 border-t border-tokyo-bg-hl">
             <button
               type="button"
               onClick={onClose}

@@ -8,6 +8,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
+use tokio::io::AsyncReadExt;
 
 use interprocess::local_socket::traits::{ListenerExt, Stream as StreamTrait};
 #[cfg(not(windows))]
@@ -142,7 +143,12 @@ pub enum IpcMessage {
         rows: u32,
     },
     /// Execute a single command on an existing SSH session
-    ExecCommand { session_id: String, command: String },
+    ExecCommand {
+        session_id: String,
+        command: String,
+        #[serde(default)]
+        stdin: Option<String>,
+    },
     /// Initialize SFTP context for a session
     SftpInit { session_id: String },
     /// List directory contents
@@ -993,6 +999,7 @@ impl IpcServer {
             IpcMessage::ExecCommand {
                 session_id,
                 command,
+                stdin,
             } => {
                 match rt.block_on(async {
                     let session = session_manager
@@ -1000,7 +1007,7 @@ impl IpcServer {
                         .await
                         .ok_or_else(|| format!("Session not found: {}", session_id))?;
                     session
-                        .exec_command(&command)
+                        .exec_command_with_stdin(&command, stdin.as_deref())
                         .await
                         .map_err(|e| format!("Failed to execute command: {}", e))
                 }) {
@@ -1222,8 +1229,18 @@ impl IpcServer {
                             file_size, max_size
                         ));
                     }
-                    let bytes = sftp
-                        .read(&resolved)
+                    let read_limit = if binary {
+                        file_size
+                    } else {
+                        max_size.min(file_size)
+                    };
+                    let file = sftp
+                        .open(&resolved)
+                        .await
+                        .map_err(|e| format!("Failed to open file {}: {}", resolved, e))?;
+                    let mut bytes = Vec::with_capacity(read_limit.min(usize::MAX as u64) as usize);
+                    file.take(read_limit)
+                        .read_to_end(&mut bytes)
                         .await
                         .map_err(|e| format!("Failed to read file {}: {}", resolved, e))?;
                     let (content, truncated) = if binary {
@@ -1235,10 +1252,9 @@ impl IpcServer {
                             false,
                         )
                     } else {
-                        let read_size = std::cmp::min(bytes.len(), max_size as usize);
                         (
-                            String::from_utf8_lossy(&bytes[..read_size]).to_string(),
-                            read_size < bytes.len(),
+                            String::from_utf8_lossy(&bytes).to_string(),
+                            file_size > bytes.len() as u64,
                         )
                     };
                     Ok::<SftpFileContent, String>(SftpFileContent {
@@ -1869,6 +1885,7 @@ mod tests {
         let msg = IpcMessage::ExecCommand {
             session_id: "abc".to_string(),
             command: "hostname".to_string(),
+            stdin: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("ExecCommand"));
@@ -1973,6 +1990,7 @@ mod tests {
         if let IpcMessage::ExecCommand {
             session_id,
             command,
+            stdin: _,
         } = msg
         {
             assert_eq!(session_id, "s1");

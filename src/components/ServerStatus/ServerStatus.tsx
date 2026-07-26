@@ -224,6 +224,21 @@ export function ServerStatus({
   const [refreshInterval, setRefreshInterval] = useState<RefreshInterval>(defaultRefreshInterval);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+  // Reset local UI state when switching to a different session. Without this,
+  // useState snapshots of collapse/interval/height persist across sessions
+  // even though the underlying status data is per-session. The prop values
+  // reflect the latest persisted settings (kept in sync via onToggle /
+  // onRefreshIntervalChange callbacks), so re-reading them here is correct.
+  useEffect(() => {
+    setIsCollapsed(defaultCollapsed);
+    setRefreshInterval(defaultRefreshInterval);
+    setStatus(null);
+    setError(null);
+    setLastUpdated(null);
+    prevNetworkRef.current.clear();
+    setNetworkRates(new Map());
+  }, [sessionId, defaultCollapsed, defaultRefreshInterval]);
+
   // Resize drag state
   const [isDragging, setIsDragging] = useState(false);
   const dragStartY = useRef<number>(0);
