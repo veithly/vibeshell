@@ -22,9 +22,8 @@ use uuid::Uuid;
 use crate::remote_tools::{build_remote_rg_command, RemoteSearchOptions};
 use crate::session::SessionManager;
 use crate::sftp::helpers::{
-    ensure_remote_file_write_target, resolve_remote_path, resolve_remote_upload_path,
-    sftp_mkdir_recursive, sftp_remove_recursive, write_remote_file, write_remote_file_with_options,
-    WriteRemoteFileOptions,
+    resolve_remote_path, resolve_remote_upload_path, sftp_delete_path, sftp_mkdir_recursive,
+    write_remote_file, write_remote_file_with_options, WriteRemoteFileOptions,
 };
 use crate::sftp::{
     effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
@@ -1309,32 +1308,8 @@ async fn tool_sftp_rm(state: &McpState, args: &Value) -> Result<String, String> 
     let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
     let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
 
-    let meta = sftp
-        .metadata(&resolved_path)
-        .await
-        .map_err(|e| format!("Failed to stat '{}': {}", resolved_path, e))?;
-
-    if meta.is_dir() {
-        if recursive {
-            sftp_remove_recursive(&sftp, &resolved_path, 0).await?;
-            Ok(format!("Removed directory '{}' recursively", resolved_path))
-        } else {
-            sftp.remove_dir(&resolved_path)
-                .await
-                .map_err(|e| {
-                    format!(
-                        "Failed to remove directory '{}': {}. Use recursive=true for non-empty directories.",
-                        resolved_path, e
-                    )
-                })?;
-            Ok(format!("Removed directory '{}'", resolved_path))
-        }
-    } else {
-        sftp.remove_file(&resolved_path)
-            .await
-            .map_err(|e| format!("Failed to remove file '{}': {}", resolved_path, e))?;
-        Ok(format!("Removed file '{}'", resolved_path))
-    }
+    sftp_delete_path(&sftp, &resolved_path, recursive).await?;
+    Ok(format!("Removed '{}'", resolved_path))
 }
 
 async fn tool_sftp_mv(state: &McpState, args: &Value) -> Result<String, String> {
@@ -1471,14 +1446,13 @@ async fn tool_add_file(state: &McpState, args: &Value) -> Result<String, String>
     let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
     let resolved_path = resolve_remote_path(path, &home_dir, &home_dir);
 
-    ensure_remote_file_write_target(&sftp, &resolved_path, overwrite).await?;
-
     write_remote_file_with_options(
         &sftp,
         &resolved_path,
         content.as_bytes(),
         WriteRemoteFileOptions {
             create_parent_dirs: parents,
+            overwrite,
         },
     )
     .await?;

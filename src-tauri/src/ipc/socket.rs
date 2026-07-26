@@ -24,9 +24,8 @@ use interprocess::os::windows::security_descriptor::{
 use crate::commands::sftp::{SftpEntry, SftpFileContent};
 use crate::session::SessionManager;
 use crate::sftp::helpers::{
-    ensure_remote_file_write_target, resolve_remote_path, resolve_remote_upload_path,
-    sftp_mkdir_recursive, sftp_remove_recursive, write_remote_file, write_remote_file_with_options,
-    WriteRemoteFileOptions,
+    resolve_remote_path, resolve_remote_upload_path, sftp_delete_path, sftp_mkdir_recursive,
+    write_remote_file, write_remote_file_with_options, WriteRemoteFileOptions,
 };
 use crate::sftp::{
     effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
@@ -1301,14 +1300,13 @@ impl IpcServer {
                         .await
                         .map_err(|e| format!("Failed to open SFTP subsystem: {}", e))?;
 
-                    ensure_remote_file_write_target(&sftp, &resolved, overwrite).await?;
-
                     write_remote_file_with_options(
                         &sftp,
                         &resolved,
                         content.as_bytes(),
                         WriteRemoteFileOptions {
                             create_parent_dirs: parents,
+                            overwrite,
                         },
                     )
                     .await
@@ -1493,23 +1491,7 @@ impl IpcServer {
                         .open_sftp_session()
                         .await
                         .map_err(|e| format!("Failed to open SFTP subsystem: {}", e))?;
-                    let meta = sftp
-                        .metadata(&resolved)
-                        .await
-                        .map_err(|e| format!("Failed to stat {}: {}", resolved, e))?;
-                    if meta.is_dir() {
-                        if recursive {
-                            sftp_remove_recursive(&sftp, &resolved, 0).await
-                        } else {
-                            sftp.remove_dir(&resolved).await.map_err(|e| {
-                                format!("Failed to remove directory {}: {}", resolved, e)
-                            })
-                        }
-                    } else {
-                        sftp.remove_file(&resolved)
-                            .await
-                            .map_err(|e| format!("Failed to remove file {}: {}", resolved, e))
-                    }
+                    sftp_delete_path(&sftp, &resolved, recursive).await
                 }) {
                     std::result::Result::Ok(_) => IpcMessage::Ok,
                     Err(message) => IpcMessage::Error { message },

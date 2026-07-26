@@ -20,7 +20,7 @@ use crate::ipc::{IpcClient, IpcMessage};
 use crate::local_shell::LocalShellManager;
 use crate::session::SessionManager;
 use crate::sftp::helpers::{
-    resolve_remote_path, resolve_remote_upload_path, sftp_mkdir_recursive, sftp_remove_recursive,
+    resolve_remote_path, resolve_remote_upload_path, sftp_delete_path, sftp_mkdir_recursive,
     write_remote_file,
 };
 use crate::sftp::{
@@ -1262,27 +1262,7 @@ pub async fn sftp_delete(
     let path = resolve_remote_path(&request.path, &guard.home_dir, &guard.current_path);
     info!("[SFTP] Deleting: {}", path);
 
-    // Check if it's a directory by trying metadata
-    let meta = sftp
-        .metadata(&path)
-        .await
-        .map_err(|e| format!("Failed to stat {}: {}", path, e))?;
-
-    if meta.is_dir() {
-        if request.recursive.unwrap_or(false) {
-            sftp_remove_recursive(sftp, &path, 0).await?;
-        } else {
-            sftp.remove_dir(&path)
-                .await
-                .map_err(|e| format!("Failed to remove directory {}: {}", path, e))?;
-        }
-    } else {
-        sftp.remove_file(&path)
-            .await
-            .map_err(|e| format!("Failed to remove file {}: {}", path, e))?;
-    }
-
-    Ok(())
+    sftp_delete_path(sftp, &path, request.recursive.unwrap_or(false)).await
 }
 
 /// Rename or move a file/directory on the remote server via SFTP.
