@@ -12,6 +12,7 @@ import {
   Search,
   Server as ServerIcon,
   Terminal,
+  Trash2,
   Wifi,
   X,
 } from 'lucide-react';
@@ -19,7 +20,9 @@ import { cn } from '../../lib/utils';
 import { useServerStore, type Server, type Group } from '../../stores/serverStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useAvailableShells, useLocalShellStore, type ShellInfo } from '../../stores/localShellStore';
+import { useNotificationStore } from '../../stores/notificationStore';
 import { CodingAgentLauncher } from '../CodingAgentLauncher';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
 
 gsap.registerPlugin(useGSAP);
@@ -80,6 +83,7 @@ function ServerCard({
   view,
   onConnect,
   onEdit,
+  onDelete,
   onNewSession,
 }: {
   server: Server;
@@ -89,6 +93,7 @@ function ServerCard({
   view: LauncherView;
   onConnect: () => void;
   onEdit?: () => void;
+  onDelete?: () => void;
   onNewSession?: () => void;
 }) {
   return (
@@ -125,6 +130,16 @@ function ServerCard({
         {onEdit && (
           <button className="icon-button" onClick={onEdit} aria-label={`Edit ${server.name}`} title="Edit server">
             <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {onDelete && (
+          <button
+            className="icon-button hover:text-tokyo-red"
+            onClick={onDelete}
+            aria-label={`Delete ${server.name}`}
+            title="Delete server"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
@@ -179,6 +194,8 @@ export function SelectServerDialog({
   const wasOpenRef = useRef(false);
   const onCloseRef = useRef(onClose);
   const { servers, groups, fetchServers, fetchGroups } = useServerStore();
+  const deleteServer = useServerStore((state) => state.deleteServer);
+  const { success: notifySuccess } = useNotificationStore();
   const sessions = useSessionStore((state) => state.sessions);
   const createLocalShellSession = useSessionStore((state) => state.createLocalShellSession);
   const setActiveSession = useSessionStore((state) => state.setActiveSession);
@@ -192,6 +209,7 @@ export function SelectServerDialog({
   const [activeTab, setActiveTab] = useState<ConnectionTab>(loadConnectionTab);
   const [view, setView] = useState<LauncherView>(loadLauncherView);
   const [query, setQuery] = useState('');
+  const [serverToDelete, setServerToDelete] = useState<Server | null>(null);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -209,6 +227,7 @@ export function SelectServerDialog({
     }
     void Promise.all(requests);
     setQuery('');
+    setServerToDelete(null);
   }, [
     isOpen,
     initialTab,
@@ -255,6 +274,12 @@ export function SelectServerDialog({
       : null;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        // Close the inner delete confirmation first; a second Escape
+        // closes the launcher itself.
+        if (serverToDelete) {
+          setServerToDelete(null);
+          return;
+        }
         onCloseRef.current();
         return;
       }
@@ -283,7 +308,7 @@ export function SelectServerDialog({
       if (focusFrame !== null) cancelAnimationFrame(focusFrame);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [activeTab, initialTab, isOpen]);
+  }, [activeTab, initialTab, isOpen, serverToDelete]);
 
   useGSAP(() => {
     if (!isOpen) return;
@@ -364,6 +389,19 @@ export function SelectServerDialog({
     onClose();
     onNewSession?.(server);
   }, [onClose, onNewSession]);
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!serverToDelete) return;
+    const serverName = serverToDelete.name;
+    const serverId = serverToDelete.id;
+    setServerToDelete(null);
+    // The store handles session cleanup + error toasts; keep the launcher
+    // open so the updated list is immediately visible.
+    await deleteServer(serverId);
+    if (!useServerStore.getState().error) {
+      notifySuccess(t('server.deleted'), t('server.deletedMessage', { name: serverName }));
+    }
+  }, [deleteServer, notifySuccess, serverToDelete, t]);
 
   if (!isOpen) return null;
 
@@ -516,6 +554,7 @@ export function SelectServerDialog({
                     view={view}
                     onConnect={() => handleServerClick(server)}
                     onEdit={onEditServer ? () => handleEditServer(server) : undefined}
+                    onDelete={() => setServerToDelete(server)}
                     onNewSession={onNewSession ? () => handleNewServerSession(server) : undefined}
                   />
                 ))}
@@ -537,6 +576,17 @@ export function SelectServerDialog({
           </div>
         </div>
       </section>
+
+      <ConfirmDialog
+        isOpen={serverToDelete !== null}
+        title={t('server.deleteServer')}
+        message={serverToDelete ? t('server.deleteConfirm', { name: serverToDelete.name }) : ''}
+        confirmLabel={t('common.delete')}
+        cancelLabel={t('common.cancel')}
+        variant="danger"
+        onConfirm={() => { void handleConfirmDelete(); }}
+        onCancel={() => setServerToDelete(null)}
+      />
     </div>
   );
 }
