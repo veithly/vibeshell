@@ -296,6 +296,9 @@ impl SshClient {
                 .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
 
         info!("[SSH] TCP connection established, parsing private key...");
+        // Normalize empty passphrases from any caller (saved credentials, IPC,
+        // MCP) to None so unencrypted keys decode correctly.
+        let passphrase = passphrase.filter(|pass| !pass.is_empty());
         let key_pair = if let Some(pass) = passphrase {
             decode_secret_key(private_key, Some(pass))
                 .with_context(|| "Failed to decode private key with passphrase")?

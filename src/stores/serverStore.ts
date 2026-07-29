@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { useMemo } from 'react';
 import { safeInvoke, TauriError } from '../lib/tauri';
 import { useNotificationStore } from './notificationStore';
+import { useSessionStore } from './sessionStore';
 import { scheduleCloudSync } from './cloudSyncStore';
 
 /**
@@ -17,9 +18,21 @@ function showError(title: string, error: TauriError): void {
 
 /**
  * Authentication type for SSH connections
- * Matches backend AuthType enum (snake_case)
+ * Matches backend AuthType enum (snake_case).
+ *
+ * Standalone 'key' auth has been removed: key-based servers always use
+ * 'key_with_passphrase', where an empty passphrase means an unencrypted key.
+ * The 'key' member is kept only so legacy rows still type-check when read.
  */
 export type AuthType = 'password' | 'key' | 'key_with_passphrase';
+
+/**
+ * Returns true when the auth type is key-based (either legacy 'key' rows or
+ * the unified 'key_with_passphrase' mode).
+ */
+export function isKeyAuthType(authType: AuthType): boolean {
+  return authType === 'key' || authType === 'key_with_passphrase';
+}
 
 /**
  * Server configuration for SSH connections
@@ -145,12 +158,16 @@ export const useServerStore = create<ServerStore>((set, get) => ({
     set({ loading: true, error: null });
     const result = await safeInvoke('update_server', { id, updates });
     if (result.success) {
+      // Optimistically merge so the UI reflects the change immediately.
       set((state) => ({
         servers: state.servers.map((s) =>
-          s.id === id ? { ...s, ...updates, updated_at: Date.now() } : s
+          s.id === id ? { ...s, ...updates, updated_at: Math.floor(Date.now() / 1000) } : s
         ),
         loading: false,
       }));
+      // Re-fetch from the backend so the local cache mirrors the database
+      // exactly (server-side timestamps, credential migrations, etc.).
+      await get().fetchServers();
       scheduleCloudSync();
     } else {
       set({ error: result.error.message, loading: false });
@@ -167,6 +184,10 @@ export const useServerStore = create<ServerStore>((set, get) => ({
         selectedServerId: state.selectedServerId === id ? null : state.selectedServerId,
         loading: false,
       }));
+      // The backend killed every session attached to this server; refresh the
+      // session store so closed tabs disappear immediately instead of waiting
+      // for the next poll.
+      void useSessionStore.getState().syncRemoteSessions();
       scheduleCloudSync();
     } else {
       set({ error: result.error.message, loading: false });

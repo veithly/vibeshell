@@ -338,7 +338,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         serverName: serverName,
         authType: authType,
         credential,
-        passphrase: passphrase ?? null,
+        // An empty passphrase means "unencrypted key" — send null so the
+        // backend never tries to decrypt the key with an empty string.
+        passphrase: passphrase ? passphrase : null,
         cols: cols ?? 80,
         rows: rows ?? 24,
         forceNew,

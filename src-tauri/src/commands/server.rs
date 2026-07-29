@@ -43,8 +43,9 @@ pub struct GroupInput {
 fn string_to_auth_type(s: &str) -> AuthType {
     match s {
         "password" => AuthType::Password,
-        "key" => AuthType::Key,
-        "key_with_passphrase" => AuthType::KeyWithPassphrase,
+        // Standalone "key" auth is deprecated: keys are always handled through
+        // the key+passphrase flow (an empty passphrase means an unencrypted key).
+        "key" | "key_with_passphrase" => AuthType::KeyWithPassphrase,
         _ => AuthType::Password,
     }
 }
@@ -129,6 +130,11 @@ where
 }
 
 /// Update an existing server (partial update — only sent fields are changed)
+///
+/// Also keeps device-local credentials coherent with the new config:
+/// - Renaming a server re-keys its saved credentials (they are name-keyed).
+/// - Switching auth method drops the saved credentials so stale secrets are
+///   never silently reused for the new auth type.
 #[tauri::command]
 pub fn update_server(
     db: State<'_, Arc<Database>>,
@@ -139,6 +145,9 @@ pub fn update_server(
         .server_get(&id)
         .map_err(|e| format!("Failed to get server: {}", e))?
         .ok_or_else(|| "Server not found".to_string())?;
+
+    let previous_name = existing.name.clone();
+    let previous_auth_type = existing.auth_type.clone();
 
     let updated_server = Server {
         id: existing.id,
@@ -165,12 +174,64 @@ pub fn update_server(
     };
 
     db.server_update(&updated_server)
-        .map_err(|e| format!("Failed to update server: {}", e))
+        .map_err(|e| format!("Failed to update server: {}", e))?;
+
+    // Keep name-keyed credentials attached to the renamed server.
+    if updated_server.name != previous_name {
+        if let Err(e) = db.credential_rename_server(&previous_name, &updated_server.name) {
+            log::warn!(
+                "Failed to migrate credentials from '{}' to '{}': {}",
+                previous_name,
+                updated_server.name,
+                e
+            );
+        }
+    }
+
+    // Auth method changed: stored secret no longer matches, drop it so the
+    // next connect prompts for fresh credentials instead of failing silently.
+    if updated_server.auth_type != previous_auth_type {
+        if let Err(e) = db.credential_delete(&updated_server.name) {
+            log::warn!(
+                "Failed to clear stale credentials for '{}': {}",
+                updated_server.name,
+                e
+            );
+        }
+    }
+
+    Ok(())
 }
 
-/// Delete a server
+/// Delete a server and clean up everything attached to it:
+/// active SSH sessions, per-session SFTP state, and saved credentials.
+/// Tunnel configs and jump-host references are detached inside `server_delete`.
 #[tauri::command]
-pub fn delete_server(db: State<'_, Arc<Database>>, id: String) -> Result<(), String> {
+pub async fn delete_server(
+    db: State<'_, Arc<Database>>,
+    manager: State<'_, Arc<crate::session::SessionManager>>,
+    sftp_state: State<'_, Arc<super::SftpState>>,
+    id: String,
+) -> Result<(), String> {
+    let server = db
+        .server_get(&id)
+        .map_err(|e| format!("Failed to get server: {}", e))?
+        .ok_or_else(|| "Server not found".to_string())?;
+
+    // Terminate live sessions first so nothing keeps using the doomed config.
+    let killed_sessions = manager
+        .kill_by_server_id(&id)
+        .await
+        .map_err(|e| format!("Failed to close sessions for server: {}", e))?;
+    for session_id in &killed_sessions {
+        sftp_state.cleanup_session(session_id).await;
+    }
+
+    // Remove device-local credentials tied to this server's name.
+    if let Err(e) = db.credential_delete(&server.name) {
+        log::warn!("Failed to delete credentials for '{}': {}", server.name, e);
+    }
+
     db.server_delete(&id)
         .map_err(|e| format!("Failed to delete server: {}", e))
 }

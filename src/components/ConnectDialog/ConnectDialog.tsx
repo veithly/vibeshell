@@ -158,9 +158,10 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
       });
 
       // For key auth, pass the key content as credential and password as passphrase
+      // (an empty passphrase means the key is unencrypted, so send undefined).
       // For password auth, pass the password as credential
       const credential = isKeyAuth ? (keyContent || '') : password;
-      const passphrase = isKeyAuth ? password : undefined;
+      const passphrase = isKeyAuth && password ? password : undefined;
 
       const session = await connectWithCredentials(
         server.name,

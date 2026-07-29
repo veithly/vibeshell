@@ -397,7 +397,11 @@ pub async fn session_connect(
         "password" => SshCredential::Password(request.credential),
         "key" => SshCredential::PrivateKey {
             key: request.credential,
-            passphrase: request.passphrase,
+            // Treat an empty passphrase as "no passphrase" so unencrypted
+            // keys authenticate instead of failing to decode with Some("").
+            passphrase: request
+                .passphrase
+                .filter(|passphrase| !passphrase.is_empty()),
         },
         _ => return Err(format!("Unknown auth type: {}", request.auth_type)),
     };

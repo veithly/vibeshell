@@ -370,8 +370,9 @@ fn auth_type_to_string(auth_type: &AuthType) -> &'static str {
 fn string_to_auth_type(s: &str) -> AuthType {
     match s {
         "password" => AuthType::Password,
-        "key" => AuthType::Key,
-        "key_with_passphrase" => AuthType::KeyWithPassphrase,
+        // Legacy standalone "key" rows are folded into the key+passphrase flow
+        // (an empty passphrase means an unencrypted key).
+        "key" | "key_with_passphrase" => AuthType::KeyWithPassphrase,
         _ => AuthType::Password, // Default fallback
     }
 }
@@ -555,9 +556,52 @@ impl Database {
     /// Delete credentials for a server
     pub fn credential_delete(&self, server_name: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        // Ensure table exists (it is created lazily by credential_save/get)
+        conn.execute(
+            r#"CREATE TABLE IF NOT EXISTS server_credentials (
+                id TEXT PRIMARY KEY,
+                server_name TEXT NOT NULL UNIQUE,
+                auth_type TEXT NOT NULL,
+                credential TEXT NOT NULL,
+                passphrase TEXT,
+                key_path TEXT,
+                created_at INTEGER NOT NULL
+            )"#,
+            [],
+        )?;
         conn.execute(
             "DELETE FROM server_credentials WHERE server_name = ?1",
             [server_name],
+        )?;
+        Ok(())
+    }
+
+    /// Re-key saved credentials when a server is renamed so they stay attached
+    /// to the server instead of becoming orphaned under the old name.
+    pub fn credential_rename_server(&self, old_name: &str, new_name: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        // Ensure table exists (it is created lazily by credential_save/get)
+        conn.execute(
+            r#"CREATE TABLE IF NOT EXISTS server_credentials (
+                id TEXT PRIMARY KEY,
+                server_name TEXT NOT NULL UNIQUE,
+                auth_type TEXT NOT NULL,
+                credential TEXT NOT NULL,
+                passphrase TEXT,
+                key_path TEXT,
+                created_at INTEGER NOT NULL
+            )"#,
+            [],
+        )?;
+        // Drop any credential already stored under the new name to satisfy the
+        // UNIQUE(server_name) constraint before re-keying.
+        conn.execute(
+            "DELETE FROM server_credentials WHERE server_name = ?1",
+            [new_name],
+        )?;
+        conn.execute(
+            "UPDATE server_credentials SET server_name = ?2 WHERE server_name = ?1",
+            rusqlite::params![old_name, new_name],
         )?;
         Ok(())
     }
@@ -1205,12 +1249,16 @@ mod tests {
             "key_with_passphrase"
         );
 
-        // Test string to auth type
+        // Test string to auth type — legacy "key" rows normalize to the
+        // key+passphrase flow (empty passphrase == unencrypted key).
         assert!(matches!(
             string_to_auth_type("password"),
             AuthType::Password
         ));
-        assert!(matches!(string_to_auth_type("key"), AuthType::Key));
+        assert!(matches!(
+            string_to_auth_type("key"),
+            AuthType::KeyWithPassphrase
+        ));
         assert!(matches!(
             string_to_auth_type("key_with_passphrase"),
             AuthType::KeyWithPassphrase

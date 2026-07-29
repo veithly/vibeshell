@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { X, Eye, EyeOff, FolderOpen, FileKey, Server, Key, Lock } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useServerStore } from '../../stores/serverStore';
@@ -11,6 +11,23 @@ interface AddServerDialogProps {
   onClose: () => void;
 }
 
+const INITIAL_FORM_DATA = {
+  name: '',
+  host: '',
+  port: 22,
+  username: 'root',
+  // Standalone 'key' auth was removed: key-based servers always use
+  // 'key_with_passphrase' with an optional (possibly empty) passphrase.
+  authType: 'password' as 'password' | 'key_with_passphrase',
+  password: '',
+  keyPath: '',
+  keyPassphrase: '',
+  saveCredentials: false,
+  jumpHostId: '',
+  agentForwarding: false,
+  postLoginCommand: '',
+};
+
 export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
   const { addServer, updateServer, loading, error, clearError } = useServerStore();
   const { success: notifySuccess } = useNotificationStore();
@@ -18,26 +35,26 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
 
   const { servers } = useServerStore();
 
-  const [formData, setFormData] = useState({
-    name: '',
-    host: '',
-    port: 22,
-    username: 'root',
-    authType: 'password' as 'password' | 'key' | 'key_with_passphrase',
-    password: '',
-    keyPath: '',
-    keyPassphrase: '',
-    saveCredentials: false,
-    jumpHostId: '',
-    agentForwarding: false,
-    postLoginCommand: '',
-  });
+  const [formData, setFormData] = useState(INITIAL_FORM_DATA);
 
   const [keyContent, setKeyContent] = useState<string | null>(null);
   const [isLoadingKey, setIsLoadingKey] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showPassphrase, setShowPassphrase] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+
+  // Discard unsaved draft state whenever the dialog is closed so a cancelled
+  // edit never leaks into the next "Add Server" flow.
+  useEffect(() => {
+    if (!isOpen) {
+      setFormData(INITIAL_FORM_DATA);
+      setKeyContent(null);
+      setLocalError(null);
+      setShowPassword(false);
+      setShowPassphrase(false);
+      clearError();
+    }
+  }, [isOpen, clearError]);
 
   // Browse for SSH key file
   const handleBrowseKey = useCallback(async () => {
@@ -87,7 +104,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
     }
 
     // Validate auth-specific fields
-    const isKeyAuth = formData.authType === 'key' || formData.authType === 'key_with_passphrase';
+    const isKeyAuth = formData.authType === 'key_with_passphrase';
 
     if (isKeyAuth && !keyContent) {
       setLocalError(isMobile ? 'Please paste an SSH private key' : 'Please select an SSH private key file');
@@ -121,7 +138,9 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
             serverName: createdServer.name,
             authType: formData.authType,
             credential: isKeyAuth ? keyContent : formData.password,
-            passphrase: isKeyAuth && formData.authType === 'key_with_passphrase' ? formData.keyPassphrase : null,
+            // Empty passphrase means an unencrypted key — store null so the
+            // connect flow performs passphrase-less key auth.
+            passphrase: isKeyAuth && formData.keyPassphrase ? formData.keyPassphrase : null,
             keyPath: isKeyAuth ? formData.keyPath || null : null,
           },
         });
@@ -136,20 +155,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
       notifySuccess('Server Added', `${formData.name} has been added successfully.`);
 
       // Reset form and close
-      setFormData({
-        name: '',
-        host: '',
-        port: 22,
-        username: 'root',
-        authType: 'password',
-        password: '',
-        keyPath: '',
-        keyPassphrase: '',
-        saveCredentials: false,
-        jumpHostId: '',
-        agentForwarding: false,
-        postLoginCommand: '',
-      });
+      setFormData(INITIAL_FORM_DATA);
       setKeyContent(null);
       onClose();
     } catch (err) {
@@ -179,7 +185,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
   if (!isOpen) return null;
 
   const displayError = localError || error;
-  const isKeyAuth = formData.authType === 'key' || formData.authType === 'key_with_passphrase';
+  const isKeyAuth = formData.authType === 'key_with_passphrase';
 
   return (
     <div className="responsive-dialog-layer fixed inset-0 z-50 flex items-center justify-center">
@@ -304,7 +310,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
                 Method
               </label>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <button
                   type="button"
                   onClick={() => handleChange('authType', 'password')}
@@ -320,29 +326,16 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => handleChange('authType', 'key')}
+                  onClick={() => handleChange('authType', 'key_with_passphrase')}
                   className={cn(
                     'flex items-center justify-center gap-2 px-3 py-2 rounded-md border transition-colors',
-                    formData.authType === 'key'
+                    formData.authType === 'key_with_passphrase'
                       ? 'bg-tokyo-green/20 border-tokyo-green text-tokyo-green'
                       : 'bg-tokyo-bg border-tokyo-bg-hl text-tokyo-fg hover:border-tokyo-comment'
                   )}
                 >
                   <Key className="w-4 h-4" />
                   <span className="text-sm">SSH Key</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleChange('authType', 'key_with_passphrase')}
-                  className={cn(
-                    'flex items-center justify-center gap-2 px-3 py-2 rounded-md border transition-colors',
-                    formData.authType === 'key_with_passphrase'
-                      ? 'bg-tokyo-magenta/20 border-tokyo-magenta text-tokyo-magenta'
-                      : 'bg-tokyo-bg border-tokyo-bg-hl text-tokyo-fg hover:border-tokyo-comment'
-                  )}
-                >
-                  <FileKey className="w-4 h-4" />
-                  <span className="text-sm">Key+Pass</span>
                 </button>
               </div>
             </div>
@@ -452,13 +445,14 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                   <div>
                     <label className="block text-sm font-medium text-tokyo-fg mb-1">
                       Key Passphrase
+                      <span className="text-tokyo-comment ml-2">(leave empty if key has no passphrase)</span>
                     </label>
                     <div className="relative">
                       <input
                         type={showPassphrase ? 'text' : 'password'}
                         value={formData.keyPassphrase}
                         onChange={(e) => handleChange('keyPassphrase', e.target.value)}
-                        placeholder="Enter key passphrase..."
+                        placeholder="Enter passphrase (optional)..."
                         className={cn(
                           'w-full px-3 py-2 pr-10 rounded-md',
                           'bg-tokyo-bg border border-tokyo-bg-hl',

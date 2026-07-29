@@ -34,22 +34,26 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
 
   const [localError, setLocalError] = useState<string | null>(null);
 
-  // Initialize form data when server changes
+  // Initialize form data from the persisted server every time the dialog is
+  // opened. Re-running on `isOpen` guarantees that unsaved draft edits from a
+  // previously cancelled dialog are discarded instead of leaking back in.
   useEffect(() => {
-    if (server) {
+    if (isOpen && server) {
       setFormData({
         name: server.name,
         host: server.host,
         port: server.port,
         username: server.username,
-        authType: server.auth_type,
+        // Standalone 'key' auth was removed; legacy rows fall back to the
+        // unified key+passphrase mode (empty passphrase = unencrypted key).
+        authType: server.auth_type === 'key' ? 'key_with_passphrase' : server.auth_type,
         privateKeyPath: '',
         jumpHostId: server.jump_host_id || '',
         agentForwarding: server.agent_forwarding || false,
         postLoginCommand: server.post_login_command || '',
       });
     }
-  }, [server]);
+  }, [isOpen, server]);
 
   // Reset form when dialog closes
   useEffect(() => {
@@ -240,13 +244,12 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
               )}
             >
               <option value="password">Password</option>
-              <option value="key">SSH Key</option>
-              <option value="key_with_passphrase">SSH Key with Passphrase</option>
+              <option value="key_with_passphrase">SSH Key (passphrase optional)</option>
             </select>
           </div>
 
           {/* Private Key Path (shown only for key-based auth) */}
-          {(formData.authType === 'key' || formData.authType === 'key_with_passphrase') && (
+          {formData.authType === 'key_with_passphrase' && (
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
                 Private Key Path (optional)

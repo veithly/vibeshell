@@ -47,6 +47,17 @@ impl SessionManager {
     }
 
     pub async fn find_reusable_by_server_name(&self, server_name: &str) -> Option<Arc<Session>> {
+        // A session is only reusable if the server config has not changed since
+        // the session was created. Otherwise stale connections would mask
+        // config updates (host/port/auth edits appearing to "not apply").
+        let server_updated_at = self
+            .database
+            .server_get_by_name(server_name)
+            .ok()
+            .flatten()
+            .map(|server| server.updated_at)
+            .unwrap_or(0);
+
         let sessions = {
             let sessions = self.sessions.read().await;
             sessions.values().cloned().collect::<Vec<_>>()
@@ -58,6 +69,14 @@ impl SessionManager {
                 continue;
             }
 
+            if session.created_at() < server_updated_at {
+                debug!(
+                    "[SessionManager] Skipping stale session {} (server '{}' updated after session creation)",
+                    session.id, server_name
+                );
+                continue;
+            }
+
             if matches!(session.get_state().await, SessionState::Connected) {
                 reusable.push(session);
             }
@@ -66,6 +85,29 @@ impl SessionManager {
         reusable
             .into_iter()
             .min_by_key(|session| session.created_at())
+    }
+
+    /// Kill all sessions belonging to a server. Returns the killed session ids
+    /// so callers can clean up per-session state (e.g. SFTP caches).
+    pub async fn kill_by_server_id(&self, server_id: &str) -> Result<Vec<String>> {
+        let session_ids: Vec<String> = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .values()
+                .filter(|session| session.server_id == server_id)
+                .map(|session| session.id.clone())
+                .collect()
+        };
+
+        for session_id in &session_ids {
+            info!(
+                "[SessionManager] Killing session {} for deleted server {}",
+                session_id, server_id
+            );
+            self.kill(session_id).await?;
+        }
+
+        Ok(session_ids)
     }
 
     pub async fn reap_inactive_sessions(&self, max_idle: Duration) -> Result<Vec<String>> {
