@@ -1,7 +1,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use directories::ProjectDirs;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use uuid::Uuid;
@@ -1080,6 +1080,29 @@ impl Database {
         conn.execute(
             "DELETE FROM plugin_installations WHERE plugin_id = ?1",
             [plugin_id],
+        )?;
+        Ok(())
+    }
+
+    /// Read a value from the generic key-value `settings` table.
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let value = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                rusqlite::params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(value)
+    }
+
+    /// Upsert a value into the generic key-value `settings` table.
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)\n             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![key, value],
         )?;
         Ok(())
     }

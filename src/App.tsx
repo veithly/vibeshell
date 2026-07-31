@@ -38,6 +38,7 @@ import { QuickCommandDialog } from './components/QuickCommandDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Notifications } from './components/Notifications';
 import { AgentActivityPanel } from './components/AgentActivityPanel';
+import { AgentApprovalDialog } from './components/AgentApprovalDialog';
 import { WorkspaceChangesPanel } from './components/WorkspaceChangesPanel';
 import { MobileWorkspaceActions } from './components/MobileWorkspaceActions';
 import { WorkspaceToolbar } from './components/WorkspaceToolbar';
@@ -1066,6 +1067,8 @@ function App() {
         sessionId={activeSession?.id}
         onClose={() => setIsTunnelPanelOpen(false)}
       />
+
+      {runtimeCapabilities.agentGateway && <AgentApprovalDialog />}
     </div>
   );
 }

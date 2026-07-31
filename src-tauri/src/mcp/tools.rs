@@ -327,7 +327,7 @@ fn session_kill_tool() -> ToolDefinition {
 fn session_send_input_tool() -> ToolDefinition {
     ToolDefinition::new(
         "session_send_input",
-        "Send text or named keys to the shared terminal PTY. The command and resulting output are visible in the VibeShell GUI.",
+        "Send text or named keys to the shared terminal PTY. Prefer this for collaborative work: the human sees the AI command in a distinct color and shares the same shell state, working directory, environment, and output.",
         json!({
             "type": "object",
             "properties": {
@@ -415,7 +415,7 @@ fn session_resize_tool() -> ToolDefinition {
 fn exec_tool() -> ToolDefinition {
     ToolDefinition::new(
         "exec",
-        "Execute a command on a connected SSH session. Opens a separate exec channel (does not interfere with the interactive shell). Returns stdout+stderr combined output.",
+        "Execute a command on a separate SSH exec channel and return stdout+stderr. Use session_send_input instead when collaborating in the human's visible terminal or when shell state must be shared; this isolated command is shown as an AI activity notice but does not change the interactive shell's cwd or environment.",
         json!({
             "type": "object",
             "properties": {

@@ -50,6 +50,7 @@ import {
 } from 'lucide-react';
 import { useRecordingStore } from '../../stores/recordingStore';
 import type { Recording } from '../../types/tunnel';
+import { safeInvoke } from '../../lib/tauri';
 
 // ============================================================================
 // Reusable Form Components
@@ -466,6 +467,117 @@ function RecordingSection() {
             ))}
           </div>
         )}
+      </div>
+    </SettingsSection>
+  );
+}
+
+interface AgentGuardConfig {
+  enabled: boolean;
+  requireForExec: boolean;
+  customPatterns: string[];
+  allowPatterns: string[];
+}
+
+function parsePatternList(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function AgentGuardSection() {
+  const { t } = useTranslation();
+  const [config, setConfig] = useState<AgentGuardConfig>({
+    enabled: true,
+    requireForExec: true,
+    customPatterns: [],
+    allowPatterns: [],
+  });
+  const [customPatterns, setCustomPatterns] = useState('');
+  const [allowPatterns, setAllowPatterns] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    void safeInvoke<AgentGuardConfig>('get_agent_guard_config').then((result) => {
+      if (disposed) return;
+      if (result.success) {
+        setConfig(result.data);
+        setCustomPatterns(result.data.customPatterns.join('\n'));
+        setAllowPatterns(result.data.allowPatterns.join('\n'));
+      } else {
+        setMessage(result.error.message);
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
+  const save = async () => {
+    setSaving(true);
+    setMessage(null);
+    const nextConfig: AgentGuardConfig = {
+      ...config,
+      customPatterns: parsePatternList(customPatterns),
+      allowPatterns: parsePatternList(allowPatterns),
+    };
+    const result = await safeInvoke('set_agent_guard_config', { config: nextConfig });
+    setSaving(false);
+    if (result.success) {
+      setConfig(nextConfig);
+      setMessage(t('agentGuard.saved'));
+    } else {
+      setMessage(result.error.message);
+    }
+  };
+
+  return (
+    <SettingsSection
+      icon={<Shield className="h-5 w-5" />}
+      title={t('agentGuard.title')}
+      description={t('agentGuard.description')}
+    >
+      <SettingRow label={t('agentGuard.enabled')}>
+        <Toggle
+          checked={config.enabled}
+          onChange={(enabled) => setConfig((current) => ({ ...current, enabled }))}
+        />
+      </SettingRow>
+      <SettingRow label={t('agentGuard.requireForExec')}>
+        <Toggle
+          checked={config.requireForExec}
+          onChange={(requireForExec) => setConfig((current) => ({ ...current, requireForExec }))}
+        />
+      </SettingRow>
+      <SettingRow
+        label={t('agentGuard.customPatterns')}
+        description={t('agentGuard.customPatternsHint')}
+      >
+        <TextArea value={customPatterns} onChange={setCustomPatterns} />
+      </SettingRow>
+      <SettingRow
+        label={t('agentGuard.allowPatterns')}
+        description={t('agentGuard.allowPatternsHint')}
+      >
+        <TextArea value={allowPatterns} onChange={setAllowPatterns} />
+      </SettingRow>
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        {message && (
+          <p role="status" className="text-sm text-tokyo-comment">
+            {message}
+          </p>
+        )}
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => void save()}
+          className="rounded-lg bg-tokyo-blue px-4 py-2 text-sm text-tokyo-on-accent transition-colors hover:bg-tokyo-blue/80 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {saving ? t('common.loading') : t('agentGuard.save')}
+        </button>
       </div>
     </SettingsSection>
   );
@@ -1216,6 +1328,7 @@ export function Settings() {
       {/* ================================================================== */}
       {runtimeCapabilities.agentGateway && (
         <>
+        <AgentGuardSection />
         <SettingsSection
         icon={<Bot className="w-5 h-5" />}
         title={t('settings.gateway')}

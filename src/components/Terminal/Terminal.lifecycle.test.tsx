@@ -8,11 +8,15 @@ const mocks = vi.hoisted(() => {
   const construct = vi.fn();
   const open = vi.fn(() => operations.push('open'));
   const dispose = vi.fn(() => operations.push('dispose'));
+  const listeners = new Map<string, (event: { payload: unknown }) => void>();
   const unlisten = vi.fn();
-  const listen = vi.fn(async () => {
+  const listen = vi.fn(async (eventName: string, handler: (event: { payload: unknown }) => void) => {
     operations.push('listen');
+    listeners.set(eventName, handler);
     return unlisten;
   });
+  const registerMarker = vi.fn(() => ({ id: 1 }));
+  const registerDecoration = vi.fn();
   const attachLocalShellSession = vi.fn(async () => {
     operations.push('attach');
     return true;
@@ -71,6 +75,9 @@ const mocks = vi.hoisted(() => {
     dispose,
     listen,
     unlisten,
+    listeners,
+    registerMarker,
+    registerDecoration,
     attachLocalShellSession,
     noOpAsync,
     noOp,
@@ -121,6 +128,8 @@ vi.mock('@xterm/xterm', () => ({
     selectAll() {}
     getSelection() { return ''; }
     hasSelection() { return false; }
+    registerMarker() { return mocks.registerMarker(); }
+    registerDecoration(options: Record<string, unknown>) { return mocks.registerDecoration(options); }
     dispose() { mocks.dispose(); }
   },
 }));
@@ -222,10 +231,14 @@ describe('Terminal lifecycle', () => {
     mocks.dispose.mockClear();
     mocks.listen.mockClear();
     mocks.unlisten.mockClear();
+    mocks.listeners.clear();
+    mocks.registerMarker.mockClear();
+    mocks.registerDecoration.mockClear();
     mocks.attachLocalShellSession.mockClear();
     mocks.flushInputBatch.mockClear();
-    mocks.listen.mockImplementation(async () => {
+    mocks.listen.mockImplementation(async (eventName, handler) => {
       mocks.operations.push('listen');
+      mocks.listeners.set(eventName, handler);
       return mocks.unlisten;
     });
     mocks.attachLocalShellSession.mockImplementation(async () => {
@@ -309,5 +322,68 @@ describe('Terminal lifecycle', () => {
     window.dispatchEvent(new Event('resize'));
 
     expect(mocks.operations.filter((operation) => operation === 'fit')).toHaveLength(0);
+  });
+
+  it('decorates agent shell input with the theme accent without writing duplicate text', async () => {
+    const { findByText } = render(<Terminal sessionId="agent-session" />);
+
+    await act(async () => {
+      flushAnimationFrames();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mocks.listeners.has('agent-terminal-input')).toBe(true));
+
+    act(() => {
+      mocks.listeners.get('agent-terminal-input')?.({
+        payload: {
+          id: 'typing-1',
+          sessionId: 'agent-session',
+          text: 'rm -rf /tmp/example',
+          kind: 'typing',
+          timestamp: Date.now(),
+        },
+      });
+      mocks.listeners.get('agent-terminal-input')?.({
+        payload: {
+          id: 'input-1',
+          sessionId: 'agent-session',
+          text: 'rm -rf /tmp/example',
+          kind: 'input',
+          timestamp: Date.now(),
+        },
+      });
+    });
+
+    expect(mocks.registerMarker).toHaveBeenCalledOnce();
+    expect(mocks.registerDecoration).toHaveBeenCalledWith(expect.objectContaining({
+      foregroundColor: '#743796',
+      layer: 'top',
+    }));
+    expect(await findByText('rm -rf /tmp/example')).toBeInTheDocument();
+  });
+
+  it('decorates every line of multiline agent typing', async () => {
+    render(<Terminal sessionId="agent-session" />);
+
+    await act(async () => {
+      flushAnimationFrames();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mocks.listeners.has('agent-terminal-input')).toBe(true));
+
+    act(() => {
+      mocks.listeners.get('agent-terminal-input')?.({
+        payload: {
+          id: 'typing-multiline',
+          sessionId: 'agent-session',
+          text: 'echo one\necho two',
+          kind: 'typing',
+          timestamp: Date.now(),
+        },
+      });
+    });
+
+    expect(mocks.registerMarker).toHaveBeenCalledTimes(2);
+    expect(mocks.registerDecoration).toHaveBeenCalledTimes(2);
   });
 });

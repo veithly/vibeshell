@@ -143,6 +143,33 @@
     "empty": "暂无 Agent 活动",
     "ready": "Gateway 已就绪"
   },
+  "agentApproval": {
+    "title": "确认执行 Agent 命令？",
+    "description": "Agent 想执行一条被标记为危险的命令。",
+    "toolLabel": "工具",
+    "sessionLabel": "会话",
+    "commandLabel": "命令",
+    "reasonsLabel": "风险原因",
+    "approveOnce": "仅本次允许",
+    "deny": "拒绝",
+    "approveAuto": "允许并 5 小时内自动确认",
+    "pendingCount": "有 {{count}} 条危险命令正在等待确认。",
+    "autoActive": "自动确认已开启",
+    "autoActiveUntil": "将在 {{time}} 前自动确认 Agent 命令",
+    "cancelAuto": "关闭"
+  },
+  "agentGuard": {
+    "title": "Agent 命令防护",
+    "description": "在 Agent 于共享会话执行危险命令前，需要你的确认。",
+    "enabled": "危险命令需要确认",
+    "requireForExec": "对独立 exec 命令也生效",
+    "customPatterns": "自定义危险关键字",
+    "customPatternsHint": "每行一个关键字，对命令文本按忽略大小写的子串匹配。",
+    "allowPatterns": "始终放行关键字",
+    "allowPatternsHint": "包含这些关键字的命令永不拦截。",
+    "save": "保存防护设置",
+    "saved": "Agent 防护设置已保存"
+  },
   "codingAgent": {
     "tab": "Coding Agent",
     "title": "Coding Agent",

@@ -14,6 +14,16 @@ import { flushInputBatch } from '../../lib/tauri';
 
 type ConnectionStatus = 'initializing' | 'listening' | 'receiving' | 'error';
 
+interface AgentTerminalInputEvent {
+  id: string;
+  sessionId: string;
+  text: string;
+  kind: 'input' | 'typing' | 'exec';
+  timestamp: number;
+}
+
+const AGENT_NOTICE_LIFETIME_MS = 12_000;
+
 function fitTerminalIfRenderable(fitAddon: FitAddon, terminalElement: HTMLElement | null): boolean {
   if (!terminalElement?.isConnected) return false;
 
@@ -29,6 +39,51 @@ function fitTerminalIfRenderable(fitAddon: FitAddon, terminalElement: HTMLElemen
 
   fitAddon.fit();
   return true;
+}
+
+function decorateAgentTyping(terminal: XTerm, text: string, color: string) {
+  if (terminal.buffer.active.type !== 'normal') return;
+
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  let rowOffset = 0;
+  let column = terminal.buffer.active.cursorX;
+  let segmentStart = column;
+  let segmentWidth = 0;
+
+  const flushSegment = () => {
+    if (segmentWidth === 0) return;
+    const marker = terminal.registerMarker(rowOffset);
+    if (marker) {
+      terminal.registerDecoration({
+        marker,
+        x: segmentStart,
+        width: segmentWidth,
+        foregroundColor: color,
+        layer: 'top',
+      });
+    }
+    segmentWidth = 0;
+  };
+
+  for (const char of normalized) {
+    if (char === '\n') {
+      flushSegment();
+      rowOffset += 1;
+      column = 0;
+      segmentStart = 0;
+      continue;
+    }
+
+    segmentWidth += 1;
+    column += 1;
+    if (column >= terminal.cols) {
+      flushSegment();
+      rowOffset += 1;
+      column = 0;
+      segmentStart = 0;
+    }
+  }
+  flushSegment();
 }
 
 function getTerminalScreenRect(xterm: XTerm, fallbackElement: HTMLElement): DOMRect {
@@ -132,6 +187,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     const [terminalInitializationFor, setTerminalInitializationFor] = useState<string | null | undefined>(null);
     const [terminalReadyFor, setTerminalReadyFor] = useState<string | null | undefined>(null);
     const receivedDataRef = useRef(false);
+    const [agentNotices, setAgentNotices] = useState<AgentTerminalInputEvent[]>([]);
+    const agentNoticeTimersRef = useRef<Map<string, number>>(new Map());
+    const agentInputColorRef = useRef(themes[0].colors.magenta);
 
     const inputBufferRef = useRef<string>('');
     const cursorPositionRef = useRef<number>(0);
@@ -166,6 +224,10 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     useEffect(() => { sendInputForSessionRef.current = sendInputForSession; }, [sendInputForSession]);
     useEffect(() => { resizeForSessionRef.current = resizeSessionForSession; }, [resizeSessionForSession]);
     useEffect(() => { onDataRef.current = onData; }, [onData]);
+    useEffect(() => {
+      const currentTheme = themes.find((theme) => theme.name === settings.appearance.theme);
+      agentInputColorRef.current = (currentTheme ?? themes[0]).colors.magenta;
+    }, [settings.appearance.theme]);
     const [completionState, completionActions] = useCompletion(settings.aiPrediction);
 
     const [contextMenu, setContextMenu] = useState({
@@ -399,7 +461,8 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       setConnectionStatus('initializing');
       receivedDataRef.current = false;
 
-      let unlisten: (() => void) | null = null;
+      let outputUnlisten: (() => void) | null = null;
+      let agentInputUnlisten: (() => void) | null = null;
       let shouldDetach = false;
       let disposed = false;
 
@@ -413,7 +476,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         try {
           const { listen } = await import('@tauri-apps/api/event');
 
-          unlisten = await listen<SessionOutputEvent>('session-output', (event) => {
+          outputUnlisten = await listen<SessionOutputEvent>('session-output', (event) => {
             const payloadSessionId = event.payload?.session_id ?? event.payload?.sessionId;
             if (payloadSessionId === sessionId && event.payload?.data) {
               if (!receivedDataRef.current) {
@@ -427,13 +490,45 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             }
           });
 
+          agentInputUnlisten = await listen<AgentTerminalInputEvent>(
+            'agent-terminal-input',
+            (event) => {
+              const input = event.payload;
+              if (input?.sessionId !== sessionId || !input.text) return;
+
+              if (input.kind !== 'typing') {
+                setAgentNotices((current) => [...current, input].slice(-3));
+                const existingTimer = agentNoticeTimersRef.current.get(input.id);
+                if (existingTimer !== undefined) {
+                  window.clearTimeout(existingTimer);
+                }
+                const timer = window.setTimeout(() => {
+                  setAgentNotices((current) => current.filter((item) => item.id !== input.id));
+                  agentNoticeTimersRef.current.delete(input.id);
+                }, AGENT_NOTICE_LIFETIME_MS);
+                agentNoticeTimersRef.current.set(input.id, timer);
+              }
+
+              // Shared-shell input is echoed by the remote PTY. Decorating the
+              // cells changes only their presentation, so terminal cursor state
+              // stays synchronized with the server and the command is not shown
+              // twice.
+              const xterm = xtermRef.current;
+              if (input.kind === 'typing' && xterm) {
+                decorateAgentTyping(xterm, input.text, agentInputColorRef.current);
+              }
+            }
+          );
+
           if (disposed) {
-            unlisten();
-            unlisten = null;
+            outputUnlisten();
+            agentInputUnlisten();
+            outputUnlisten = null;
+            agentInputUnlisten = null;
             return;
           }
 
-          eventUnlistenRef.current = unlisten;
+          eventUnlistenRef.current = outputUnlisten;
 
           let attached: boolean;
           if (!isLocalShell) {
@@ -470,8 +565,9 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
       return () => {
         disposed = true;
-        unlisten?.();
-        if (eventUnlistenRef.current === unlisten) {
+        outputUnlisten?.();
+        agentInputUnlisten?.();
+        if (eventUnlistenRef.current === outputUnlisten) {
           eventUnlistenRef.current = null;
         }
         if (shouldDetach) {
@@ -490,6 +586,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       detachSession,
       detachLocalShellSession,
     ]);
+
+    useEffect(() => () => {
+      for (const timer of agentNoticeTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      agentNoticeTimersRef.current.clear();
+    }, []);
 
     const getXtermTheme = useCallback(() => {
       const currentTheme = themes.find((t) => t.name === settings.appearance.theme);
@@ -867,13 +970,34 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     const bgColor = themeColors.bg;
 
     return (
-      <div className="terminal-mobile-shell">
+      <div className="terminal-mobile-shell relative">
         <div
           ref={terminalRef}
           className="terminal-viewport w-full min-h-0 flex-1 relative overflow-hidden"
           style={{ backgroundColor: bgColor }}
           onContextMenu={handleContextMenu}
         />
+
+        {agentNotices.length > 0 && (
+          <div
+            className="pointer-events-none absolute right-3 top-3 z-20 flex max-w-[min(32rem,calc(100%-1.5rem))] flex-col items-end gap-1.5"
+            aria-live="polite"
+          >
+            {agentNotices.map((notice) => (
+              <div
+                key={notice.id}
+                className="flex max-w-full items-start gap-2 rounded-md border border-tokyo-magenta/40 bg-tokyo-bg-dark/95 px-2.5 py-1.5 shadow-lg"
+              >
+                <span className="mt-0.5 flex-shrink-0 rounded bg-tokyo-magenta/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-tokyo-magenta">
+                  AI · {notice.kind === 'input' ? 'Shell' : 'Exec'}
+                </span>
+                <code className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-tokyo-magenta">
+                  {notice.text}
+                </code>
+              </div>
+            ))}
+          </div>
+        )}
 
         <MobileKeyBar
           onSend={handleMobileKey}

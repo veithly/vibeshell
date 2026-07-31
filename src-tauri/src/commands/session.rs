@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::ipc::{IpcClient, IpcMessage, IpcSessionInfo};
 use crate::local_shell::LocalShellManager;
+use crate::mcp::SharedAgentInputTracker;
 use crate::session::{Session, SessionInfo, SessionManager, SshCredential};
 use crate::ssh::PtyConfig;
 use crate::storage::Database;
@@ -504,33 +505,46 @@ pub async fn session_kill_all(
 pub async fn session_send_input(
     manager: State<'_, Arc<SessionManager>>,
     access_state: State<'_, Arc<SessionAccessState>>,
+    input_tracker: State<'_, Arc<SharedAgentInputTracker>>,
     request: SendInputRequest,
 ) -> Result<(), String> {
-    if access_state.is_remote() {
-        return match ipc_send(IpcMessage::SendInput {
+    // Human and AI keystrokes share one PTY line. Feed human input through the
+    // same tracker so an AI-submitted Enter is classified against the actual
+    // mixed line, not only the bytes previously sent by the agent.
+    let _session_input_guard = input_tracker.lock_session(&request.session_id).await;
+    let (checkpoint, _) = input_tracker
+        .checkpoint_and_observe(&request.session_id, &request.data, &[], false)
+        .await;
+
+    let result = if access_state.is_remote() {
+        match ipc_send(IpcMessage::SendInput {
             session_id: request.session_id,
             data: request.data.into_bytes(),
         })
-        .await?
+        .await
         {
-            IpcMessage::Ok => Ok(()),
-            IpcMessage::Error { message } => Err(message),
-            other => Err(format!(
+            Ok(IpcMessage::Ok) => Ok(()),
+            Ok(IpcMessage::Error { message }) => Err(message),
+            Ok(other) => Err(format!(
                 "Unexpected IPC response while sending input: {:?}",
                 other
             )),
-        };
+            Err(error) => Err(error),
+        }
+    } else {
+        match manager.get(&request.session_id).await {
+            Some(session) => session
+                .write_to_ssh(request.data.as_bytes())
+                .await
+                .map_err(|error| error.to_string()),
+            None => Err(format!("Session not found: {}", request.session_id)),
+        }
+    };
+
+    if result.is_err() {
+        input_tracker.restore(checkpoint).await;
     }
-
-    let session = manager
-        .get(&request.session_id)
-        .await
-        .ok_or_else(|| format!("Session not found: {}", request.session_id))?;
-
-    session
-        .write_to_ssh(request.data.as_bytes())
-        .await
-        .map_err(|e| e.to_string())
+    result
 }
 
 /// Send raw input data to a session (as bytes)
@@ -538,33 +552,45 @@ pub async fn session_send_input(
 pub async fn session_send_bytes(
     manager: State<'_, Arc<SessionManager>>,
     access_state: State<'_, Arc<SessionAccessState>>,
+    input_tracker: State<'_, Arc<SharedAgentInputTracker>>,
     request: SendBytesRequest,
 ) -> Result<(), String> {
-    if access_state.is_remote() {
-        return match ipc_send(IpcMessage::SendInput {
+    let _session_input_guard = input_tracker.lock_session(&request.session_id).await;
+    let input = String::from_utf8_lossy(&request.data);
+    let (checkpoint, _) = input_tracker
+        .checkpoint_and_observe(&request.session_id, &input, &[], false)
+        .await;
+    drop(input);
+
+    let result = if access_state.is_remote() {
+        match ipc_send(IpcMessage::SendInput {
             session_id: request.session_id,
             data: request.data,
         })
-        .await?
+        .await
         {
-            IpcMessage::Ok => Ok(()),
-            IpcMessage::Error { message } => Err(message),
-            other => Err(format!(
+            Ok(IpcMessage::Ok) => Ok(()),
+            Ok(IpcMessage::Error { message }) => Err(message),
+            Ok(other) => Err(format!(
                 "Unexpected IPC response while sending bytes: {:?}",
                 other
             )),
-        };
+            Err(error) => Err(error),
+        }
+    } else {
+        match manager.get(&request.session_id).await {
+            Some(session) => session
+                .write_to_ssh(&request.data)
+                .await
+                .map_err(|error| error.to_string()),
+            None => Err(format!("Session not found: {}", request.session_id)),
+        }
+    };
+
+    if result.is_err() {
+        input_tracker.restore(checkpoint).await;
     }
-
-    let session = manager
-        .get(&request.session_id)
-        .await
-        .ok_or_else(|| format!("Session not found: {}", request.session_id))?;
-
-    session
-        .write_to_ssh(&request.data)
-        .await
-        .map_err(|e| e.to_string())
+    result
 }
 
 /// Resize a session's terminal

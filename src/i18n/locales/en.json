@@ -143,6 +143,33 @@
     "empty": "No Agent activity",
     "ready": "Gateway ready"
   },
+  "agentApproval": {
+    "title": "Approve agent command?",
+    "description": "The agent wants to run a command flagged as risky.",
+    "toolLabel": "Tool",
+    "sessionLabel": "Session",
+    "commandLabel": "Command",
+    "reasonsLabel": "Why it was flagged",
+    "approveOnce": "Allow once",
+    "deny": "Deny",
+    "approveAuto": "Allow & auto-confirm 5h",
+    "pendingCount": "{{count}} risky commands are waiting for a decision.",
+    "autoActive": "Auto-confirm on",
+    "autoActiveUntil": "Auto-approving agent commands until {{time}}",
+    "cancelAuto": "Turn off"
+  },
+  "agentGuard": {
+    "title": "Agent command guard",
+    "description": "Require your approval before the agent runs dangerous commands in shared sessions.",
+    "enabled": "Require approval for risky commands",
+    "requireForExec": "Also gate isolated exec commands",
+    "customPatterns": "Custom danger keywords",
+    "customPatternsHint": "One keyword per line. Case-insensitive substring match on the command.",
+    "allowPatterns": "Always-allow keywords",
+    "allowPatternsHint": "Commands containing any of these are never gated.",
+    "save": "Save guard settings",
+    "saved": "Agent guard settings saved"
+  },
   "codingAgent": {
     "tab": "Coding Agent",
     "title": "Coding Agent",

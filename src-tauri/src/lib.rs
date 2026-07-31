@@ -30,6 +30,8 @@ pub use storage::Database;
 use commands::{
     add_group,
     add_server,
+    // Agent command guard
+    cancel_agent_auto_approve,
     clear_fingerprints,
     cloud_sync_create_vault,
     cloud_sync_export_file,
@@ -49,6 +51,8 @@ use commands::{
     delete_recording,
     delete_server,
     detect_ai_tools,
+    get_agent_guard_config,
+    get_agent_guard_status,
     get_app_version,
     get_credential,
     // Fingerprint commands
@@ -91,6 +95,7 @@ use commands::{
     plugin_uninstall,
     plugin_update_settings,
     read_ssh_key_file,
+    resolve_agent_approval,
     save_credential,
     save_fingerprint,
     session_attach,
@@ -103,6 +108,7 @@ use commands::{
     session_resize,
     session_send_bytes,
     session_send_input,
+    set_agent_guard_config,
     sftp_compress,
     sftp_delete,
     sftp_download_file,
@@ -232,22 +238,54 @@ pub fn run() {
             let session_logger = Arc::new(logging::SessionLogger::new(database.clone()));
             let session_access_state = Arc::new(SessionAccessState::new(SessionAccessMode::Local));
             let cloud_sync_manager = Arc::new(CloudSyncManager::new(database.clone())?);
+            let agent_input_tracker = Arc::new(mcp::SharedAgentInputTracker::default());
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
-                let app_handle = app.handle().clone();
+                let activity_handle = app.handle().clone();
                 let activity_emitter = Arc::new(move |event| {
-                    let _ = app_handle.emit("agent-gateway-activity", event);
+                    let _ = activity_handle.emit("agent-gateway-activity", event);
                 });
+
+                let terminal_handle = app.handle().clone();
+                let terminal_input_emitter = Arc::new(move |event| {
+                    let _ = terminal_handle.emit("agent-terminal-input", event);
+                });
+
+                let persisted_auto_approve_until = database
+                    .get_setting(mcp::approval::AUTO_APPROVE_UNTIL_KEY)?
+                    .and_then(|value| value.parse::<i64>().ok());
+                let approval_handle = app.handle().clone();
+                let approval_manager =
+                    Arc::new(mcp::AgentApprovalManager::with_auto_approve_until(
+                        Arc::new(move |event| match event {
+                            mcp::ApprovalEvent::Request(request) => {
+                                let _ = approval_handle.emit("agent-approval-request", request);
+                            }
+                            mcp::ApprovalEvent::Resolved(resolved) => {
+                                let _ = approval_handle.emit("agent-approval-resolved", resolved);
+                            }
+                            mcp::ApprovalEvent::State(state) => {
+                                let _ = approval_handle.emit("agent-approval-state", state);
+                            }
+                        }),
+                        persisted_auto_approve_until,
+                    ));
+
                 let gateway = AgentGateway::start(
                     database.clone(),
                     session_manager.clone(),
                     activity_emitter,
+                    terminal_input_emitter,
+                    approval_manager.clone(),
+                    agent_input_tracker.clone(),
                 )?;
                 app.manage(gateway);
+                app.manage(approval_manager);
             }
 
             app.manage(database);
+            app.manage(agent_input_tracker);
             app.manage(session_manager);
             app.manage(sftp_state);
             app.manage(fingerprint_state);
@@ -265,6 +303,12 @@ pub fn run() {
             get_app_version,
             get_runtime_capabilities,
             get_agent_gateway_status,
+            // Agent command guard
+            cancel_agent_auto_approve,
+            get_agent_guard_config,
+            get_agent_guard_status,
+            resolve_agent_approval,
+            set_agent_guard_config,
             // End-to-end encrypted cloud sync
             cloud_sync_create_vault,
             cloud_sync_export_file,

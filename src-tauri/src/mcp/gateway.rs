@@ -15,7 +15,9 @@ use tokio::sync::oneshot;
 use crate::session::SessionManager;
 use crate::storage::Database;
 
-use super::server::{AgentActivityEvent, McpServer, MCP_PROTOCOL_VERSION};
+use super::approval::AgentApprovalManager;
+use super::guard::SharedAgentInputTracker;
+use super::server::{AgentActivityEvent, McpServer, TerminalInputEvent, MCP_PROTOCOL_VERSION};
 
 pub const GATEWAY_SCHEMA_VERSION: u32 = 1;
 pub const GATEWAY_MANIFEST_FILE: &str = "agent-gateway.json";
@@ -71,11 +73,17 @@ impl AgentGateway {
         database: Arc<Database>,
         session_manager: Arc<SessionManager>,
         activity_emitter: Arc<dyn Fn(AgentActivityEvent) + Send + Sync>,
+        terminal_input_emitter: Arc<dyn Fn(TerminalInputEvent) + Send + Sync>,
+        approvals: Arc<AgentApprovalManager>,
+        agent_input_tracker: Arc<SharedAgentInputTracker>,
     ) -> Result<Self> {
         Self::start_at_path(
             database,
             session_manager,
             activity_emitter,
+            terminal_input_emitter,
+            approvals,
+            agent_input_tracker,
             gateway_manifest_path()?,
         )
     }
@@ -84,6 +92,9 @@ impl AgentGateway {
         database: Arc<Database>,
         session_manager: Arc<SessionManager>,
         activity_emitter: Arc<dyn Fn(AgentActivityEvent) + Send + Sync>,
+        terminal_input_emitter: Arc<dyn Fn(TerminalInputEvent) + Send + Sync>,
+        approvals: Arc<AgentApprovalManager>,
+        agent_input_tracker: Arc<SharedAgentInputTracker>,
         manifest_path: PathBuf,
     ) -> Result<Self> {
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -153,7 +164,10 @@ impl AgentGateway {
                     let _ = ready_tx.send(Ok(info));
 
                     let server = McpServer::new(database, session_manager)
-                        .with_activity_emitter(activity_emitter);
+                        .with_activity_emitter(activity_emitter)
+                        .with_terminal_input_emitter(terminal_input_emitter)
+                        .with_approvals(approvals)
+                        .with_agent_input_tracker(agent_input_tracker);
                     let serve_result = axum::serve(listener, server.router(token))
                         .with_graceful_shutdown(async {
                             let _ = shutdown_rx.await;
@@ -408,10 +422,20 @@ mod tests {
         let database = Arc::new(Database::new_at(temp.path().join("gateway.db")).unwrap());
         let session_manager = Arc::new(SessionManager::new(database.clone()));
         let emitter = Arc::new(|_event: AgentActivityEvent| {});
+        let terminal_emitter = Arc::new(|_event: TerminalInputEvent| {});
+        let approvals = Arc::new(AgentApprovalManager::new(Arc::new(|_| {})));
+        let agent_input_tracker = Arc::new(SharedAgentInputTracker::default());
 
-        let gateway =
-            AgentGateway::start_at_path(database, session_manager, emitter, manifest_path.clone())
-                .unwrap();
+        let gateway = AgentGateway::start_at_path(
+            database,
+            session_manager,
+            emitter,
+            terminal_emitter,
+            approvals,
+            agent_input_tracker,
+            manifest_path.clone(),
+        )
+        .unwrap();
         let status = gateway.status();
         assert!(status.running);
         assert!(status

@@ -31,6 +31,8 @@ use crate::sftp::{
 use crate::storage::models::{AuthType, Server};
 use crate::storage::Database;
 
+use super::approval::{AgentApprovalManager, ApprovalOutcome, ApprovalRequest};
+use super::guard::{self, GuardConfig, GUARD_CONFIG_KEY};
 use super::tools::get_tool_definitions;
 
 /// MCP protocol version
@@ -50,6 +52,9 @@ pub struct McpState {
     /// Session manager for SSH sessions
     pub session_manager: Arc<SessionManager>,
     activity_emitter: Option<Arc<dyn Fn(AgentActivityEvent) + Send + Sync>>,
+    terminal_input_emitter: Option<Arc<dyn Fn(TerminalInputEvent) + Send + Sync>>,
+    approvals: Option<Arc<AgentApprovalManager>>,
+    agent_input_tracker: Arc<guard::SharedAgentInputTracker>,
 }
 
 impl McpState {
@@ -58,6 +63,9 @@ impl McpState {
             database,
             session_manager,
             activity_emitter: None,
+            terminal_input_emitter: None,
+            approvals: None,
+            agent_input_tracker: Arc::new(guard::SharedAgentInputTracker::default()),
         }
     }
 
@@ -69,9 +77,82 @@ impl McpState {
         self
     }
 
+    pub fn with_terminal_input_emitter(
+        mut self,
+        emitter: Arc<dyn Fn(TerminalInputEvent) + Send + Sync>,
+    ) -> Self {
+        self.terminal_input_emitter = Some(emitter);
+        self
+    }
+
+    pub fn with_approvals(mut self, approvals: Arc<AgentApprovalManager>) -> Self {
+        self.approvals = Some(approvals);
+        self
+    }
+
+    pub fn with_agent_input_tracker(
+        mut self,
+        tracker: Arc<guard::SharedAgentInputTracker>,
+    ) -> Self {
+        self.agent_input_tracker = tracker;
+        self
+    }
+
     fn emit_activity(&self, event: AgentActivityEvent) {
         if let Some(emitter) = &self.activity_emitter {
             emitter(event);
+        }
+    }
+
+    fn emit_terminal_input(&self, session_id: &str, text: String, kind: TerminalInputKind) {
+        if let Some(emitter) = &self.terminal_input_emitter {
+            emitter(TerminalInputEvent {
+                id: Uuid::new_v4().to_string(),
+                session_id: session_id.to_string(),
+                text,
+                kind,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+            });
+        }
+    }
+
+    /// Load the persisted command-guard configuration (falling back to safe
+    /// defaults when unset or unparseable).
+    fn load_guard_config(&self) -> GuardConfig {
+        let json = self.database.get_setting(GUARD_CONFIG_KEY).ok().flatten();
+        GuardConfig::from_stored_json(json.as_deref())
+    }
+
+    /// Block until the user approves a risky command, or return an error string
+    /// (surfaced to the agent) when denied. A transport without a GUI approval
+    /// manager fails closed instead of silently executing a risky command.
+    async fn require_approval(
+        &self,
+        tool: &str,
+        session_id: Option<&str>,
+        command: &str,
+        reasons: Vec<String>,
+    ) -> Result<(), String> {
+        let Some(approvals) = &self.approvals else {
+            return Err(
+                "Command requires user approval, but no approval UI is available.".to_string(),
+            );
+        };
+
+        match approvals
+            .gate(ApprovalRequest {
+                tool: tool.to_string(),
+                command: command.to_string(),
+                reasons,
+                session_id: session_id.map(ToOwned::to_owned),
+            })
+            .await
+        {
+            ApprovalOutcome::Approved => Ok(()),
+            ApprovalOutcome::Denied(reason) => Err(format!(
+                "Command requires user approval and was not granted ({}).",
+                reason
+            )),
         }
     }
 }
@@ -95,6 +176,30 @@ pub enum AgentActivityStatus {
     Failed,
 }
 
+/// The presentation role of an agent terminal event.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalInputKind {
+    /// A complete command submitted to the shared PTY (shown in the activity notice).
+    Input,
+    /// Printable text about to be typed into the PTY (decorated inline).
+    Typing,
+    /// A command executed through a separate SSH exec channel.
+    Exec,
+}
+
+/// Emitted when the agent drives the terminal so the GUI can distinguish its
+/// input from human keystrokes without writing synthetic bytes into the PTY.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInputEvent {
+    pub id: String,
+    pub session_id: String,
+    pub text: String,
+    pub kind: TerminalInputKind,
+    pub timestamp: i64,
+}
+
 /// MCP Server
 pub struct McpServer {
     state: McpState,
@@ -113,6 +218,27 @@ impl McpServer {
         emitter: Arc<dyn Fn(AgentActivityEvent) + Send + Sync>,
     ) -> Self {
         self.state = self.state.with_activity_emitter(emitter);
+        self
+    }
+
+    pub fn with_terminal_input_emitter(
+        mut self,
+        emitter: Arc<dyn Fn(TerminalInputEvent) + Send + Sync>,
+    ) -> Self {
+        self.state = self.state.with_terminal_input_emitter(emitter);
+        self
+    }
+
+    pub fn with_approvals(mut self, approvals: Arc<AgentApprovalManager>) -> Self {
+        self.state = self.state.with_approvals(approvals);
+        self
+    }
+
+    pub fn with_agent_input_tracker(
+        mut self,
+        tracker: Arc<guard::SharedAgentInputTracker>,
+    ) -> Self {
+        self.state = self.state.with_agent_input_tracker(tracker);
         self
     }
 
@@ -778,25 +904,23 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
         .get("session_id")
         .and_then(Value::as_str)
         .ok_or("Missing required field: session_id")?;
-    let mut data = args
-        .get("data")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .as_bytes()
-        .to_vec();
-
+    let data_arg = args.get("data").and_then(Value::as_str).unwrap_or_default();
+    let mut keys_arg = Vec::new();
     if let Some(keys) = args.get("keys").and_then(Value::as_array) {
         for key in keys {
-            let key = key.as_str().ok_or("keys must contain strings")?;
-            data.extend_from_slice(named_key_bytes(key)?);
+            keys_arg.push(key.as_str().ok_or("keys must contain strings")?.to_string());
         }
     }
-
-    if args
+    let append_enter = args
         .get("append_enter")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+
+    let mut data = data_arg.as_bytes().to_vec();
+    for key in &keys_arg {
+        data.extend_from_slice(named_key_bytes(key)?);
+    }
+    if append_enter {
         data.push(b'\r');
     }
 
@@ -809,10 +933,67 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
         .get(session_id)
         .await
         .ok_or("Session not found")?;
-    session
-        .send_input(data.clone())
-        .await
-        .map_err(|error| format!("Failed to send terminal input: {}", error))?;
+
+    // Keep the tracker transaction open until approval and the PTY write both
+    // succeed. If either fails, rolling back prevents a denied split command
+    // from being submitted later with a bare Enter that appears harmless.
+    let _session_input_guard = state.agent_input_tracker.lock_session(session_id).await;
+    let (tracker_checkpoint, executed_commands) = state
+        .agent_input_tracker
+        .checkpoint_and_observe(session_id, data_arg, &keys_arg, append_enter)
+        .await;
+
+    // Gate and surface commands that will actually execute in the shared terminal.
+    let cfg = state.load_guard_config();
+    for command in executed_commands {
+        if cfg.enabled {
+            let mut decision = guard::classify_command(&command.command, &cfg);
+            if !command.is_verifiable {
+                decision.requires_approval = true;
+                decision.reasons.push(
+                    "Shell history, completion, or cursor editing hides the final command text"
+                        .to_string(),
+                );
+            }
+            if decision.requires_approval {
+                if let Err(error) = state
+                    .require_approval(
+                        "session_send_input",
+                        Some(session_id),
+                        &command.command,
+                        decision.reasons,
+                    )
+                    .await
+                {
+                    state.agent_input_tracker.restore(tracker_checkpoint).await;
+                    return Err(error);
+                }
+            }
+        }
+
+        state.emit_terminal_input(session_id, command.command, TerminalInputKind::Input);
+    }
+
+    // Emit printable typing immediately before the PTY write. This lets the UI
+    // decorate split input calls at the actual cursor position; command notices
+    // above remain whole and are emitted only when Enter submits the line.
+    let typing_text = data_arg.trim_end_matches(['\r', '\n']);
+    if !typing_text.is_empty()
+        && typing_text
+            .chars()
+            .all(|ch| !ch.is_control() || matches!(ch, '\r' | '\n'))
+    {
+        state.emit_terminal_input(
+            session_id,
+            typing_text.to_string(),
+            TerminalInputKind::Typing,
+        );
+    }
+
+    if let Err(error) = session.send_input(data.clone()).await {
+        state.agent_input_tracker.restore(tracker_checkpoint).await;
+        return Err(format!("Failed to send terminal input: {}", error));
+    }
 
     Ok(format!(
         "Sent {} byte(s) to session '{}'",
@@ -914,6 +1095,19 @@ async fn tool_exec(state: &McpState, args: &Value) -> Result<String, String> {
         .get(session_id)
         .await
         .ok_or("Session not found")?;
+
+    // Gate risky exec commands, then surface them in the shared terminal so the
+    // human collaborator can see out-of-band work too.
+    let cfg = state.load_guard_config();
+    if cfg.enabled && cfg.require_for_exec {
+        let decision = guard::classify_command(command, &cfg);
+        if decision.requires_approval {
+            state
+                .require_approval("exec", Some(session_id), command, decision.reasons)
+                .await?;
+        }
+    }
+    state.emit_terminal_input(session_id, command.to_string(), TerminalInputKind::Exec);
 
     // Execute command via a dedicated exec channel (separate from the shell).
     // This opens a new SSH channel, runs the command, and captures stdout+stderr.

@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod app;
 pub mod cloud_sync;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -22,6 +23,7 @@ pub mod sftp;
 pub mod snippet;
 pub mod tunnel;
 
+pub use agent::*;
 pub use app::*;
 pub use cloud_sync::*;
 pub use coding_agent::*;
