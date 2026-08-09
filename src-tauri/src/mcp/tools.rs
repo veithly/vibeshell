@@ -415,7 +415,7 @@ fn session_resize_tool() -> ToolDefinition {
 fn exec_tool() -> ToolDefinition {
     ToolDefinition::new(
         "exec",
-        "Execute a command on a separate SSH exec channel and return stdout+stderr. Use session_send_input instead when collaborating in the human's visible terminal or when shell state must be shared; this isolated command is shown as an AI activity notice but does not change the interactive shell's cwd or environment.",
+        "Execute a command on a separate SSH exec channel and return stdout+stderr. This command is not written to the shared terminal. For normal collaborative work, use session_send_input instead; only use exec when the user explicitly asks for isolated or background execution. It does not change the interactive shell's cwd or environment.",
         json!({
             "type": "object",
             "properties": {
@@ -927,5 +927,21 @@ mod tests {
         let json = serde_json::to_string(&tool).expect("Should serialize");
         assert!(json.contains("server_list"));
         assert!(json.contains("inputSchema"));
+    }
+
+    #[test]
+    fn collaborative_command_guidance_prefers_shared_terminal() {
+        let shared = session_send_input_tool();
+        let isolated = exec_tool();
+
+        assert!(shared
+            .description
+            .contains("Prefer this for collaborative work"));
+        assert!(isolated
+            .description
+            .contains("only use exec when the user explicitly asks for isolated"));
+        assert!(isolated
+            .description
+            .contains("not written to the shared terminal"));
     }
 }

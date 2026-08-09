@@ -205,6 +205,24 @@ mod tests {
     }
 
     #[test]
+    fn skill_defaults_to_the_shared_terminal_for_commands() {
+        let content = render_skill_md().unwrap();
+
+        assert!(
+            content.contains("Default to `session_send_input` for every command"),
+            "the skill must make shared-terminal execution the default"
+        );
+        assert!(
+            content.contains("Use `exec` only when the user explicitly asks for an isolated"),
+            "the skill must reserve exec for explicitly isolated work"
+        );
+        assert!(
+            !content.contains("Use `exec` for reliable non-interactive commands."),
+            "the old isolated-exec default must not remain"
+        );
+    }
+
+    #[test]
     fn skill_install_is_confined_to_injected_directories() {
         let dir = TempDir::new().unwrap();
         let skills_dir = dir.path().join("skills");

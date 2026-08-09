@@ -50,17 +50,17 @@ Tool results are returned in `result.content[0].text`. When `result.isError` is 
 1. Call `server_list` when the server name or ID is unknown.
 2. Call `session_list` and reuse a connected session for the same server when possible.
 3. Call `session_create` with `server_name` or `server_id`. It reuses the earliest connected session by default; set `force_new: true` only when the user requests a parallel login.
-4. Use `exec` for reliable non-interactive commands. The GUI activity panel shows the command and its status.
-5. Use `session_send_input` when the user should watch or interact with the command in the shared terminal. Set `append_enter: true`, then use `session_read` to inspect recent terminal output.
+4. **Default to `session_send_input` for every command the user should see.** Set `append_enter: true`, then use `session_read` to inspect recent terminal output. This is the collaborative path: the command, its output, shell state, and working directory stay in the human's visible terminal.
+5. Use `exec` only when the user explicitly asks for an isolated or background command. `exec` runs on a separate SSH channel and its command/output will not appear in the shared terminal.
 6. Use named keys such as `enter`, `ctrl-c`, or `escape` for prompts. Do not create another session to answer an existing prompt.
 
 Examples:
 
 ```json
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"session_create","arguments":{"server_name":"prod"}}}
-{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"exec","arguments":{"session_id":"<id>","command":"uname -a"}}}
-{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"session_send_input","arguments":{"session_id":"<id>","data":"journalctl -u nginx -n 100","append_enter":true}}}
-{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"session_read","arguments":{"session_id":"<id>","max_bytes":20000}}}
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"session_send_input","arguments":{"session_id":"<id>","data":"uname -a","append_enter":true}}}
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"session_read","arguments":{"session_id":"<id>","max_bytes":20000}}}
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"exec","arguments":{"session_id":"<id>","command":"uname -a"}}}
 ```
 
 ## Remote Files
