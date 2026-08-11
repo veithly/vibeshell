@@ -4,6 +4,8 @@
 
 # VibeShell
 
+[![MCP Toplist](https://mcptoplist.com/badge/pulsemcp%2Fveithly-vibeshell.svg)](https://mcptoplist.com/server/pulsemcp%2Fveithly-vibeshell)
+
 **An AI-native SSH, SFTP, tunnel, and local terminal workspace for developers who ship from the command line.**
 
 [![Release](https://img.shields.io/github/v/release/veithly/vibeshell?style=flat-square&color=7aa2f7)](https://github.com/veithly/vibeshell/releases)
