@@ -1,6 +1,6 @@
 {
   "name": "vibeshell",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "High-performance SSH/SFTP terminal with AI integration",
   "type": "module",
   "scripts": {
