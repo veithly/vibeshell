@@ -17,7 +17,7 @@ use crate::session::SessionManager;
 use crate::storage::Database;
 
 use super::server::McpState;
-use super::tools::get_tool_definitions;
+use super::tools::get_compact_tool_definitions;
 
 /// MCP protocol version
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -171,7 +171,7 @@ async fn handle_request(state: &McpState, request: JsonRpcRequest) -> JsonRpcRes
             }
         }
         "tools/list" => {
-            let tools = get_tool_definitions();
+            let tools = get_compact_tool_definitions();
             JsonRpcResponse::success(request.id, json!({ "tools": tools }))
         }
         "tools/call" => match handle_tool_call(state, request.params).await {

@@ -46,6 +46,28 @@ impl SessionManager {
         sessions.get(id).cloned()
     }
 
+    /// Resolve a full session UUID or an unambiguous prefix for MCP callers.
+    pub async fn resolve(&self, id: &str) -> Result<Arc<Session>> {
+        if let Some(session) = self.sessions.read().await.get(id).cloned() {
+            return Ok(session);
+        }
+        let needle = id.trim().to_ascii_lowercase();
+        if needle.len() < 4 {
+            return Err(anyhow::anyhow!("Session reference '{}' is too short", id));
+        }
+        let sessions = self.sessions.read().await;
+        let matches: Vec<_> = sessions
+            .values()
+            .filter(|session| session.id.to_ascii_lowercase().starts_with(&needle))
+            .cloned()
+            .collect();
+        match matches.as_slice() {
+            [session] => Ok(session.clone()),
+            [] => Err(anyhow::anyhow!("Session not found: {}", id)),
+            _ => Err(anyhow::anyhow!("Ambiguous session reference: {}", id)),
+        }
+    }
+
     pub async fn find_reusable_by_server_name(&self, server_name: &str) -> Option<Arc<Session>> {
         // A session is only reusable if the server config has not changed since
         // the session was created. Otherwise stale connections would mask
@@ -674,5 +696,52 @@ impl SessionManager {
         sessions.clear();
         info!("[SessionManager] Killed {} sessions", count);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Database;
+    use tokio::sync::{broadcast, mpsc};
+
+    async fn manager_with_ids(ids: &[&str]) -> SessionManager {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Arc::new(Database::new_at(temp.path().join("sessions.db")).unwrap());
+        let manager = SessionManager::new(database);
+        let mut sessions = manager.sessions.write().await;
+        for id in ids {
+            let (input_tx, _) = mpsc::channel(1);
+            let (output_tx, _) = broadcast::channel(1);
+            let mut session = Session::new("server".into(), "server".into(), input_tx, output_tx);
+            session.id = (*id).into();
+            sessions.insert(session.id.clone(), Arc::new(session));
+        }
+        drop(sessions);
+        manager
+    }
+
+    #[tokio::test]
+    async fn resolve_accepts_full_and_unique_prefix() {
+        let manager = manager_with_ids(&["abcdef01-0000-0000-0000-000000000001"]).await;
+        assert_eq!(
+            manager.resolve("abcdef01").await.unwrap().id,
+            "abcdef01-0000-0000-0000-000000000001"
+        );
+        assert!(manager.resolve("abc").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_ambiguous_prefix() {
+        let manager = manager_with_ids(&[
+            "abcdef01-0000-0000-0000-000000000001",
+            "abcdef01-0000-0000-0000-000000000002",
+        ])
+        .await;
+        let error = match manager.resolve("abcdef01").await {
+            Ok(_) => panic!("ambiguous prefix should fail"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("Ambiguous"));
     }
 }

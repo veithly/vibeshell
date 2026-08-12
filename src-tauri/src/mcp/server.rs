@@ -33,7 +33,7 @@ use crate::storage::Database;
 
 use super::approval::{AgentApprovalManager, ApprovalOutcome, ApprovalRequest};
 use super::guard::{self, GuardConfig, GUARD_CONFIG_KEY};
-use super::tools::get_tool_definitions;
+use super::tools::get_compact_tool_definitions;
 
 /// MCP protocol version
 pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -425,7 +425,7 @@ async fn handle_initialize(_params: Option<Value>) -> Result<Value, (i32, String
 
 /// Handle the `tools/list` method
 async fn handle_tools_list() -> Result<Value, (i32, String)> {
-    let tools = get_tool_definitions();
+    let tools = get_compact_tool_definitions();
     Ok(json!({
         "tools": tools
     }))
@@ -605,7 +605,82 @@ async fn tool_server_list(state: &McpState, args: &Value) -> Result<String, Stri
         .server_list(group_id, tags.as_deref())
         .map_err(|e| e.to_string())?;
 
-    serde_json::to_string_pretty(&servers).map_err(|e| e.to_string())
+    let server_ids: Vec<&str> = servers.iter().map(|server| server.id.as_str()).collect();
+    let compact: Vec<Value> = servers
+        .iter()
+        .map(|server| {
+            json!({
+                "id": unique_short_id(&server.id, &server_ids),
+                "name": &server.name,
+                "host": &server.host,
+                "port": server.port,
+                "user": &server.username,
+                "auth": &server.auth_type,
+            })
+        })
+        .collect();
+    serde_json::to_string(&compact).map_err(|e| e.to_string())
+}
+
+fn short_id(id: &str) -> &str {
+    id.get(..8).unwrap_or(id)
+}
+
+fn unique_short_id<'a>(id: &'a str, ids: &[&str]) -> &'a str {
+    let mut length = id.len().min(8);
+    while length < id.len()
+        && ids
+            .iter()
+            .any(|candidate| *candidate != id && candidate.starts_with(&id[..length]))
+    {
+        length += 1;
+    }
+    &id[..length]
+}
+
+fn resolve_server_id(state: &McpState, reference: &str) -> Result<String, String> {
+    if state
+        .database
+        .server_get(reference)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return Ok(reference.to_string());
+    }
+    if let Some(server) = state
+        .database
+        .server_get_by_name(reference)
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(server.id);
+    }
+    let needle = reference.to_ascii_lowercase();
+    if needle.len() < 4 {
+        return Err(format!("Server reference '{}' is too short", reference));
+    }
+    let matches: Vec<_> = state
+        .database
+        .server_list(None, None)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|server| server.id.to_ascii_lowercase().starts_with(&needle))
+        .collect();
+    match matches.as_slice() {
+        [server] => Ok(server.id.clone()),
+        [] => Err(format!("Server not found: {}", reference)),
+        _ => Err(format!("Ambiguous server reference: {}", reference)),
+    }
+}
+
+async fn resolve_session(
+    state: &McpState,
+    reference: &str,
+) -> Result<Arc<crate::session::Session>, String> {
+    state
+        .session_manager
+        .resolve(reference)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn tool_server_add(state: &McpState, args: &Value) -> Result<String, String> {
@@ -667,13 +742,17 @@ async fn tool_server_add(state: &McpState, args: &Value) -> Result<String, Strin
 
     Ok(format!(
         "Server '{}' added successfully with ID: {}",
-        server.name, server.id
+        server.name,
+        short_id(&server.id)
     ))
 }
 
 async fn tool_server_get(state: &McpState, args: &Value) -> Result<String, String> {
     let server = if let Some(id) = args.get("id").and_then(|v| v.as_str()) {
-        state.database.server_get(id).map_err(|e| e.to_string())?
+        state
+            .database
+            .server_get(&resolve_server_id(state, id)?)
+            .map_err(|e| e.to_string())?
     } else if let Some(name) = args.get("name").and_then(|v| v.as_str()) {
         state
             .database
@@ -684,7 +763,7 @@ async fn tool_server_get(state: &McpState, args: &Value) -> Result<String, Strin
     };
 
     match server {
-        Some(s) => serde_json::to_string_pretty(&s).map_err(|e| e.to_string()),
+        Some(s) => serde_json::to_string(&json!({"id": short_id(&s.id), "name": s.name, "host": s.host, "port": s.port, "user": s.username, "auth": s.auth_type})).map_err(|e| e.to_string()),
         None => Err("Server not found".to_string()),
     }
 }
@@ -694,10 +773,11 @@ async fn tool_server_update(state: &McpState, args: &Value) -> Result<String, St
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: id")?;
+    let id = resolve_server_id(state, id)?;
 
     let mut server = state
         .database
-        .server_get(id)
+        .server_get(&id)
         .map_err(|e| e.to_string())?
         .ok_or("Server not found")?;
 
@@ -742,20 +822,33 @@ async fn tool_server_delete(state: &McpState, args: &Value) -> Result<String, St
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: id")?;
+    let id = resolve_server_id(state, id)?;
 
     state
         .database
-        .server_delete(id)
+        .server_delete(&id)
         .map_err(|e| e.to_string())?;
 
-    Ok(format!("Server '{}' deleted successfully", id))
+    Ok(format!("Server '{}' deleted successfully", short_id(&id)))
 }
 
 // === Session Management Tool Implementations ===
 
 async fn tool_session_list(state: &McpState) -> Result<String, String> {
     let sessions = state.session_manager.list().await;
-    serde_json::to_string_pretty(&sessions).map_err(|e| e.to_string())
+    let session_ids: Vec<&str> = sessions.iter().map(|session| session.id.as_str()).collect();
+    let compact: Vec<Value> = sessions
+        .iter()
+        .map(|session| {
+            json!({
+                "id": unique_short_id(&session.id, &session_ids),
+                "server": &session.server_name,
+                "state": &session.state,
+                "clients": session.clients,
+            })
+        })
+        .collect();
+    serde_json::to_string(&compact).map_err(|e| e.to_string())
 }
 
 async fn tool_session_create(state: &McpState, args: &Value) -> Result<String, String> {
@@ -765,7 +858,7 @@ async fn tool_session_create(state: &McpState, args: &Value) -> Result<String, S
     } else if let Some(server_id) = args.get("server_id").and_then(|v| v.as_str()) {
         let server = state
             .database
-            .server_get(server_id)
+            .server_get(&resolve_server_id(state, server_id)?)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Server not found: {}", server_id))?;
         server.name
@@ -784,7 +877,7 @@ async fn tool_session_create(state: &McpState, args: &Value) -> Result<String, S
             .find_reusable_by_server_name(&server_name)
             .await
         {
-            return serde_json::to_string_pretty(&session.get_info().await)
+            return serde_json::to_string(&json!({"id": short_id(&session.id), "server": session.server_name, "state": session.get_state().await, "clients": session.client_count().await}))
                 .map_err(|error| error.to_string());
         }
     }
@@ -828,7 +921,7 @@ async fn tool_session_create(state: &McpState, args: &Value) -> Result<String, S
         .map_err(|e| format!("Failed to connect to '{}': {}", server_name, e))?;
 
     let info = session.get_info().await;
-    serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
+    serde_json::to_string(&json!({"id": short_id(&info.id), "server": info.server_name, "state": info.state, "clients": info.clients})).map_err(|e| e.to_string())
 }
 
 async fn tool_session_attach(state: &McpState, args: &Value) -> Result<String, String> {
@@ -837,11 +930,7 @@ async fn tool_session_attach(state: &McpState, args: &Value) -> Result<String, S
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: session_id")?;
 
-    let session = state
-        .session_manager
-        .get(session_id)
-        .await
-        .ok_or("Session not found")?;
+    let session = resolve_session(state, session_id).await?;
 
     session.attach().await;
 
@@ -858,11 +947,7 @@ async fn tool_session_detach(state: &McpState, args: &Value) -> Result<String, S
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: session_id")?;
 
-    let session = state
-        .session_manager
-        .get(session_id)
-        .await
-        .ok_or("Session not found")?;
+    let session = resolve_session(state, session_id).await?;
 
     session.detach().await;
 
@@ -888,10 +973,11 @@ async fn tool_session_kill(state: &McpState, args: &Value) -> Result<String, Str
             .get("session_id")
             .and_then(|v| v.as_str())
             .ok_or("Missing 'session_id' or 'all' parameter")?;
+        let session = resolve_session(state, session_id).await?;
 
         state
             .session_manager
-            .kill(session_id)
+            .kill(&session.id)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -928,19 +1014,19 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
         return Err("Provide data, keys, or append_enter=true".to_string());
     }
 
-    let session = state
-        .session_manager
-        .get(session_id)
-        .await
-        .ok_or("Session not found")?;
+    let session = resolve_session(state, session_id).await?;
+    let resolved_session_id = session.id.clone();
 
     // Keep the tracker transaction open until approval and the PTY write both
     // succeed. If either fails, rolling back prevents a denied split command
     // from being submitted later with a bare Enter that appears harmless.
-    let _session_input_guard = state.agent_input_tracker.lock_session(session_id).await;
+    let _session_input_guard = state
+        .agent_input_tracker
+        .lock_session(&resolved_session_id)
+        .await;
     let (tracker_checkpoint, executed_commands) = state
         .agent_input_tracker
-        .checkpoint_and_observe(session_id, data_arg, &keys_arg, append_enter)
+        .checkpoint_and_observe(&resolved_session_id, data_arg, &keys_arg, append_enter)
         .await;
 
     // Gate and surface commands that will actually execute in the shared terminal.
@@ -959,7 +1045,7 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
                 if let Err(error) = state
                     .require_approval(
                         "session_send_input",
-                        Some(session_id),
+                        Some(&resolved_session_id),
                         &command.command,
                         decision.reasons,
                     )
@@ -971,7 +1057,11 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
             }
         }
 
-        state.emit_terminal_input(session_id, command.command, TerminalInputKind::Input);
+        state.emit_terminal_input(
+            &resolved_session_id,
+            command.command,
+            TerminalInputKind::Input,
+        );
     }
 
     // Emit printable typing immediately before the PTY write. This lets the UI
@@ -984,7 +1074,7 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
             .all(|ch| !ch.is_control() || matches!(ch, '\r' | '\n'))
     {
         state.emit_terminal_input(
-            session_id,
+            &resolved_session_id,
             typing_text.to_string(),
             TerminalInputKind::Typing,
         );
@@ -1029,11 +1119,7 @@ async fn tool_session_read(state: &McpState, args: &Value) -> Result<String, Str
         .and_then(Value::as_u64)
         .unwrap_or(65_536)
         .clamp(1, 65_536) as usize;
-    let session = state
-        .session_manager
-        .get(session_id)
-        .await
-        .ok_or("Session not found")?;
+    let session = resolve_session(state, session_id).await?;
 
     let output = session.replay_output().await.concat();
     let start = output.len().saturating_sub(max_bytes);
@@ -1057,11 +1143,7 @@ async fn tool_session_resize(state: &McpState, args: &Value) -> Result<String, S
         return Err("cols and rows must be greater than zero".to_string());
     }
 
-    let session = state
-        .session_manager
-        .get(session_id)
-        .await
-        .ok_or("Session not found")?;
+    let session = resolve_session(state, session_id).await?;
     session
         .resize_pty(cols, rows)
         .await
@@ -1090,11 +1172,8 @@ async fn tool_exec(state: &McpState, args: &Value) -> Result<String, String> {
         .and_then(|v| v.as_u64())
         .unwrap_or(30000);
 
-    let session = state
-        .session_manager
-        .get(session_id)
-        .await
-        .ok_or("Session not found")?;
+    let session = resolve_session(state, session_id).await?;
+    let resolved_session_id = session.id.clone();
 
     // Gate risky exec commands, then surface them in the shared terminal so the
     // human collaborator can see out-of-band work too.
@@ -1103,11 +1182,20 @@ async fn tool_exec(state: &McpState, args: &Value) -> Result<String, String> {
         let decision = guard::classify_command(command, &cfg);
         if decision.requires_approval {
             state
-                .require_approval("exec", Some(session_id), command, decision.reasons)
+                .require_approval(
+                    "exec",
+                    Some(&resolved_session_id),
+                    command,
+                    decision.reasons,
+                )
                 .await?;
         }
     }
-    state.emit_terminal_input(session_id, command.to_string(), TerminalInputKind::Exec);
+    state.emit_terminal_input(
+        &resolved_session_id,
+        command.to_string(),
+        TerminalInputKind::Exec,
+    );
 
     // Execute command via a dedicated exec channel (separate from the shell).
     // This opens a new SSH channel, runs the command, and captures stdout+stderr.
@@ -1169,11 +1257,7 @@ async fn tool_remote_rg(state: &McpState, args: &Value) -> Result<String, String
     options.max_results = max_results;
 
     let command = build_remote_rg_command(&options);
-    let session = state
-        .session_manager
-        .get(session_id)
-        .await
-        .ok_or("Session not found")?;
+    let session = resolve_session(state, session_id).await?;
 
     let timeout_duration = tokio::time::Duration::from_millis(timeout_ms);
     tokio::time::timeout(timeout_duration, session.exec_command(&command))
@@ -1190,11 +1274,7 @@ async fn open_sftp_for_session(
     state: &McpState,
     session_id: &str,
 ) -> Result<(russh_sftp::client::SftpSession, String), String> {
-    let session = state
-        .session_manager
-        .get(session_id)
-        .await
-        .ok_or("Session not found")?;
+    let session = resolve_session(state, session_id).await?;
 
     let sftp = session
         .open_sftp_session()
@@ -1900,5 +1980,22 @@ mod tests {
         assert_eq!(started.tool, "session_list");
         assert_eq!(started.status, AgentActivityStatus::Started);
         assert_eq!(completed.status, AgentActivityStatus::Succeeded);
+    }
+
+    #[test]
+    fn short_ids_expand_only_when_the_default_prefix_is_ambiguous() {
+        let ids = [
+            "abcdef01-0000-0000-0000-000000000001",
+            "abcdef02-0000-0000-0000-000000000002",
+            "12345678-0000-0000-0000-000000000003",
+        ];
+        assert_eq!(unique_short_id(ids[0], &ids), "abcdef01");
+        assert_eq!(unique_short_id(ids[2], &ids), "12345678");
+
+        let ambiguous = [
+            "abcdef01-0000-0000-0000-000000000001",
+            "abcdef01-0000-0000-0000-000000000002",
+        ];
+        assert_ne!(unique_short_id(ambiguous[0], &ambiguous), "abcdef01");
     }
 }

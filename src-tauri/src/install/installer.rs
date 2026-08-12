@@ -11,12 +11,18 @@ use super::detector::{
 const SKILL_DIR_NAME: &str = "vibeshell";
 const LEGACY_SKILL_DIR_NAME: &str = "vshell";
 const GATEWAY_SKILL_MD_TEMPLATE: &str = include_str!("gateway-skill.md");
+const GATEWAY_CLIENT_TEMPLATE: &str = include_str!("gateway-client.mjs");
 
 fn render_skill_md() -> Result<String> {
+    Ok(GATEWAY_SKILL_MD_TEMPLATE.to_string())
+}
+
+fn render_gateway_client() -> Result<String> {
     let manifest_path = crate::mcp::gateway_manifest_path()?
         .to_string_lossy()
         .into_owned();
-    Ok(GATEWAY_SKILL_MD_TEMPLATE.replace("{{MANIFEST_PATH}}", &manifest_path))
+    let manifest_json = serde_json::to_string(&manifest_path)?;
+    Ok(GATEWAY_CLIENT_TEMPLATE.replace("{{MANIFEST_PATH_JSON}}", &manifest_json))
 }
 
 fn install_skill_file(tool_id: &str) -> Result<Vec<PathBuf>> {
@@ -27,6 +33,7 @@ fn install_skill_file(tool_id: &str) -> Result<Vec<PathBuf>> {
 
 fn install_skill_file_to_dirs(skills_dirs: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
     let skill_content = render_skill_md()?;
+    let client_content = render_gateway_client()?;
     let mut installed_paths = Vec::new();
 
     for skills_dir in skills_dirs {
@@ -37,6 +44,10 @@ fn install_skill_file_to_dirs(skills_dirs: Vec<PathBuf>) -> Result<Vec<PathBuf>>
         let skill_path = skill_dir.join("SKILL.md");
         fs::write(&skill_path, &skill_content)
             .with_context(|| format!("Failed to write skill file {:?}", skill_path))?;
+
+        let client_path = skill_dir.join("gateway.mjs");
+        fs::write(&client_path, &client_content)
+            .with_context(|| format!("Failed to write gateway client {:?}", client_path))?;
 
         let legacy_skill_dir = skills_dir.join(LEGACY_SKILL_DIR_NAME);
         if legacy_skill_dir.exists() && legacy_skill_dir != skill_dir {
@@ -183,7 +194,7 @@ mod tests {
         for required in [
             "name: vibeshell",
             "Agent Gateway",
-            "Authorization: Bearer",
+            "gateway.mjs",
             "server_list",
             "session_create",
             "session_send_input",
@@ -193,15 +204,13 @@ mod tests {
             "get_content",
             "edit_file",
             "add_file",
-            "macOS",
-            "Linux",
-            "Windows",
+            "credentials remain in the GUI",
         ] {
             assert!(content.contains(required), "missing {required}");
         }
         assert!(!content.contains("vshell daemon"));
         assert!(!content.contains("vshell ssh"));
-        assert!(!content.contains("{{MANIFEST_PATH}}"));
+        assert!(!content.contains("agent-gateway.json"));
     }
 
     #[test]
@@ -209,11 +218,12 @@ mod tests {
         let content = render_skill_md().unwrap();
 
         assert!(
-            content.contains("Default to `session_send_input` for every command"),
+            content.contains("always use `send` (MCP `session_send_input`)"),
             "the skill must make shared-terminal execution the default"
         );
         assert!(
-            content.contains("Use `exec` only when the user explicitly asks for an isolated"),
+            content
+                .contains("Use `exec` only when the user explicitly asks for isolated/background"),
             "the skill must reserve exec for explicitly isolated work"
         );
         assert!(
@@ -233,5 +243,9 @@ mod tests {
         let content = fs::read_to_string(skill_path).unwrap();
         assert!(content.contains("name: vibeshell"));
         assert!(content.contains("Agent Gateway"));
+        assert!(skills_dir.join(SKILL_DIR_NAME).join("gateway.mjs").exists());
+        let client =
+            fs::read_to_string(skills_dir.join(SKILL_DIR_NAME).join("gateway.mjs")).unwrap();
+        assert!(!client.contains("{{MANIFEST_PATH_JSON}}"));
     }
 }

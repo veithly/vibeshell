@@ -70,6 +70,46 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
     ]
 }
 
+/// Compact definitions for agents that already know the Gateway workflow.
+/// Keep names and schema semantics, but remove prose that is repeated on every
+/// connection and every `tools/list` response.
+pub fn get_compact_tool_definitions() -> Vec<ToolDefinition> {
+    get_tool_definitions()
+        .into_iter()
+        .map(|mut tool| {
+            tool.description = compact_description(&tool.name);
+            compact_schema(&mut tool.input_schema);
+            tool
+        })
+        .collect()
+}
+
+fn compact_description(name: &str) -> String {
+    match name {
+        "session_send_input" => "Send visible terminal input (approval-gated).".to_string(),
+        "session_read" => "Read recent visible terminal output.".to_string(),
+        "exec" => "Run isolated SSH command (approval-gated).".to_string(),
+        "server_list" => "List saved servers.".to_string(),
+        "session_list" => "List sessions.".to_string(),
+        _ => name.replace('_', " "),
+    }
+}
+
+fn compact_schema(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.remove("description");
+            map.remove("default");
+            map.remove("title");
+            for child in map.values_mut() {
+                compact_schema(child);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(compact_schema),
+        _ => {}
+    }
+}
+
 // === Server Management Tools ===
 
 fn server_list_tool() -> ToolDefinition {
@@ -943,5 +983,15 @@ mod tests {
         assert!(isolated
             .description
             .contains("not written to the shared terminal"));
+    }
+
+    #[test]
+    fn compact_definitions_drop_repeated_schema_prose() {
+        let tools = get_compact_tool_definitions();
+        assert_eq!(tools.len(), 28);
+        let encoded = serde_json::to_string(&tools).unwrap();
+        assert!(!encoded.contains("Filter servers by group ID"));
+        assert!(!encoded.contains("\"default\""));
+        assert!(encoded.contains("session_send_input"));
     }
 }
