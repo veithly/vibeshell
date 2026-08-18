@@ -123,7 +123,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be after epoch")
             .as_nanos();
-        path.push(format!("vshell-command-{unique}.txt"));
+        path.push(format!("vibeshell-command-{unique}.txt"));
 
         std::fs::write(&path, "echo one\r\necho two\r\n").expect("temp file should be written");
 

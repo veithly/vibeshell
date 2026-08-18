@@ -4788,6 +4788,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yaml"
+version = "0.9.34+deprecated"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
+dependencies = [
+ "indexmap 2.13.0",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
+]
+
+[[package]]
 name = "serial"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6098,6 +6111,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
+
+[[package]]
 name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6177,7 +6196,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
-name = "vibeshell"
+name = "vibeshell-desktop"
 version = "1.0.9"
 dependencies = [
  "anyhow",
@@ -6188,6 +6207,7 @@ dependencies = [
  "chrono",
  "directories",
  "env_logger",
+ "glob",
  "ignore",
  "interprocess",
  "log",
@@ -6202,7 +6222,9 @@ dependencies = [
  "russh-sftp",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2",
+ "shlex",
  "subtle",
  "tauri",
  "tauri-build",
@@ -6217,6 +6239,7 @@ dependencies = [
  "uuid",
  "which",
  "windows-sys 0.59.0",
+ "winreg 0.55.0",
  "zeroize",
 ]
 
@@ -6231,7 +6254,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "vibeshell",
+ "vibeshell-desktop",
 ]
 
 [[package]]

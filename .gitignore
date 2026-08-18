@@ -59,8 +59,9 @@ Desktop.ini
 src-tauri/target/
 # Tauri regenerates ACL schemas, while mobile platform projects are source artifacts.
 src-tauri/gen/schemas/
-# Legacy standalone CLI build artifacts are not bundled with the desktop app.
+# Target-suffixed native CLI sidecars are generated before desktop packaging.
 src-tauri/binaries/vshell*
+src-tauri/binaries/vibeshell*
 !src-tauri/binaries/.gitkeep
 
 # ============================================

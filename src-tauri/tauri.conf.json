@@ -3,6 +3,7 @@
   "productName": "VibeShell",
   "version": "1.0.9",
   "identifier": "com.vibeshell.desktop",
+  "mainBinaryName": "vibeshell-desktop",
   "build": {
     "beforeDevCommand": "node node_modules/vite/bin/vite.js",
     "devUrl": "http://localhost:1420",
@@ -42,7 +43,16 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "both"
+        "installMode": "both",
+        "installerHooks": "nsis-hooks.nsh"
+      },
+      "wix": {
+        "fragmentPaths": [
+          "wix-path-fragment.wxs"
+        ],
+        "componentGroupRefs": [
+          "VshellPathEnvGroup"
+        ]
       }
     }
   },

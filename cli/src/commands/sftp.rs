@@ -683,7 +683,7 @@ mod tests {
             .expect("system time before Unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "vshell-sftp-{}-{}-{}",
+            "vibeshell-sftp-{}-{}-{}",
             name,
             std::process::id(),
             stamp

@@ -4,11 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "vshell"
+name = "vibeshell"
 path = "src/main.rs"
 
 [dependencies]
-vibeshell-core = { path = "../src-tauri", package = "vibeshell" }
+vibeshell-core = { path = "../src-tauri", package = "vibeshell-desktop" }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 serde.workspace = true

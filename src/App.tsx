@@ -82,7 +82,7 @@ function App() {
   } = useSessionStore();
   const { currentView, goToMain, goToSettings, goToPlugins } = useNavigationStore();
   const { warning: notifyWarning, error: notifyError } = useNotificationStore();
-  const { settings, initializeSettings } = useSettingsStore();
+  const { settings, initializeSettings, updateAppearanceSettings } = useSettingsStore();
   const { checkForUpdates, markVersionNotified } = useUpdateStore();
   const servers = useServerStore((state) => state.servers);
   const fetchServers = useServerStore((state) => state.fetchServers);
@@ -125,6 +125,35 @@ function App() {
   useEffect(() => {
     initializeSettings();
   }, [initializeSettings]);
+
+  // Keep the resolved theme in sync with the operating system while the user
+  // has selected the system mode. The resolved `theme` is shared by terminal
+  // and overlay components, so they update immediately when the OS changes.
+  useEffect(() => {
+    if (settings.appearance.themeMode !== 'system' || typeof window === 'undefined' || !window.matchMedia) {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const applySystemTheme = () => {
+      const nextTheme = mediaQuery.matches
+        ? settings.appearance.darkTheme
+        : settings.appearance.lightTheme;
+      if (settings.appearance.theme !== nextTheme) {
+        void updateAppearanceSettings({ theme: nextTheme });
+      }
+    };
+
+    applySystemTheme();
+    mediaQuery.addEventListener?.('change', applySystemTheme);
+    return () => mediaQuery.removeEventListener?.('change', applySystemTheme);
+  }, [
+    settings.appearance.theme,
+    settings.appearance.themeMode,
+    settings.appearance.lightTheme,
+    settings.appearance.darkTheme,
+    updateAppearanceSettings,
+  ]);
 
   useEffect(() => {
     void loadRuntimeCapabilities();

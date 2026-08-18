@@ -400,6 +400,21 @@ pub fn get_installed_tools() -> Vec<AiTool> {
         .collect()
 }
 
+/// Get the tools that should receive the bundled skill automatically.
+///
+/// Installed coding agents are targeted directly, and the universal
+/// `~/.agents/skills` location is always included so agents that support the
+/// shared convention discover VibeShell without a separate installation step.
+pub fn get_default_install_tools() -> Vec<AiTool> {
+    let mut tools = get_installed_tools();
+    if !tools.iter().any(|tool| tool.id == "agents") {
+        if let Some(universal) = find_tool("agents") {
+            tools.push(universal);
+        }
+    }
+    tools
+}
+
 /// Get all tools that have the VibeShell skill installed.
 pub fn get_configured_tools() -> Vec<AiTool> {
     detect_ai_tools()
@@ -528,5 +543,11 @@ mod tests {
     fn test_skill_dir_names_include_current_and_legacy_names() {
         assert!(SKILL_DIR_NAMES.contains(&"vibeshell"));
         assert!(SKILL_DIR_NAMES.contains(&"vshell"));
+    }
+
+    #[test]
+    fn default_install_tools_always_include_universal_agents_directory() {
+        let tools = get_default_install_tools();
+        assert!(tools.iter().any(|tool| tool.id == "agents"));
     }
 }

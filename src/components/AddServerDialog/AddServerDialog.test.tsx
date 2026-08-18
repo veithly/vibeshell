@@ -56,12 +56,11 @@ describe('AddServerDialog credential storage', () => {
     }));
   });
 
-  it('requires an explicit opt-in before saving credentials locally', () => {
+  it('explains that credentials are saved automatically on desktop', () => {
     render(<AddServerDialog isOpen onClose={() => {}} />);
 
-    expect(
-      screen.getByRole('checkbox', { name: 'Save credentials on this device' })
-    ).not.toBeChecked();
+    expect(screen.getByText('Credentials entered here are saved automatically on this device.'))
+      .toBeInTheDocument();
   });
 
   it('uses pasted key content instead of a desktop file picker on mobile', () => {
@@ -101,7 +100,6 @@ describe('AddServerDialog credential storage', () => {
     fireEvent.change(screen.getByPlaceholderText('Enter password...'), {
       target: { value: 'local-secret' },
     });
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Save credentials on this device' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add Server' }));
 
     await waitFor(() => expect(updateServer).toHaveBeenCalledWith('created-server', {

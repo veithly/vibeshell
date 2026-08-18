@@ -15,7 +15,12 @@ on:
       - 'vite.config.ts'
       - 'tailwind.config.js'
       - 'postcss.config.js'
-      - 'scripts/generate-latest-json.js'
+      - 'scripts/**'
+      - 'skills/**'
+      - '.claude-plugin/**'
+      - '.codex-plugin/**'
+      - '.claude/skills/**'
+      - '.codex/skills/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/release.yml'
@@ -100,7 +105,7 @@ jobs:
             jq --arg v "$NEW_VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
             npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version
             sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
-            cargo update -p vibeshell -p vshell
+            cargo update -p vibeshell-desktop -p vshell
           fi
 
       - name: Commit version bump
@@ -132,8 +137,9 @@ jobs:
           | macOS (Apple Silicon) | `.dmg` |
           | macOS (Intel) | `.dmg` |
           | Linux x64 | `.deb` / `.AppImage` |
+          | Headless servers | Native `VibeShell-CLI-*` archive for each platform |
 
-          > **Note:** Agent access is provided by the authenticated Gateway built into the visible VibeShell desktop app.
+          > **Note:** Desktop installers contain the native `vibeshell` command and automatically configure the bundled Skill for detected Coding Agents. Headless archives contain the same CLI, Skill, and a user-level installer; Node.js is not required.
 
           See [commit history](https://github.com/${{ github.repository }}/commits/${{ steps.bump.outputs.tag_name }}) for full changes.
           EOF
@@ -297,7 +303,8 @@ jobs:
             export APPLE_PROVIDER_SHORT_NAME="$VIBESHELL_APPLE_PROVIDER_SHORT_NAME"
           fi
 
-          npx tauri build ${{ matrix.args }}
+          node scripts/prepare-sidecar.mjs --target "${{ matrix.target }}"
+          npx tauri build ${{ matrix.args }} --config src-tauri/tauri.sidecar.conf.json
 
       - name: Repair unsigned macOS app bundle
         if: matrix.platform == 'macos-latest'
@@ -422,6 +429,56 @@ jobs:
             find target -maxdepth 5 -type f 2>/dev/null | sort || true
             exit 1
           fi
+
+          case "$TARGET" in
+            x86_64-pc-windows-msvc)
+              cli_slug="windows-x64"
+              cli_binary="target/${TARGET}/release/vibeshell.exe"
+              cli_archive="VibeShell-CLI-${VERSION}-${cli_slug}.zip"
+              ;;
+            aarch64-apple-darwin)
+              cli_slug="macos-arm64"
+              cli_binary="target/${TARGET}/release/vibeshell"
+              cli_archive="VibeShell-CLI-${VERSION}-${cli_slug}.tar.gz"
+              ;;
+            x86_64-apple-darwin)
+              cli_slug="macos-x64"
+              cli_binary="target/${TARGET}/release/vibeshell"
+              cli_archive="VibeShell-CLI-${VERSION}-${cli_slug}.tar.gz"
+              ;;
+            x86_64-unknown-linux-gnu)
+              cli_slug="linux-x64"
+              cli_binary="target/${TARGET}/release/vibeshell"
+              cli_archive="VibeShell-CLI-${VERSION}-${cli_slug}.tar.gz"
+              ;;
+            *)
+              echo "Unsupported CLI archive target: $TARGET"
+              exit 1
+              ;;
+          esac
+
+          if [ ! -f "$cli_binary" ]; then
+            echo "Native CLI binary not found: $cli_binary"
+            exit 1
+          fi
+
+          cli_dir="VibeShell-CLI-${VERSION}-${cli_slug}"
+          rm -rf "$cli_dir" "$cli_archive"
+          mkdir -p "$cli_dir/skills/vibeshell"
+          cp cli/README.md "$cli_dir/README.md"
+          cp skills/vibeshell/SKILL.md "$cli_dir/skills/vibeshell/SKILL.md"
+
+          if [[ "$TARGET" == *"windows"* ]]; then
+            cp "$cli_binary" "$cli_dir/vibeshell.exe"
+            cp scripts/install-cli.ps1 "$cli_dir/install.ps1"
+            7z a -tzip "$cli_archive" "$cli_dir" >/dev/null
+          else
+            cp "$cli_binary" "$cli_dir/vibeshell"
+            cp scripts/install-cli.sh "$cli_dir/install.sh"
+            chmod 755 "$cli_dir/vibeshell" "$cli_dir/install.sh"
+            tar -czf "$cli_archive" "$cli_dir"
+          fi
+          uploads+=("$cli_archive")
 
           printf 'Uploading release assets:\n'
           printf '  %s\n' "${uploads[@]}"

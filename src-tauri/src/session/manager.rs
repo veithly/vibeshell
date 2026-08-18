@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,6 +17,44 @@ pub enum SshCredential {
         key: String,
         passphrase: Option<String>,
     },
+}
+
+impl SshCredential {
+    /// Convert a device-local stored credential into the material required by
+    /// the SSH engine. Imported profiles keep only a private-key path in the
+    /// database; the key itself is read just before connecting.
+    pub fn from_stored(credential: crate::storage::database::Credential) -> Result<Self> {
+        match credential.auth_type.as_str() {
+            "password" => Ok(Self::Password(credential.credential)),
+            "key" | "key_with_passphrase" => {
+                let key = if credential.credential.trim().is_empty() {
+                    let key_path = credential.key_path.as_deref().ok_or_else(|| {
+                        anyhow!(
+                            "Private-key credential for '{}' has neither key data nor a key path",
+                            credential.server_name
+                        )
+                    })?;
+                    std::fs::read_to_string(key_path).with_context(|| {
+                        format!(
+                            "Failed to read private key for '{}' from {}",
+                            credential.server_name, key_path
+                        )
+                    })?
+                } else {
+                    credential.credential
+                };
+                Ok(Self::PrivateKey {
+                    key,
+                    passphrase: credential.passphrase.filter(|value| !value.is_empty()),
+                })
+            }
+            other => Err(anyhow!(
+                "Unknown auth type '{}' for server '{}'",
+                other,
+                credential.server_name
+            )),
+        }
+    }
 }
 
 pub struct SessionManager {
@@ -274,36 +312,31 @@ impl SessionManager {
             let (jump_output_tx, _jump_output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
             let mut jump_ssh = SshClient::new(jump_output_tx);
 
-            // Connect to jump host
-            match jump_cred.auth_type.as_str() {
-                "password" => {
+            // Connect to jump host. Imported profiles may reference a local
+            // key path instead of duplicating private-key contents in SQLite.
+            match SshCredential::from_stored(jump_cred)? {
+                SshCredential::Password(password) => {
                     info!("[SessionManager] Connecting to jump host with password...");
                     jump_ssh
                         .connect_password(
                             &jump_server.host,
                             jump_server.port,
                             &jump_server.username,
-                            &jump_cred.credential,
+                            &password,
                         )
                         .await?;
                 }
-                "key" | "key_with_passphrase" => {
+                SshCredential::PrivateKey { key, passphrase } => {
                     info!("[SessionManager] Connecting to jump host with key...");
                     jump_ssh
                         .connect_key(
                             &jump_server.host,
                             jump_server.port,
                             &jump_server.username,
-                            &jump_cred.credential,
-                            jump_cred.passphrase.as_deref(),
+                            &key,
+                            passphrase.as_deref(),
                         )
                         .await?;
-                }
-                _ => {
-                    return Err(anyhow!(
-                        "Unknown auth type for jump host: {}",
-                        jump_cred.auth_type
-                    ));
                 }
             }
 
@@ -743,5 +776,29 @@ mod tests {
             Err(error) => error.to_string(),
         };
         assert!(error.contains("Ambiguous"));
+    }
+
+    #[test]
+    fn stored_private_key_can_reference_a_local_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let key_path = temp.path().join("id_ed25519");
+        std::fs::write(&key_path, "private-key-material").unwrap();
+        let credential = crate::storage::database::Credential {
+            id: "credential-id".to_string(),
+            server_name: "imported".to_string(),
+            auth_type: "key_with_passphrase".to_string(),
+            credential: String::new(),
+            passphrase: Some(String::new()),
+            key_path: Some(key_path.to_string_lossy().into_owned()),
+            created_at: 0,
+        };
+
+        match SshCredential::from_stored(credential).unwrap() {
+            SshCredential::PrivateKey { key, passphrase } => {
+                assert_eq!(key, "private-key-material");
+                assert!(passphrase.is_none());
+            }
+            SshCredential::Password(_) => panic!("expected private-key credential"),
+        }
     }
 }

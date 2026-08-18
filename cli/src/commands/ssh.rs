@@ -3,7 +3,7 @@
 //! These commands allow initiating SSH connections to configured servers,
 //! entering an interactive terminal session, or running a single remote command.
 //! Interactive sessions are automatically assigned a short 3-digit alias so
-//! users can reference them via `vshell ssh-session <alias>` later.
+//! users can reference them via `vibeshell ssh-session <alias>` later.
 
 use std::io::Write;
 use std::time::Duration;
@@ -21,7 +21,7 @@ use crate::terminal;
 /// terminal connection. Press Ctrl+] to detach (session keeps running).
 ///
 /// A persistent 3-digit alias is assigned automatically so subsequent
-/// interactions can use `vshell ssh-session <alias>`.
+/// interactions can use `vibeshell ssh-session <alias>`.
 pub fn connect(server_name: &str, command: &[String], wait: bool, force_new: bool) -> Result<()> {
     let reused = if force_new {
         None
@@ -93,27 +93,27 @@ pub fn connect(server_name: &str, command: &[String], wait: bool, force_new: boo
         "Session {} (alias: {}) is still running.",
         session_id, alias
     );
-    eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
+    eprintln!("Next use: vibeshell ssh-session {} -- <command>", alias);
     eprintln!();
     eprintln!("  Next time, interact with this session using:");
     eprintln!(
-        "    vshell ssh-session {}              # Reattach interactively",
+        "    vibeshell ssh-session {}              # Reattach interactively",
         alias
     );
     eprintln!(
-        "    vshell ssh-session {} -- <command>  # Execute a single command",
+        "    vibeshell ssh-session {} -- <command>  # Execute a single command",
         alias
     );
     eprintln!(
-        "    vshell ssh-session {} --command-file ./remote-command.sh",
+        "    vibeshell ssh-session {} --command-file ./remote-command.sh",
         alias
     );
     eprintln!(
-        "    vshell sftp --session {}            # Open SFTP file browser",
+        "    vibeshell sftp --session {}            # Open SFTP file browser",
         session_id
     );
     eprintln!(
-        "    vshell kill {}                      # Terminate the session",
+        "    vibeshell kill {}                      # Terminate the session",
         alias
     );
 
@@ -208,12 +208,12 @@ fn run_isolated_command(
         eprintln!();
         eprintln!("Interactive input may be required. Send a response:");
         eprintln!(
-            "  vshell send-key {} y enter   # send 'y' then Enter",
+            "  vibeshell send-key {} y enter   # send 'y' then Enter",
             alias
         );
-        eprintln!("  vshell send-key {} enter      # press Enter", alias);
+        eprintln!("  vibeshell send-key {} enter      # press Enter", alias);
         eprintln!(
-            "  vshell ssh-session {}          # attach interactively",
+            "  vibeshell ssh-session {}          # attach interactively",
             alias
         );
         return Ok(());
@@ -225,9 +225,9 @@ fn run_isolated_command(
         });
         let _ = session_alias::remove_by_session_id(session_id);
     } else {
-        eprintln!("Next use: vshell ssh-session {} -- <command>", alias);
+        eprintln!("Next use: vibeshell ssh-session {} -- <command>", alias);
         eprintln!(
-            "If your local shell mangles quotes, use: vshell ssh-session {} --command-file ./remote-command.sh",
+            "If your local shell mangles quotes, use: vibeshell ssh-session {} --command-file ./remote-command.sh",
             alias
         );
     }

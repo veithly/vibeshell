@@ -1,0 +1,30 @@
+{
+  "name": "vibeshell",
+  "version": "1.0.8",
+  "description": "Native SSH, SFTP, and remote server workflows through VibeShell.",
+  "author": {
+    "name": "VibeShell"
+  },
+  "repository": "https://github.com/veithly/vibeshell",
+  "license": "MIT",
+  "keywords": ["ssh", "sftp", "remote-development", "coding-agents"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "VibeShell",
+    "shortDescription": "Operate saved SSH servers",
+    "longDescription": "Use the native VibeShell CLI for persistent SSH sessions, remote commands, SFTP transfers, remote file edits, and configuration imports without requiring the desktop UI.",
+    "developerName": "VibeShell",
+    "category": "Developer Tools",
+    "capabilities": [
+      "SSH session management",
+      "Remote command execution",
+      "SFTP file operations",
+      "SSH profile import"
+    ],
+    "defaultPrompt": [
+      "List my saved VibeShell servers.",
+      "Connect to a saved server and inspect its service status.",
+      "Synchronize a local build directory to a saved server."
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "vibeshell-agent-skills",
+  "description": "Native SSH, SFTP, and remote server workflows through VibeShell",
+  "owner": {
+    "name": "VibeShell"
+  },
+  "metadata": {
+    "description": "Official VibeShell coding-agent skill",
+    "version": "1.0.8"
+  },
+  "plugins": [
+    {
+      "name": "vibeshell",
+      "version": "1.0.8",
+      "description": "Operate saved SSH servers with the native VibeShell CLI",
+      "source": "./",
+      "strict": false,
+      "skills": ["./skills/vibeshell"],
+      "category": "development"
+    }
+  ]
+}

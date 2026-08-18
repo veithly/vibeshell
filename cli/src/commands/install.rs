@@ -38,8 +38,8 @@ pub fn list_tools() -> Result<()> {
 
     println!("{:-<60}", "");
     println!();
-    println!("Use 'vshell install <tool-id>' to install VibeShell skill.");
-    println!("Use 'vshell install all' to install to all detected tools.");
+    println!("Use 'vibeshell install <tool-id>' to install VibeShell skill.");
+    println!("Use 'vibeshell install all' to install to all detected tools.");
 
     Ok(())
 }
@@ -73,7 +73,7 @@ pub fn install(tool: &str) -> Result<()> {
             println!("  - StepFun");
             println!();
             println!(
-                "You can still run 'vshell install <tool-id>' to create a known skill directory."
+                "You can still run 'vibeshell install <tool-id>' to create a known skill directory."
             );
             return Ok(());
         }

@@ -39,7 +39,7 @@ const SOCKET_NAME_ENV: &str = "VIBESHELL_IPC_NAME";
 const SESSION_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 const SESSION_REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Server metadata returned to CLI for `vshell servers`.
+/// Server metadata returned to CLI for `vibeshell servers`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcServerInfo {
     pub id: String,
@@ -53,7 +53,7 @@ pub struct IpcServerInfo {
     pub tags: Vec<String>,
 }
 
-/// Session metadata returned to CLI for `vshell sessions`.
+/// Session metadata returned to CLI for `vibeshell sessions`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcSessionInfo {
     pub id: String,
@@ -833,19 +833,13 @@ impl IpcServer {
                 // Look up saved credentials for the server and connect
                 match database.credential_get(&server_name) {
                     std::result::Result::Ok(Some(cred)) => {
-                        let ssh_cred = match cred.auth_type.as_str() {
-                            "password" => crate::session::SshCredential::Password(cred.credential),
-                            "key" | "key_with_passphrase" => {
-                                crate::session::SshCredential::PrivateKey {
-                                    key: cred.credential,
-                                    passphrase: cred.passphrase,
-                                }
-                            }
-                            other => {
+                        let ssh_cred = match crate::session::SshCredential::from_stored(cred) {
+                            Ok(credential) => credential,
+                            Err(error) => {
                                 return IpcMessage::Error {
                                     message: format!(
-                                        "Unknown auth type '{}' for server '{}'",
-                                        other, server_name
+                                        "Failed to load credentials for '{}': {}",
+                                        server_name, error
                                     ),
                                 };
                             }

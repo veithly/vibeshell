@@ -62,7 +62,7 @@ Set-Location $repoRoot
 
 Write-Host "============================================"
 Write-Host " VibeShell Installer Build (Windows)"
-Write-Host " Builds: VibeShell desktop app with Agent Gateway"
+Write-Host " Builds: desktop app + native vibeshell CLI sidecar + bundled Skill"
 Write-Host " Output: NSIS (.exe) and MSI (.msi)"
 Write-Host "============================================"
 
@@ -101,7 +101,10 @@ foreach ($name in @("CC", "CXX", "CI", "STATIC_VCRUNTIME")) {
 
 # ── 0. Kill stale processes that may lock build outputs ───────────────
 Run-Step "Killing stale VibeShell processes..." {
-  $procs = @(Get-Process -Name "vibeshell" -ErrorAction SilentlyContinue)
+  $procs = @(
+    Get-Process -Name "vibeshell" -ErrorAction SilentlyContinue
+    Get-Process -Name "vibeshell-desktop" -ErrorAction SilentlyContinue
+  )
   if ($procs.Count -gt 0) {
     $procs | Stop-Process -Force -ErrorAction SilentlyContinue
     Write-Host "  Killed $($procs.Count) VibeShell process(es)"
@@ -109,15 +112,23 @@ Run-Step "Killing stale VibeShell processes..." {
   Start-Sleep -Milliseconds 500
 }
 
-# ── 1. Build Tauri installers (NSIS + MSI) ────────────────────────────
+# ── 1. Build the target-suffixed native CLI sidecar ───────────────────
+Run-Step "Building native vibeshell CLI sidecar..." {
+  & node scripts/prepare-sidecar.mjs --target x86_64-pc-windows-msvc
+  if ($LASTEXITCODE -ne 0) {
+    throw "native CLI build failed with exit code $LASTEXITCODE."
+  }
+}
+
+# ── 2. Build Tauri installers (NSIS + MSI) ────────────────────────────
 Run-Step "Building NSIS and MSI bundles with Tauri..." {
-  & npx tauri build --bundles nsis --bundles msi
+  & npx tauri build --config src-tauri/tauri.sidecar.conf.json --bundles nsis --bundles msi
   if ($LASTEXITCODE -ne 0) {
     throw "tauri build failed with exit code $LASTEXITCODE."
   }
 }
 
-# ── 2. Report output ─────────────────────────────────────────────────
+# ── 3. Report output ─────────────────────────────────────────────────
 $bundleDirs = @(
   (Join-Path $repoRoot "target\release\bundle"),
   (Join-Path $repoRoot "src-tauri\target\release\bundle")
@@ -150,4 +161,4 @@ if (Test-Path $msiDir) {
 }
 
 Write-Host ""
-Write-Host "Both installers include the VibeShell GUI and built-in Agent Gateway."
+Write-Host "Both installers include the GUI, native vibeshell command, and bundled Coding Agent Skill."

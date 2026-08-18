@@ -61,11 +61,12 @@ async fn test_ssh_connection_with_key() -> Result<()> {
 
     // Connect to the server with extended timeout
     println!("Connecting to {}:{}...", TEST_HOST, TEST_PORT);
-    let mut config = client::Config::default();
-    config.inactivity_timeout = Some(std::time::Duration::from_secs(60));
-    config.keepalive_interval = Some(std::time::Duration::from_secs(10));
-    config.keepalive_max = 5;
-    let config = Arc::new(config);
+    let config = Arc::new(client::Config {
+        inactivity_timeout: Some(std::time::Duration::from_secs(60)),
+        keepalive_interval: Some(std::time::Duration::from_secs(10)),
+        keepalive_max: 5,
+        ..Default::default()
+    });
 
     let mut session = match client::connect(config, (TEST_HOST, TEST_PORT), TestHandler).await {
         Ok(s) => {
@@ -74,7 +75,7 @@ async fn test_ssh_connection_with_key() -> Result<()> {
         }
         Err(e) => {
             println!("Connection failed: {:?}", e);
-            return Err(e.into());
+            return Err(e);
         }
     };
 

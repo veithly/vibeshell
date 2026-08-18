@@ -37,7 +37,7 @@ where
 }
 
 fn daemon_log_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("vshell-daemon.log")
+    std::env::temp_dir().join("vibeshell-daemon.log")
 }
 
 fn daemon_log_len() -> u64 {

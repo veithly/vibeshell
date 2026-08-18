@@ -19,9 +19,9 @@
 
 ![VibeShell terminal workspace](docs/assets/screenshots/terminal-workspace.png)
 
-VibeShell is a modern desktop terminal for people and AI agents working on the same machines. It combines a polished SSH client, SFTP file manager, SSH tunnel control panel, local shell, session recording, and an MCP-powered AI integration layer in one native Tauri app.
+VibeShell is a native desktop terminal and headless SSH/SFTP service for people and AI agents working on the same machines. It combines a polished Tauri workspace with the standalone Rust `vibeshell` command, a reusable local daemon, SSH configuration import, tunnels, session recording, and optional MCP integration.
 
-If you have ever asked an AI coding agent to deploy, inspect logs, edit a remote config, or move files over SSH, VibeShell gives it a real, reusable, observable workspace instead of a pile of brittle one-off shell commands.
+If you have ever asked an AI coding agent to deploy, inspect logs, edit a remote config, or move files over SSH, VibeShell gives it a real, reusable, observable workspace instead of a pile of brittle one-off shell commands. The desktop application may be closed: the same saved servers and sessions remain available through the native CLI on a workstation or a server without a graphical desktop.
 
 > The screenshots in this README are rendered with Playwright from VibeShell's real React components using sanitized demo servers. They use reserved example domains only; no real hostnames, IPs, credentials, or customer data are shown.
 
@@ -37,6 +37,9 @@ If you have ever asked an AI coding agent to deploy, inspect logs, edit a remote
 
 ## Recent Updates
 
+- **Native `vibeshell` command and headless daemon**: use saved servers, persistent SSH sessions, remote commands, file editing, and SFTP without opening the desktop application or installing Node.js.
+- **SSH profile import**: preview or import OpenSSH config files, PuTTY sessions/registry exports, and Tabby SSH profiles, including key paths, ports, ProxyJump relationships, startup commands, and agent forwarding where supported.
+- **Bundled Coding Agent Skill**: the canonical Skill ships with the Rust binary and is installed idempotently into detected agent directories plus `~/.agents/skills`; generated Skills call `vibeshell` directly and never require `gateway.mjs`.
 - **Coding agents inside the terminal workspace**: launch Claude Code, Codex, OpenCode, or Pi in a native terminal tab, choose a repository and supported start/access mode, then inspect its live Git status and unified diffs without leaving VibeShell.
 - **Remote file workspace**: open SFTP files in shared tabs, edit syntax-highlighted text with save protection, preview images, PDF, audio, and video, and search the contents of ZIP, TAR, TAR.GZ, and TGZ archives.
 - **Encrypted cloud sync**: pair devices through a private GitHub Gist or WebDAV file and sync servers, groups, and command snippets as AES-256-GCM ciphertext. Credentials, host fingerprints, recordings, and live sessions remain device-local; vault keys are session-only until secure Keychain/Keystore persistence lands.
@@ -60,8 +63,8 @@ Traditional SSH clients assume a single human is typing everything. AI coding ag
 VibeShell is designed around that new workflow:
 
 - **Human-friendly by default**: fast tabs, xterm.js rendering, command snippets, local shell, SFTP, tunnels, and session recording.
-- **Agent-ready when needed**: built-in MCP tools expose server, session, command, search, and SFTP workflows to compatible AI tools.
-- **Observable automation**: agents can connect, run commands, inspect output, and transfer files while you keep the UI open as the control room.
+- **Agent-ready when needed**: the bundled native Skill exposes server, session, command, search, file, and SFTP workflows to compatible coding agents; the authenticated MCP layer remains available for GUI-shared workflows.
+- **Observable automation**: agents can reuse persistent sessions from the native CLI on a headless host, or operate alongside you in the visible desktop control room.
 - **Native and local-first**: Rust backend, SQLite storage, optional device-local credentials, and no hosted control plane.
 
 ## Features
@@ -94,6 +97,8 @@ VibeShell is designed around that new workflow:
 - Optional device-local credentials and per-server configuration. Secure Keychain/Keystore storage is planned; current saved credentials are not encrypted at rest.
 - Host key verification with trusted fingerprint management.
 - Jump host / ProxyJump support for bastion access.
+- Import from OpenSSH, PuTTY, and Tabby with a safe dry-run/JSON preview.
+- Imported OpenSSH private keys remain referenced by local path and are read only when establishing a connection; third-party stored passwords are not copied.
 - SSH agent forwarding.
 - Finder-style SFTP column browsing plus an icon view for scanning folders visually.
 - Expandable SFTP workspace with a dedicated address row and responsive action menu.
@@ -114,17 +119,20 @@ VibeShell can detect installed Claude Code, Codex, OpenCode, and Pi CLIs and lau
 
 ### AI Agents
 
-VibeShell includes an authenticated Agent Gateway plus a skill installer for AI coding tools. The Gateway runs inside the visible desktop app, shares the user's sessions, and can be launched on demand by the installed skill. The installer detects tools such as Claude Code, Codex, Cursor, Open Code, Gemini CLI, Windsurf, Roo Code, Continue, Kiro, Trae, OpenHands, and more.
+VibeShell ships one canonical Skill together with the native `vibeshell` executable. The first desktop or CLI launch installs that Skill idempotently into every detected coding-agent directory and into the shared `~/.agents/skills/vibeshell` convention. Claude Code, Codex, Cursor, OpenCode, Gemini CLI, Windsurf, Roo Code, Continue, Kiro, Trae, OpenHands, and other supported tools can therefore discover VibeShell without a separate Skill package or npm installation.
 
-The Gateway currently exposes 28 MCP tools, including:
+The installed Skill calls the Rust CLI directly. It does not run Node.js, `gateway.mjs`, browser automation, or raw `ssh` commands that bypass VibeShell's saved server and session model. Commands that need a connection automatically start the native local daemon, so the same workflow works with the desktop closed or on a headless server.
 
-| Area | Tools |
+| Area | Native commands |
 | --- | --- |
-| Server inventory | `server_list`, `server_add`, `server_get`, `server_update`, `server_delete` |
-| Sessions | `session_list`, `session_create`, `session_attach`, `session_detach`, `session_kill`, `session_send_input`, `session_read`, `session_resize` |
-| Remote commands | `exec`, `rg` |
-| SFTP | `sftp_ls`, `sftp_upload`, `sftp_upload_directory`, `sftp_sync_directory`, `sftp_download`, `sftp_mkdir`, `sftp_rm`, `sftp_mv`, `sftp_read`, `sftp_write` |
-| File editing | `get_content`, `edit_file`, `add_file` |
+| Inventory and import | `vibeshell servers`, `vibeshell import auto --dry-run`, `vibeshell import auto` |
+| Sessions | `vibeshell ssh`, `vibeshell sessions`, `vibeshell attach`, `vibeshell ssh-session`, `vibeshell kill` |
+| Remote commands and search | `vibeshell ssh <server> -- <command>`, `vibeshell rg` |
+| Remote files | `vibeshell get-content`, `vibeshell add-file`, `vibeshell edit-file` |
+| SFTP | `vibeshell sftp <server> ls|get|put|sync|...` or the interactive SFTP prompt |
+| Diagnostics | `vibeshell daemon status`, `vibeshell version` |
+
+The authenticated MCP Gateway remains available for workflows that intentionally share the visible GUI session manager, but it is no longer a prerequisite for the installed Skill.
 
 Example intent:
 
@@ -132,12 +140,11 @@ Example intent:
 You: "Check the demo API logs, patch the config, upload the build, and restart the service."
 
 Agent:
-1. Finds the configured demo server.
-2. Opens or reuses a VibeShell session.
-3. Reads logs with exec/rg.
-4. Edits the remote config through SFTP tools.
-5. Uploads the new build directory.
-6. Restarts the service and reports the verified result.
+1. Finds the saved server with `vibeshell servers`.
+2. Opens or reuses a persistent native session.
+3. Reads logs with `ssh`/`rg` and inspects the current remote file.
+4. Applies the guarded edit and uploads the build through SFTP.
+5. Restarts the service, reads the exit status and output, and reports the verified result.
 ```
 
 ## Architecture
@@ -148,32 +155,44 @@ VibeShell
 │  ├─ Server list, session tabs, terminal, SFTP, tunnels, settings
 │  ├─ Coding-agent launcher, file workspace, and live Git diff panel
 │  └─ safeInvoke wrappers for all Tauri IPC calls
-├─ Tauri 2 IPC bridge
-├─ Rust backend
-│  ├─ russh SSH client and session manager
+├─ Tauri 2 desktop bridge
+├─ Native `vibeshell` CLI
+│  ├─ auto-starting headless IPC daemon
+│  ├─ SSH/session/command/file/SFTP commands
+│  └─ OpenSSH, PuTTY, and Tabby import
+├─ Shared Rust core
+│  ├─ russh SSH client and persistent session manager
 │  ├─ russh-sftp operations and recursive sync helpers
-│  ├─ SQLite storage and device-local credentials
-│  ├─ SSH tunnel manager
-│  ├─ local shell manager
+│  ├─ SQLite storage and device-local credentials/key references
+│  ├─ SSH tunnel and local shell managers
 │  ├─ encrypted cloud sync and portable workspace snapshots
 │  ├─ local coding-agent launcher and bounded Git inspection
-│  ├─ authenticated Agent Gateway with per-launch discovery
-│  └─ MCP tools sharing the GUI session manager
-└─ AI-tool skill installer
+│  └─ optional authenticated MCP Gateway sharing the session manager
+└─ Bundled canonical Skill + multi-agent installer
 ```
 
 ## Install
 
 Download the latest installer from [GitHub Releases](https://github.com/veithly/vibeshell/releases).
 
-| Platform | Desktop app |
-| --- | --- |
-| Windows x64 | `.exe` / `.msi` |
-| macOS Apple Silicon | `.dmg` |
-| macOS Intel | `.dmg` |
-| Linux x64 | `.deb` / `.AppImage` / `.rpm` |
+| Platform | Desktop app | Headless/native CLI |
+| --- | --- | --- |
+| Windows x64 | `.exe` / `.msi` | `VibeShell-CLI-*-windows-x64.zip` |
+| macOS Apple Silicon | `.dmg` | `VibeShell-CLI-*-macos-arm64.tar.gz` |
+| macOS Intel | `.dmg` | `VibeShell-CLI-*-macos-x64.tar.gz` |
+| Linux x64 | `.deb` / `.AppImage` / `.rpm` | `VibeShell-CLI-*-linux-x64.tar.gz` |
 
-The desktop installer contains the Gateway directly. AI tools launch or focus VibeShell and operate the same sessions shown in the GUI without installing a CLI or modifying `PATH`.
+Desktop installers include the native CLI and canonical Skill. Windows adds the application directory to the user `PATH`; macOS and Linux persist the bundled command at `~/.local/bin/vibeshell` on application startup. The standalone headless archives contain the same binary, Skill, and `install.sh` or `install.ps1` for servers where no desktop is available. No separate Node.js/npm runtime is required.
+
+After installation:
+
+```bash
+vibeshell version
+vibeshell import auto --dry-run
+vibeshell import auto
+vibeshell servers
+vibeshell ssh <server>
+```
 
 ## Build From Source
 
@@ -189,8 +208,8 @@ git clone https://github.com/veithly/vibeshell.git
 cd vibeshell
 npm ci
 npm run build
-cargo check
-cargo test
+cargo check --workspace
+cargo test --workspace
 ```
 
 Run in development:
@@ -205,11 +224,14 @@ Build release binaries:
 ```bash
 # Frontend + Rust checks
 npm run build
-cargo check
-cargo test
+cargo check --workspace
+cargo test --workspace
 
-# Desktop app with built-in Agent Gateway.
-npx tauri build
+# Desktop app with the target-suffixed native CLI sidecar.
+npm run build:desktop
+
+# Standalone headless CLI.
+cargo build --release --package vshell --bin vibeshell
 ```
 
 Windows installer packaging:
@@ -218,7 +240,7 @@ Windows installer packaging:
 powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/build-msi.ps1 -NoPause
 ```
 
-The Windows packaging script produces NSIS and MSI installers with the built-in Agent Gateway.
+The Windows packaging script builds the native `vibeshell.exe` sidecar first, then produces NSIS and MSI installers that expose the command through the user `PATH` and carry the bundled Skill.
 
 ## CI And Release
 
@@ -230,6 +252,8 @@ GitHub Actions run:
 - Rust target check for the iOS arm64 simulator.
 - Linux `cargo clippy -- -D warnings`.
 - Release builds for Windows x64, macOS arm64/x64, and Linux x64.
+- Target-specific native CLI sidecars inside desktop installers.
+- Standalone headless CLI archives containing the binary, installer, README, and canonical Skill.
 
 The release workflow can be triggered from tags (`v*`) or manually with a patch/minor/major bump.
 
@@ -244,11 +268,16 @@ src/lib/tauri.ts        safeInvoke and IPC helpers
 src-tauri/              Rust/Tauri backend
 src-tauri/src/ssh/      SSH client and host fingerprints
 src-tauri/src/sftp/     SFTP operations and sync helpers
-src-tauri/src/mcp/      MCP tools and transports
-src-tauri/src/install/  AI tool detection and skill installer
+src-tauri/src/ssh_import/ OpenSSH, PuTTY, and Tabby profile parsers
+src-tauri/src/mcp/      Optional MCP tools and transports
+src-tauri/src/install/  Native CLI and multi-agent Skill installer
 src-tauri/src/cloud_sync/ Encrypted GitHub Gist and WebDAV sync
 src-tauri/src/coding_agent/ Local coding-agent launch and Git workspace inspection
-cli/                    optional standalone CLI source for legacy workflows
+cli/                    primary native CLI and headless daemon
+skills/vibeshell/        canonical Coding Agent Skill
+.claude/skills/          Claude-compatible Skill mirror
+.codex/skills/           Codex-compatible Skill mirror
+scripts/                 sidecar and headless installer/release tooling
 docs/                   Design notes, plans, and README screenshots
 ```
 

@@ -1,4 +1,4 @@
-//! Install and remove the VibeShell Agent Gateway skill for AI coding tools.
+//! Install and remove the native VibeShell CLI skill for AI coding tools.
 
 use anyhow::{anyhow, Context, Result};
 use std::fs;
@@ -10,19 +10,10 @@ use super::detector::{
 
 const SKILL_DIR_NAME: &str = "vibeshell";
 const LEGACY_SKILL_DIR_NAME: &str = "vshell";
-const GATEWAY_SKILL_MD_TEMPLATE: &str = include_str!("gateway-skill.md");
-const GATEWAY_CLIENT_TEMPLATE: &str = include_str!("gateway-client.mjs");
+const NATIVE_SKILL_MD_TEMPLATE: &str = include_str!("../../../skills/vibeshell/SKILL.md");
 
 fn render_skill_md() -> Result<String> {
-    Ok(GATEWAY_SKILL_MD_TEMPLATE.to_string())
-}
-
-fn render_gateway_client() -> Result<String> {
-    let manifest_path = crate::mcp::gateway_manifest_path()?
-        .to_string_lossy()
-        .into_owned();
-    let manifest_json = serde_json::to_string(&manifest_path)?;
-    Ok(GATEWAY_CLIENT_TEMPLATE.replace("{{MANIFEST_PATH_JSON}}", &manifest_json))
+    Ok(NATIVE_SKILL_MD_TEMPLATE.to_string())
 }
 
 fn install_skill_file(tool_id: &str) -> Result<Vec<PathBuf>> {
@@ -31,9 +22,18 @@ fn install_skill_file(tool_id: &str) -> Result<Vec<PathBuf>> {
     install_skill_file_to_dirs(skills_dirs)
 }
 
+fn write_if_changed(path: &PathBuf, content: &str) -> Result<()> {
+    if fs::read_to_string(path)
+        .map(|existing| existing == content)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    fs::write(path, content).with_context(|| format!("Failed to write skill file {:?}", path))
+}
+
 fn install_skill_file_to_dirs(skills_dirs: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
     let skill_content = render_skill_md()?;
-    let client_content = render_gateway_client()?;
     let mut installed_paths = Vec::new();
 
     for skills_dir in skills_dirs {
@@ -42,12 +42,19 @@ fn install_skill_file_to_dirs(skills_dirs: Vec<PathBuf>) -> Result<Vec<PathBuf>>
             .with_context(|| format!("Failed to create skill directory {:?}", skill_dir))?;
 
         let skill_path = skill_dir.join("SKILL.md");
-        fs::write(&skill_path, &skill_content)
-            .with_context(|| format!("Failed to write skill file {:?}", skill_path))?;
+        write_if_changed(&skill_path, &skill_content)?;
 
-        let client_path = skill_dir.join("gateway.mjs");
-        fs::write(&client_path, &client_content)
-            .with_context(|| format!("Failed to write gateway client {:?}", client_path))?;
+        // Remove the obsolete Node gateway helper from prior installations. The
+        // native skill talks directly to the `vibeshell` executable.
+        let legacy_gateway = skill_dir.join("gateway.mjs");
+        if legacy_gateway.exists() {
+            fs::remove_file(&legacy_gateway).with_context(|| {
+                format!(
+                    "Failed to remove legacy gateway client {:?}",
+                    legacy_gateway
+                )
+            })?;
+        }
 
         let legacy_skill_dir = skills_dir.join(LEGACY_SKILL_DIR_NAME);
         if legacy_skill_dir.exists() && legacy_skill_dir != skill_dir {
@@ -59,7 +66,10 @@ fn install_skill_file_to_dirs(skills_dirs: Vec<PathBuf>) -> Result<Vec<PathBuf>>
             })?;
         }
 
-        log::info!("[Install] Gateway skill installed to {:?}", skill_path);
+        log::info!(
+            "[Install] Native VibeShell skill installed to {:?}",
+            skill_path
+        );
         installed_paths.push(skill_path);
     }
 
@@ -75,7 +85,7 @@ fn uninstall_skill_file(tool_id: &str) -> Result<()> {
                     fs::remove_dir_all(&skill_dir).with_context(|| {
                         format!("Failed to remove skill directory {:?}", skill_dir)
                     })?;
-                    log::info!("[Install] Gateway skill removed from {:?}", skill_dir);
+                    log::info!("[Install] VibeShell skill removed from {:?}", skill_dir);
                 }
             }
         }
@@ -138,9 +148,9 @@ pub fn uninstall_by_id(tool_id: &str) -> Result<InstallResult> {
 }
 
 pub fn install_to_all() -> Vec<InstallResult> {
-    use super::detector::get_installed_tools;
+    use super::detector::get_default_install_tools;
 
-    get_installed_tools()
+    get_default_install_tools()
         .into_iter()
         .map(|tool| match install_to_tool(&tool.id, &tool.config_path) {
             Ok(path) => InstallResult {
@@ -189,46 +199,35 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn skill_content_uses_the_gateway_contract() {
+    fn skill_content_uses_the_native_cli_contract() {
         let content = render_skill_md().unwrap();
         for required in [
             "name: vibeshell",
-            "Agent Gateway",
-            "gateway.mjs",
-            "server_list",
-            "session_create",
-            "session_send_input",
-            "session_read",
-            "sftp_upload_directory",
-            "sftp_sync_directory",
-            "get_content",
-            "edit_file",
-            "add_file",
-            "credentials remain in the GUI",
+            "native `vibeshell` executable",
+            "vibeshell servers",
+            "vibeshell ssh <server>",
+            "vibeshell sessions",
+            "vibeshell sftp",
+            "vibeshell import auto",
+            "headless daemon",
         ] {
             assert!(content.contains(required), "missing {required}");
         }
-        assert!(!content.contains("vshell daemon"));
-        assert!(!content.contains("vshell ssh"));
+        assert!(!content.contains("node gateway.mjs"));
+        assert!(!content.contains("Agent Gateway"));
         assert!(!content.contains("agent-gateway.json"));
     }
 
     #[test]
-    fn skill_defaults_to_the_shared_terminal_for_commands() {
-        let content = render_skill_md().unwrap();
-
-        assert!(
-            content.contains("always use `send` (MCP `session_send_input`)"),
-            "the skill must make shared-terminal execution the default"
+    fn repository_skill_mirrors_stay_in_sync() {
+        let canonical = render_skill_md().unwrap();
+        assert_eq!(
+            canonical,
+            include_str!("../../../.claude/skills/vibeshell/SKILL.md")
         );
-        assert!(
-            content
-                .contains("Use `exec` only when the user explicitly asks for isolated/background"),
-            "the skill must reserve exec for explicitly isolated work"
-        );
-        assert!(
-            !content.contains("Use `exec` for reliable non-interactive commands."),
-            "the old isolated-exec default must not remain"
+        assert_eq!(
+            canonical,
+            include_str!("../../../.codex/skills/vibeshell/SKILL.md")
         );
     }
 
@@ -242,10 +241,7 @@ mod tests {
         assert_eq!(installed, vec![skill_path.clone()]);
         let content = fs::read_to_string(skill_path).unwrap();
         assert!(content.contains("name: vibeshell"));
-        assert!(content.contains("Agent Gateway"));
-        assert!(skills_dir.join(SKILL_DIR_NAME).join("gateway.mjs").exists());
-        let client =
-            fs::read_to_string(skills_dir.join(SKILL_DIR_NAME).join("gateway.mjs")).unwrap();
-        assert!(!client.contains("{{MANIFEST_PATH_JSON}}"));
+        assert!(content.contains("native `vibeshell` executable"));
+        assert!(!skills_dir.join(SKILL_DIR_NAME).join("gateway.mjs").exists());
     }
 }

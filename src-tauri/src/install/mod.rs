@@ -5,6 +5,8 @@
 
 pub mod detector;
 pub mod installer;
+pub mod native_cli;
 
 pub use detector::*;
 pub use installer::*;
+pub use native_cli::*;

@@ -176,7 +176,7 @@ fn run_interactive_loop<R: BufRead + Send + 'static>(session_id: &str, reader: R
             sid
         );
         eprintln!(
-            "Use 'vshell attach {}' to reattach or 'vshell kill {}' to terminate.",
+            "Use 'vibeshell attach {}' to reattach or 'vibeshell kill {}' to terminate.",
             sid, sid
         );
     }

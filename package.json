@@ -8,7 +8,9 @@
     "build": "node node_modules/typescript/bin/tsc && node node_modules/vite/bin/vite.js build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:msi": "npx tauri build --bundles msi",
+    "build:sidecar": "node scripts/prepare-sidecar.mjs",
+    "build:desktop": "node scripts/prepare-sidecar.mjs && npx tauri build --config src-tauri/tauri.sidecar.conf.json",
+    "build:msi": "node scripts/prepare-sidecar.mjs --target x86_64-pc-windows-msvc && npx tauri build --config src-tauri/tauri.sidecar.conf.json --bundles nsis --bundles msi",
     "preview": "node node_modules/vite/bin/vite.js preview",
     "tauri": "tauri"
   },

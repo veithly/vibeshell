@@ -21,6 +21,7 @@ pub mod server;
 pub mod session;
 pub mod sftp;
 pub mod snippet;
+pub mod ssh_import;
 pub mod tunnel;
 
 pub use agent::*;
@@ -38,6 +39,7 @@ pub use server::*;
 pub use session::*;
 pub use sftp::*;
 pub use snippet::*;
+pub use ssh_import::*;
 pub use tunnel::*;
 
 // Re-export server status types for use in frontend

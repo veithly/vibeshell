@@ -3,7 +3,7 @@
 //! These commands allow listing, attaching to, executing commands on, and
 //! killing sessions by communicating with the VibeShell background service
 //! via IPC. Sessions can be referenced by their full UUID or by a short
-//! 3-digit alias assigned during `vshell ssh`.
+//! 3-digit alias assigned during `vibeshell ssh`.
 
 use anyhow::{bail, Result};
 use vibeshell_core::ipc::IpcMessage;
@@ -188,12 +188,15 @@ pub fn exec(session_id: &str, command: &[String]) -> Result<()> {
             eprintln!();
             eprintln!("Session is waiting for input. Send a response:");
             eprintln!(
-                "  vshell send-key {} y enter   # send 'y' then Enter",
+                "  vibeshell send-key {} y enter   # send 'y' then Enter",
                 session_id
             );
-            eprintln!("  vshell send-key {} enter      # press Enter", session_id);
             eprintln!(
-                "  vshell attach {}              # attach interactively",
+                "  vibeshell send-key {} enter      # press Enter",
+                session_id
+            );
+            eprintln!(
+                "  vibeshell attach {}              # attach interactively",
                 session_id
             );
             Ok(())
@@ -203,12 +206,12 @@ pub fn exec(session_id: &str, command: &[String]) -> Result<()> {
 
 /// Interact with a session via its short alias ID.
 ///
-/// If no command is provided, attaches interactively (like `vshell attach`).
-/// If a command is provided, executes it and prints the output (like `vshell exec`).
+/// If no command is provided, attaches interactively (like `vibeshell attach`).
+/// If a command is provided, executes it and prints the output (like `vibeshell exec`).
 pub fn ssh_session(alias: &str, command: &[String]) -> Result<()> {
     let session_id = session_alias::resolve(alias).ok_or_else(|| {
         anyhow::anyhow!(
-            "Unknown session alias '{}'. Run 'vshell sessions' to see active sessions.",
+            "Unknown session alias '{}'. Run 'vibeshell sessions' to see active sessions.",
             alias
         )
     })?;
@@ -243,12 +246,12 @@ pub fn ssh_session(alias: &str, command: &[String]) -> Result<()> {
             eprintln!();
             eprintln!("Session is waiting for input. Send a response:");
             eprintln!(
-                "  vshell send-key {} y enter   # send 'y' then Enter",
+                "  vibeshell send-key {} y enter   # send 'y' then Enter",
                 alias
             );
-            eprintln!("  vshell send-key {} enter      # press Enter", alias);
+            eprintln!("  vibeshell send-key {} enter      # press Enter", alias);
             eprintln!(
-                "  vshell ssh-session {}          # attach interactively",
+                "  vibeshell ssh-session {}          # attach interactively",
                 alias
             );
             Ok(())
@@ -262,13 +265,13 @@ pub fn ssh_session(alias: &str, command: &[String]) -> Result<()> {
 /// or as literal text. Multiple tokens are concatenated in order.
 ///
 /// Examples:
-///   vshell send-key 001 y enter          # sends "y\r"
-///   vshell send-key 001 yes enter        # sends "yes\r"
-///   vshell send-key 001 ctrl-c           # sends Ctrl+C
-///   vshell send-key 001 space            # sends a space character
+///   vibeshell send-key 001 y enter          # sends "y\r"
+///   vibeshell send-key 001 yes enter        # sends "yes\r"
+///   vibeshell send-key 001 ctrl-c           # sends Ctrl+C
+///   vibeshell send-key 001 space            # sends a space character
 pub fn send_key(session_id: &str, tokens: &[String]) -> Result<()> {
     if tokens.is_empty() {
-        bail!("No keys specified. Usage: vshell send-key <alias> <key> [key...]");
+        bail!("No keys specified. Usage: vibeshell send-key <alias> <key> [key...]");
     }
 
     let data = parse_key_tokens(tokens);

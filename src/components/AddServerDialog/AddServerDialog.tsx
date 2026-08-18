@@ -22,7 +22,6 @@ const INITIAL_FORM_DATA = {
   password: '',
   keyPath: '',
   keyPassphrase: '',
-  saveCredentials: false,
   jumpHostId: '',
   agentForwarding: false,
   postLoginCommand: '',
@@ -111,8 +110,8 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
       return;
     }
 
-    if (!isMobile && !isKeyAuth && !formData.password && formData.saveCredentials) {
-      setLocalError('Password is required when saving credentials');
+    if (!isKeyAuth && !formData.password) {
+      setLocalError('Password is required');
       return;
     }
 
@@ -132,7 +131,9 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
         post_login_command: formData.postLoginCommand.trim() || undefined,
       });
 
-      if (!isMobile && formData.saveCredentials) {
+      // Credentials entered during server creation are saved automatically on
+      // desktop so the next connection does not ask for them again.
+      if (!isMobile) {
         const credentialResult = await safeInvoke<string>('save_credential', {
           request: {
             serverName: createdServer.name,
@@ -474,18 +475,9 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
             )}
 
             {!isMobile && (
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="saveCredentials"
-                  checked={formData.saveCredentials}
-                  onChange={(e) => handleChange('saveCredentials', e.target.checked)}
-                  className="w-4 h-4 rounded border-tokyo-bg-hl bg-tokyo-bg text-tokyo-blue focus:ring-tokyo-blue"
-                />
-                <label htmlFor="saveCredentials" className="text-sm text-tokyo-fg">
-                  Save credentials on this device
-                </label>
-              </div>
+              <p className="text-xs text-tokyo-comment">
+                Credentials entered here are saved automatically on this device.
+              </p>
             )}
           </div>
 

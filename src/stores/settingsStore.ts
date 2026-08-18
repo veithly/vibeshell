@@ -50,6 +50,9 @@ export type CursorStyle = 'block' | 'underline' | 'bar';
  */
 export type ThemeName = 'paper-white' | 'warm-ivory' | 'ink-black' | 'violet-black' | 'cyan-black';
 
+/** Whether the active theme is chosen manually or follows the OS appearance. */
+export type ThemeMode = 'manual' | 'system';
+
 /**
  * Terminal-related settings.
  */
@@ -70,8 +73,14 @@ export interface TerminalSettings {
  * Appearance-related settings.
  */
 export interface AppearanceSettings {
-  /** Color theme name */
+  /** Currently active color theme (resolved from the system preference when needed). */
   theme: ThemeName;
+  /** Theme selection mode. */
+  themeMode: ThemeMode;
+  /** Theme used when the OS is in light mode. */
+  lightTheme: ThemeName;
+  /** Theme used when the OS is in dark mode. */
+  darkTheme: ThemeName;
   /** Window opacity (0.5-1.0, Windows only) */
   windowOpacity: number;
 }
@@ -123,6 +132,9 @@ export const defaultSettings: AppSettings = {
   },
   appearance: {
     theme: 'paper-white',
+    themeMode: 'manual',
+    lightTheme: 'paper-white',
+    darkTheme: 'violet-black',
     windowOpacity: 1.0,
   },
   sshDefaults: {
@@ -243,15 +255,25 @@ const themeNames = new Set<ThemeName>([
 
 function normalizeAppearanceSettings(value: unknown): AppearanceSettings {
   const raw = value && typeof value === 'object' ? value as Partial<AppearanceSettings> : {};
-  const storedTheme = typeof raw.theme === 'string' ? raw.theme : '';
-  const theme = themeNames.has(storedTheme as ThemeName)
-    ? storedTheme as ThemeName
-    : LEGACY_THEME_MAP[storedTheme] ?? defaultSettings.appearance.theme;
+  const normalizeTheme = (value: unknown, fallback: ThemeName): ThemeName => {
+    if (typeof value !== 'string') return fallback;
+    return themeNames.has(value as ThemeName)
+      ? value as ThemeName
+      : LEGACY_THEME_MAP[value] ?? fallback;
+  };
+  const theme = normalizeTheme(raw.theme, defaultSettings.appearance.theme);
+  const lightTheme = normalizeTheme(raw.lightTheme, theme === 'ink-black' || theme === 'violet-black' || theme === 'cyan-black'
+    ? defaultSettings.appearance.lightTheme
+    : theme);
+  const darkTheme = normalizeTheme(raw.darkTheme, theme === 'paper-white' || theme === 'warm-ivory'
+    ? defaultSettings.appearance.darkTheme
+    : theme);
+  const themeMode: ThemeMode = raw.themeMode === 'system' ? 'system' : 'manual';
   const opacity = typeof raw.windowOpacity === 'number' && Number.isFinite(raw.windowOpacity)
     ? Math.min(1, Math.max(0.5, raw.windowOpacity))
     : defaultSettings.appearance.windowOpacity;
 
-  return { theme, windowOpacity: opacity };
+  return { theme, themeMode, lightTheme, darkTheme, windowOpacity: opacity };
 }
 
 /**

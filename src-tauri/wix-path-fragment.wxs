@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   WiX fragment: adds the install directory to the user PATH environment
-  variable so that the `vshell` CLI is accessible from any terminal after
+  variable so that the `vibeshell` CLI is accessible from any terminal after
   MSI installation.  Removed automatically on uninstall (Permanent="no").
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">

@@ -4,6 +4,7 @@
 //! Commands communicate with the VibeShell GUI via IPC.
 
 pub mod file_tools;
+pub mod import;
 pub mod install;
 pub mod server;
 pub mod session;

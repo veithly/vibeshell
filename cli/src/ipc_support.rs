@@ -8,7 +8,7 @@ use crate::daemon;
 
 fn connect_error_context(error: anyhow::Error) -> anyhow::Error {
     anyhow::anyhow!(
-        "Failed to communicate with the VibeShell background service: {}.\nRun `vshell daemon status` to inspect service availability.",
+        "Failed to communicate with the VibeShell background service: {}.\nRun `vibeshell daemon status` to inspect service availability.",
         error
     )
 }

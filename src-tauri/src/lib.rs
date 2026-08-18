@@ -16,6 +16,7 @@ pub mod replay;
 pub mod session;
 pub mod sftp;
 pub mod ssh;
+pub mod ssh_import;
 pub mod storage;
 pub mod tunnel;
 
@@ -51,6 +52,7 @@ use commands::{
     delete_recording,
     delete_server,
     detect_ai_tools,
+    detect_ssh_import_sources,
     get_agent_guard_config,
     get_agent_guard_status,
     get_app_version,
@@ -63,6 +65,7 @@ use commands::{
     get_server_status,
     get_servers,
     get_session_recording_id,
+    import_ssh_profiles,
     install_to_tool,
     is_session_recording,
     list_fingerprints,
@@ -94,6 +97,7 @@ use commands::{
     plugin_set_enabled,
     plugin_uninstall,
     plugin_update_settings,
+    preview_ssh_import,
     read_ssh_key_file,
     resolve_agent_approval,
     save_credential,
@@ -284,6 +288,24 @@ pub fn run() {
                 app.manage(approval_manager);
             }
 
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if std::env::var_os("VIBESHELL_SKIP_SKILL_AUTO_INSTALL").is_none() {
+                std::thread::spawn(|| {
+                    if let Err(error) = crate::install::install_bundled_cli_for_user() {
+                        log::warn!("[Install] Could not install native CLI: {}", error);
+                    }
+                    for result in crate::install::install_to_all() {
+                        if !result.success {
+                            log::warn!(
+                                "[Install] Could not install VibeShell skill for {}: {}",
+                                result.tool.name,
+                                result.error.unwrap_or_else(|| "unknown error".to_string())
+                            );
+                        }
+                    }
+                });
+            }
+
             app.manage(database);
             app.manage(agent_input_tracker);
             app.manage(session_manager);
@@ -351,6 +373,10 @@ pub fn run() {
             add_server,
             update_server,
             delete_server,
+            // SSH configuration import commands
+            detect_ssh_import_sources,
+            preview_ssh_import,
+            import_ssh_profiles,
             get_groups,
             add_group,
             delete_group,

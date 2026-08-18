@@ -11,13 +11,15 @@ mod ipc_support;
 mod session_alias;
 mod terminal;
 
+use std::path::PathBuf;
+
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use command_input::CommandInputArgs;
 use commands::file_tools::ContentInputArgs;
 
 #[derive(Parser)]
-#[command(name = "vshell")]
+#[command(name = "vibeshell")]
 #[command(
     author,
     version,
@@ -26,22 +28,22 @@ use commands::file_tools::ContentInputArgs;
 #[command(
     long_about = "VibeShell CLI provides terminal-native SSH and SFTP workflows.\n\n\
     Commands talk to a local VibeShell IPC service. If the UI is not open,\n\
-    `vshell` can start a headless daemon automatically for SSH/SFTP/session commands.\n\
-    By default, `vshell ssh <server>` reuses the earliest active session for that server.\n\
+    `vibeshell` can start a headless daemon automatically for SSH/SFTP/session commands.\n\
+    By default, `vibeshell ssh <server>` reuses the earliest active session for that server.\n\
     Pass `--new` only when you explicitly need a fresh SSH session.\n\
     If your local shell mangles nested quotes, prefer `--command-file` or `--command-stdin`\n\
     instead of stacking more escaping.\n\n\
     Examples:\n\
-      vshell ssh prod-web\n\
-      vshell ssh prod-web --new\n\
-      vshell ssh prod-web -- uname -a\n\
-      vshell ssh prod-web --command-file .\\remote-command.sh\n\
-      vshell ssh-session 001 -- journalctl -u nginx -n 200\n\
-      vshell sftp prod-web ls /var/www\n\
-      vshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
-      vshell sftp prod-web\n\
-      vshell sessions\n\
-      vshell daemon status"
+      vibeshell ssh prod-web\n\
+      vibeshell ssh prod-web --new\n\
+      vibeshell ssh prod-web -- uname -a\n\
+      vibeshell ssh prod-web --command-file .\\remote-command.sh\n\
+      vibeshell ssh-session 001 -- journalctl -u nginx -n 200\n\
+      vibeshell sftp prod-web ls /var/www\n\
+      vibeshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
+      vibeshell sftp prod-web\n\
+      vibeshell sessions\n\
+      vibeshell daemon status"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -64,11 +66,11 @@ enum Commands {
         `--command-stdin` to bypass local shell parsing.\n\
         The target server must already exist in the VibeShell database.\n\n\
         Examples:\n\
-          vshell ssh prod-web\n\
-          vshell ssh prod-web --new\n\
-          vshell ssh prod-web -- hostname\n\
-          vshell ssh prod-web --command-file .\\remote-command.sh\n\
-          vshell ssh prod-web -- systemctl status nginx"
+          vibeshell ssh prod-web\n\
+          vibeshell ssh prod-web --new\n\
+          vibeshell ssh prod-web -- hostname\n\
+          vibeshell ssh prod-web --command-file .\\remote-command.sh\n\
+          vibeshell ssh prod-web -- systemctl status nginx"
     )]
     Ssh(SshArgs),
 
@@ -76,17 +78,17 @@ enum Commands {
     #[command(
         alias = "ss",
         long_about = "Interact with a persistent SSH session using its short alias ID.\n\n\
-        When you connect via `vshell ssh <server>`, the earliest active session is reused by default\n\
+        When you connect via `vibeshell ssh <server>`, the earliest active session is reused by default\n\
         and a 3-digit alias (e.g. 001) is assigned automatically. Use `--new` on the original\n\
-        `vshell ssh` command only when you need another parallel session.\n\
+        `vibeshell ssh` command only when you need another parallel session.\n\
         Use this command to reattach or run commands on that\n\
         session without needing the full UUID. When nested quoting gets messy,\n\
         prefer `--command-file` or `--command-stdin`.\n\n\
         Examples:\n\
-          vshell ssh-session 001                    # Reattach interactively\n\
-          vshell ssh-session 001 -- uname -a        # Execute a single command\n\
-          vshell ssh-session 001 --command-file .\\remote-command.sh\n\
-          vshell ssh-session 001 -- tail -f app.log # Stream remote output"
+          vibeshell ssh-session 001                    # Reattach interactively\n\
+          vibeshell ssh-session 001 -- uname -a        # Execute a single command\n\
+          vibeshell ssh-session 001 --command-file .\\remote-command.sh\n\
+          vibeshell ssh-session 001 -- tail -f app.log # Stream remote output"
     )]
     SshSession(SshSessionArgs),
 
@@ -94,13 +96,13 @@ enum Commands {
     #[command(
         long_about = "Open a terminal SFTP workflow backed by the VibeShell IPC service.\n\n\
         You can either run a single SFTP command directly:\n\
-          vshell sftp prod-web ls /var/www\n\
-          vshell sftp prod-web get /remote/file ./local-file\n\
-          vshell sftp prod-web put ./local-file /remote/file\n\
-          vshell sftp prod-web put ./local-folder /remote/parent\n\
-          vshell sftp prod-web sync ./dist /var/www --delete\n\n\
+          vibeshell sftp prod-web ls /var/www\n\
+          vibeshell sftp prod-web get /remote/file ./local-file\n\
+          vibeshell sftp prod-web put ./local-file /remote/file\n\
+          vibeshell sftp prod-web put ./local-folder /remote/parent\n\
+          vibeshell sftp prod-web sync ./dist /var/www --delete\n\n\
         Or start the interactive prompt:\n\
-          vshell sftp prod-web\n\n\
+          vibeshell sftp prod-web\n\n\
         Supported commands inside the prompt or direct mode:\n\
           pwd, ls [path], cd <path>, get <remote> [local], put <local> [remote],\n\
           sync <local-dir> [remote-dir] [--delete] [--exclude <pattern>] [--no-gitignore],\n\
@@ -115,9 +117,9 @@ enum Commands {
         The target is a configured server name by default. Add --session when the target is\n\
         an existing session alias or UUID.\n\n\
         Examples:\n\
-          vshell rg prod-web TODO /srv/app\n\
-          vshell rg prod-web \"listen 80\" /etc/nginx -i\n\
-          vshell rg --session 001 TODO /srv/app --glob \"*.rs\""
+          vibeshell rg prod-web TODO /srv/app\n\
+          vibeshell rg prod-web \"listen 80\" /etc/nginx -i\n\
+          vibeshell rg --session 001 TODO /srv/app --glob \"*.rs\""
     )]
     Rg(RgArgs),
 
@@ -129,8 +131,8 @@ enum Commands {
         The target is a configured server name by default. Add --session when the target is\n\
         an existing session alias or UUID.\n\n\
         Examples:\n\
-          vshell get-content prod-web /etc/nginx/nginx.conf\n\
-          vshell get-content --session 001 /var/log/app.log --max-bytes 200000"
+          vibeshell get-content prod-web /etc/nginx/nginx.conf\n\
+          vibeshell get-content --session 001 /var/log/app.log --max-bytes 200000"
     )]
     GetContent(GetContentArgs),
 
@@ -140,9 +142,9 @@ enum Commands {
         long_about = "Create a remote text file through SFTP. Fails if the file exists unless\n\
         --overwrite is passed.\n\n\
         Examples:\n\
-          vshell add-file prod-web /tmp/hello.txt --content \"hello\\n\"\n\
-          Get-Content .\\config.yml | vshell add-file prod-web /tmp/config.yml --content-stdin\n\
-          vshell add-file --session 001 /opt/app/.env --content-file .\\.env --parents"
+          vibeshell add-file prod-web /tmp/hello.txt --content \"hello\\n\"\n\
+          Get-Content .\\config.yml | vibeshell add-file prod-web /tmp/config.yml --content-stdin\n\
+          vibeshell add-file --session 001 /opt/app/.env --content-file .\\.env --parents"
     )]
     AddFile(AddFileArgs),
 
@@ -153,15 +155,21 @@ enum Commands {
         long_about = "Edit an existing remote text file through SFTP. Use a content source for a\n\
         full-file replacement, or use --replace/--with for exact text replacement.\n\n\
         Examples:\n\
-          vshell edit-file prod-web /tmp/config.yml --content-file .\\config.yml\n\
-          vshell edit-file --session 001 /etc/app.conf --replace \"debug=false\" --with \"debug=true\"\n\
-          Get-Content .\\app.conf | vshell edit-file prod-web /etc/app.conf --content-stdin"
+          vibeshell edit-file prod-web /tmp/config.yml --content-file .\\config.yml\n\
+          vibeshell edit-file --session 001 /etc/app.conf --replace \"debug=false\" --with \"debug=true\"\n\
+          Get-Content .\\app.conf | vibeshell edit-file prod-web /etc/app.conf --content-stdin"
     )]
     EditFile(EditFileArgs),
 
     /// List all configured servers
     #[command(alias = "server-list")]
     Servers,
+
+    /// Import OpenSSH, PuTTY, and Tabby connection profiles
+    #[command(
+        long_about = "Discover and import SSH profiles into the shared VibeShell database. Use --dry-run to preview without changing the database. The auto source discovers OpenSSH, PuTTY, and Tabby at their platform-default locations. Third-party passwords are never copied."
+    )]
+    Import(ImportArgs),
 
     /// List all active reusable sessions
     #[command(alias = "ls")]
@@ -181,10 +189,10 @@ enum Commands {
         Named keys: enter, space, tab, esc, backspace, delete,\n\
                     up, down, left, right, ctrl-c, ctrl-d, ctrl-z\n\n\
         Examples:\n\
-          vshell send-key 001 y enter          # answer 'y' + Enter\n\
-          vshell send-key 001 yes enter        # type 'yes' + Enter\n\
-          vshell send-key 001 ctrl-c           # interrupt running process\n\
-          vshell send-key 001 space            # press Space (e.g. for pager)"
+          vibeshell send-key 001 y enter          # answer 'y' + Enter\n\
+          vibeshell send-key 001 yes enter        # type 'yes' + Enter\n\
+          vibeshell send-key 001 ctrl-c           # interrupt running process\n\
+          vibeshell send-key 001 space            # press Space (e.g. for pager)"
     )]
     SendKey(SendKeyArgs),
 
@@ -194,7 +202,7 @@ enum Commands {
     /// Manage the headless background service used by terminal workflows
     #[command(long_about = "Inspect or start the VibeShell headless daemon.\n\n\
         SSH, SFTP, session listing, attach, and kill commands can auto-start this service,\n\
-        but you can also manage it explicitly with `vshell daemon start` and `vshell daemon status`.")]
+        but you can also manage it explicitly with `vibeshell daemon start` and `vibeshell daemon status`.")]
     Daemon(DaemonArgs),
 
     /// List detected AI tools and their skill installation status
@@ -370,6 +378,45 @@ struct RgArgs {
     max_results: usize,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ImportSourceArg {
+    Auto,
+    #[value(name = "openssh", alias = "open-ssh", alias = "ssh")]
+    OpenSsh,
+    Putty,
+    Tabby,
+}
+
+impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
+    fn from(source: ImportSourceArg) -> Self {
+        match source {
+            ImportSourceArg::Auto => Self::Auto,
+            ImportSourceArg::OpenSsh => Self::OpenSsh,
+            ImportSourceArg::Putty => Self::Putty,
+            ImportSourceArg::Tabby => Self::Tabby,
+        }
+    }
+}
+
+#[derive(Args)]
+struct ImportArgs {
+    /// Source to import: auto, openssh, putty, or tabby
+    #[arg(value_enum, default_value = "auto")]
+    source: ImportSourceArg,
+
+    /// Read one explicit config file or PuTTY sessions directory
+    #[arg(long)]
+    path: Option<PathBuf>,
+
+    /// Preview discovered profiles without changing the database
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Print machine-readable JSON
+    #[arg(long)]
+    json: bool,
+}
+
 #[derive(Args)]
 struct KillArgs {
     /// ID of the session to kill (omit to use --all)
@@ -411,9 +458,17 @@ struct UninstallArgs {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // The native binary carries the canonical Skill. Keep agent directories
+    // configured without requiring a separate Node/npm installation step.
+    if !matches!(&cli.command, Some(Commands::Uninstall(_)))
+        && std::env::var_os("VIBESHELL_SKIP_SKILL_AUTO_INSTALL").is_none()
+    {
+        let _ = vibeshell_core::install::install_to_all();
+    }
+
     match cli.command {
         Some(Commands::Version) => {
-            println!("vshell {}", vibeshell_core::version());
+            println!("vibeshell {}", vibeshell_core::version());
             Ok(())
         }
         Some(Commands::Ssh(args)) => {
@@ -470,6 +525,9 @@ fn main() -> Result<()> {
             args.all,
         ),
         Some(Commands::Servers) => commands::server::list(),
+        Some(Commands::Import(args)) => {
+            commands::import::run(args.source.into(), args.path, args.dry_run, args.json)
+        }
         Some(Commands::Sessions) => commands::session::list(),
         Some(Commands::Attach(args)) => {
             let resolved =
@@ -480,9 +538,9 @@ fn main() -> Result<()> {
             let command = args.command_input.resolve()?;
             if command.is_empty() {
                 eprintln!("Error: Please specify a command to execute.");
-                eprintln!("Usage: vshell exec <session-id> -- <command>");
-                eprintln!("   or: vshell exec <session-id> --command-file <path>");
-                eprintln!("   or: <command> | vshell exec <session-id> --command-stdin");
+                eprintln!("Usage: vibeshell exec <session-id> -- <command>");
+                eprintln!("   or: vibeshell exec <session-id> --command-file <path>");
+                eprintln!("   or: <command> | vibeshell exec <session-id> --command-stdin");
                 std::process::exit(1);
             }
             let resolved =
@@ -502,7 +560,7 @@ fn main() -> Result<()> {
                 commands::session::kill(&resolved)
             } else {
                 eprintln!("Error: Please specify a session ID or use --all to kill all sessions.");
-                eprintln!("Run 'vshell kill --help' for more information.");
+                eprintln!("Run 'vibeshell kill --help' for more information.");
                 std::process::exit(1);
             }
         }
@@ -520,7 +578,7 @@ fn main() -> Result<()> {
         None => {
             println!("VibeShell - High-performance SSH/SFTP terminal");
             println!();
-            println!("Run 'vshell --help' for usage information.");
+            println!("Run 'vibeshell --help' for usage information.");
             Ok(())
         }
     }
@@ -533,35 +591,56 @@ mod tests {
 
     #[test]
     fn parses_servers_command() {
-        let parsed = Cli::try_parse_from(["vshell", "servers"]);
-        assert!(parsed.is_ok(), "vshell servers should parse");
+        let parsed = Cli::try_parse_from(["vibeshell", "servers"]);
+        assert!(parsed.is_ok(), "vibeshell servers should parse");
+    }
+
+    #[test]
+    fn parses_import_auto_dry_run() {
+        let parsed = Cli::try_parse_from(["vibeshell", "import", "auto", "--dry-run", "--json"]);
+        assert!(parsed.is_ok(), "vibeshell import auto should parse");
+    }
+
+    #[test]
+    fn parses_import_explicit_openssh_path() {
+        let parsed = Cli::try_parse_from([
+            "vibeshell",
+            "import",
+            "openssh",
+            "--path",
+            "/tmp/ssh-config",
+        ]);
+        assert!(
+            parsed.is_ok(),
+            "vibeshell import openssh --path <path> should parse"
+        );
     }
 
     #[test]
     fn parses_daemon_start_command() {
-        let parsed = Cli::try_parse_from(["vshell", "daemon", "start"]);
-        assert!(parsed.is_ok(), "vshell daemon start should parse");
+        let parsed = Cli::try_parse_from(["vibeshell", "daemon", "start"]);
+        assert!(parsed.is_ok(), "vibeshell daemon start should parse");
     }
 
     #[test]
     fn parses_sftp_command() {
-        let parsed = Cli::try_parse_from(["vshell", "sftp", "example"]);
-        assert!(parsed.is_ok(), "vshell sftp <server> should parse");
+        let parsed = Cli::try_parse_from(["vibeshell", "sftp", "example"]);
+        assert!(parsed.is_ok(), "vibeshell sftp <server> should parse");
     }
 
     #[test]
     fn parses_ssh_single_command() {
-        let parsed = Cli::try_parse_from(["vshell", "ssh", "example", "--", "hostname"]);
+        let parsed = Cli::try_parse_from(["vibeshell", "ssh", "example", "--", "hostname"]);
         assert!(
             parsed.is_ok(),
-            "vshell ssh <server> -- <command> should parse"
+            "vibeshell ssh <server> -- <command> should parse"
         );
     }
 
     #[test]
     fn parses_ssh_command_file() {
         let parsed = Cli::try_parse_from([
-            "vshell",
+            "vibeshell",
             "ssh",
             "example",
             "--command-file",
@@ -569,44 +648,44 @@ mod tests {
         ]);
         assert!(
             parsed.is_ok(),
-            "vshell ssh <server> --command-file <path> should parse"
+            "vibeshell ssh <server> --command-file <path> should parse"
         );
     }
 
     #[test]
     fn parses_ssh_command_stdin() {
-        let parsed = Cli::try_parse_from(["vshell", "ssh", "example", "--command-stdin"]);
+        let parsed = Cli::try_parse_from(["vibeshell", "ssh", "example", "--command-stdin"]);
         assert!(
             parsed.is_ok(),
-            "vshell ssh <server> --command-stdin should parse"
+            "vibeshell ssh <server> --command-stdin should parse"
         );
     }
 
     #[test]
     fn parses_ssh_with_new_flag() {
-        let parsed = Cli::try_parse_from(["vshell", "ssh", "example", "--new"]);
-        assert!(parsed.is_ok(), "vshell ssh <server> --new should parse");
+        let parsed = Cli::try_parse_from(["vibeshell", "ssh", "example", "--new"]);
+        assert!(parsed.is_ok(), "vibeshell ssh <server> --new should parse");
     }
 
     #[test]
     fn parses_sftp_direct_command() {
-        let parsed = Cli::try_parse_from(["vshell", "sftp", "example", "ls", "/tmp"]);
+        let parsed = Cli::try_parse_from(["vibeshell", "sftp", "example", "ls", "/tmp"]);
         assert!(
             parsed.is_ok(),
-            "vshell sftp <server> <command> should parse"
+            "vibeshell sftp <server> <command> should parse"
         );
     }
 
     #[test]
     fn parses_sftp_session_command() {
-        let parsed = Cli::try_parse_from(["vshell", "sftp", "--session", "abc-123"]);
-        assert!(parsed.is_ok(), "vshell sftp --session <id> should parse");
+        let parsed = Cli::try_parse_from(["vibeshell", "sftp", "--session", "abc-123"]);
+        assert!(parsed.is_ok(), "vibeshell sftp --session <id> should parse");
     }
 
     #[test]
     fn parses_rg_command() {
         let parsed = Cli::try_parse_from([
-            "vshell",
+            "vibeshell",
             "rg",
             "example",
             "TODO",
@@ -618,14 +697,14 @@ mod tests {
         ]);
         assert!(
             parsed.is_ok(),
-            "vshell rg <server> <pattern> [path] should parse"
+            "vibeshell rg <server> <pattern> [path] should parse"
         );
     }
 
     #[test]
     fn parses_get_content_command() {
         let parsed = Cli::try_parse_from([
-            "vshell",
+            "vibeshell",
             "get-content",
             "--session",
             "001",
@@ -633,14 +712,14 @@ mod tests {
         ]);
         assert!(
             parsed.is_ok(),
-            "vshell get-content --session <id> <path> should parse"
+            "vibeshell get-content --session <id> <path> should parse"
         );
     }
 
     #[test]
     fn parses_add_file_command() {
         let parsed = Cli::try_parse_from([
-            "vshell",
+            "vibeshell",
             "add-file",
             "example",
             "/tmp/payload.txt",
@@ -650,14 +729,14 @@ mod tests {
         ]);
         assert!(
             parsed.is_ok(),
-            "vshell add-file <server> <path> --content <text> should parse"
+            "vibeshell add-file <server> <path> --content <text> should parse"
         );
     }
 
     #[test]
     fn parses_edit_file_replace_command() {
         let parsed = Cli::try_parse_from([
-            "vshell",
+            "vibeshell",
             "edit-file",
             "example",
             "/tmp/payload.txt",
@@ -669,23 +748,23 @@ mod tests {
         ]);
         assert!(
             parsed.is_ok(),
-            "vshell edit-file <server> <path> --replace <old> --with <new> should parse"
+            "vibeshell edit-file <server> <path> --replace <old> --with <new> should parse"
         );
     }
 
     #[test]
     fn parses_exec_command() {
-        let parsed = Cli::try_parse_from(["vshell", "exec", "abc-123", "--", "hostname"]);
+        let parsed = Cli::try_parse_from(["vibeshell", "exec", "abc-123", "--", "hostname"]);
         assert!(
             parsed.is_ok(),
-            "vshell exec <session-id> -- <command> should parse"
+            "vibeshell exec <session-id> -- <command> should parse"
         );
     }
 
     #[test]
     fn parses_exec_command_file() {
         let parsed = Cli::try_parse_from([
-            "vshell",
+            "vibeshell",
             "exec",
             "abc-123",
             "--command-file",
@@ -693,58 +772,58 @@ mod tests {
         ]);
         assert!(
             parsed.is_ok(),
-            "vshell exec <session-id> --command-file <path> should parse"
+            "vibeshell exec <session-id> --command-file <path> should parse"
         );
     }
 
     #[test]
     fn parses_ssh_session_interactive() {
-        let parsed = Cli::try_parse_from(["vshell", "ssh-session", "001"]);
-        assert!(parsed.is_ok(), "vshell ssh-session <alias> should parse");
+        let parsed = Cli::try_parse_from(["vibeshell", "ssh-session", "001"]);
+        assert!(parsed.is_ok(), "vibeshell ssh-session <alias> should parse");
     }
 
     #[test]
     fn parses_ssh_session_with_command() {
-        let parsed = Cli::try_parse_from(["vshell", "ssh-session", "001", "--", "uname", "-a"]);
+        let parsed = Cli::try_parse_from(["vibeshell", "ssh-session", "001", "--", "uname", "-a"]);
         assert!(
             parsed.is_ok(),
-            "vshell ssh-session <alias> -- <cmd> should parse"
+            "vibeshell ssh-session <alias> -- <cmd> should parse"
         );
     }
 
     #[test]
     fn parses_ssh_session_command_stdin() {
-        let parsed = Cli::try_parse_from(["vshell", "ssh-session", "001", "--command-stdin"]);
+        let parsed = Cli::try_parse_from(["vibeshell", "ssh-session", "001", "--command-stdin"]);
         assert!(
             parsed.is_ok(),
-            "vshell ssh-session <alias> --command-stdin should parse"
+            "vibeshell ssh-session <alias> --command-stdin should parse"
         );
     }
 
     #[test]
     fn parses_ssh_session_alias_ss() {
-        let parsed = Cli::try_parse_from(["vshell", "ss", "001"]);
+        let parsed = Cli::try_parse_from(["vibeshell", "ss", "001"]);
         assert!(
             parsed.is_ok(),
-            "vshell ss <alias> should parse (alias for ssh-session)"
+            "vibeshell ss <alias> should parse (alias for ssh-session)"
         );
     }
 
     #[test]
     fn parses_send_key_command() {
-        let parsed = Cli::try_parse_from(["vshell", "send-key", "001", "y", "enter"]);
+        let parsed = Cli::try_parse_from(["vibeshell", "send-key", "001", "y", "enter"]);
         assert!(
             parsed.is_ok(),
-            "vshell send-key <alias> <keys...> should parse"
+            "vibeshell send-key <alias> <keys...> should parse"
         );
     }
 
     #[test]
     fn parses_send_key_alias_sk() {
-        let parsed = Cli::try_parse_from(["vshell", "sk", "001", "ctrl-c"]);
+        let parsed = Cli::try_parse_from(["vibeshell", "sk", "001", "ctrl-c"]);
         assert!(
             parsed.is_ok(),
-            "vshell sk <alias> <key> should parse (alias for send-key)"
+            "vibeshell sk <alias> <key> should parse (alias for send-key)"
         );
     }
 }

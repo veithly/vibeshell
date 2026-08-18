@@ -1188,17 +1188,59 @@ export function Settings() {
         title={t('settings.appearance')}
         description={t('settings.appearanceDesc')}
       >
+        <SettingRow label={t('settings.themeMode')} description={t('settings.themeModeDesc')}>
+          <Select<'manual' | 'system'>
+            value={settings.appearance.themeMode}
+            options={[
+              { value: 'manual', label: t('settings.themeModeManual') },
+              { value: 'system', label: t('settings.themeModeSystem') },
+            ]}
+            onChange={(themeMode) => updateAppearanceSettings({ themeMode })}
+          />
+        </SettingRow>
+
         <SettingRow label={t('settings.theme')} description={t('settings.themeDesc')}>
-          <div className="flex flex-wrap gap-3">
-            {themes.map((theme) => (
-              <ThemePreview
-                key={theme.name}
-                theme={theme.name}
-                selected={settings.appearance.theme === theme.name}
-                onClick={() => updateAppearanceSettings({ theme: theme.name })}
-              />
-            ))}
-          </div>
+          {settings.appearance.themeMode === 'system' ? (
+            <div className="w-full space-y-3">
+              <div>
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-tokyo-comment">{t('settings.lightTheme')}</p>
+                <div className="flex flex-wrap gap-3">
+                  {themes.map((theme) => (
+                    <ThemePreview
+                      key={`light-${theme.name}`}
+                      theme={theme.name}
+                      selected={settings.appearance.lightTheme === theme.name}
+                      onClick={() => updateAppearanceSettings({ lightTheme: theme.name })}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-tokyo-comment">{t('settings.darkTheme')}</p>
+                <div className="flex flex-wrap gap-3">
+                  {themes.map((theme) => (
+                    <ThemePreview
+                      key={`dark-${theme.name}`}
+                      theme={theme.name}
+                      selected={settings.appearance.darkTheme === theme.name}
+                      onClick={() => updateAppearanceSettings({ darkTheme: theme.name })}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-3">
+              {themes.map((theme) => (
+                <ThemePreview
+                  key={theme.name}
+                  theme={theme.name}
+                  selected={settings.appearance.theme === theme.name}
+                  onClick={() => updateAppearanceSettings({ theme: theme.name })}
+                />
+              ))}
+            </div>
+          )}
         </SettingRow>
 
         <SettingRow label={t('settings.windowOpacity')} description={t('settings.windowOpacityDesc')}>

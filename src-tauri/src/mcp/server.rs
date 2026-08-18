@@ -894,20 +894,14 @@ async fn tool_session_create(state: &McpState, args: &Value) -> Result<String, S
             )
         })?;
 
-    // Convert stored credential to SshCredential
-    let ssh_cred = match cred.auth_type.as_str() {
-        "password" => crate::session::SshCredential::Password(cred.credential),
-        "key" | "key_with_passphrase" => crate::session::SshCredential::PrivateKey {
-            key: cred.credential,
-            passphrase: cred.passphrase,
-        },
-        other => {
-            return Err(format!(
-                "Unknown auth type '{}' for server '{}'",
-                other, server_name
-            ))
-        }
-    };
+    // Convert the stored credential. Imported profiles may keep only a local
+    // private-key path, which is resolved immediately before connecting.
+    let ssh_cred = crate::session::SshCredential::from_stored(cred).map_err(|error| {
+        format!(
+            "Failed to load credentials for '{}': {}",
+            server_name, error
+        )
+    })?;
 
     // Create a real terminal session so the GUI and Agent share the same PTY.
     let session = state
