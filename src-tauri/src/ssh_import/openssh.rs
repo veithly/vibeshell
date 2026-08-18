@@ -238,7 +238,72 @@ fn parse_directive(line: &str) -> Option<(String, String)> {
 }
 
 fn split_words(value: &str) -> Vec<String> {
-    shlex::split(value).unwrap_or_else(|| value.split_whitespace().map(str::to_string).collect())
+    // OpenSSH config syntax is shell-like, but Windows paths such as
+    // `C:\\Users\\name\\.ssh\\config` use backslashes as path separators.
+    // POSIX shlex treats every backslash as an escape and silently corrupts
+    // those paths. Only consume a backslash when it actually escapes syntax
+    // that needs escaping; otherwise preserve it verbatim.
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut characters = value.chars().peekable();
+    let mut started = false;
+
+    while let Some(character) = characters.next() {
+        if let Some(active_quote) = quote {
+            if character == active_quote {
+                quote = None;
+                started = true;
+                continue;
+            }
+            if character == '\\' && active_quote != '\'' {
+                if let Some(&next) = characters.peek() {
+                    if matches!(next, '\\' | '"' | '\'' | '#') || next.is_whitespace() {
+                        current.push(characters.next().expect("peeked character must exist"));
+                        started = true;
+                        continue;
+                    }
+                }
+            }
+            current.push(character);
+            started = true;
+            continue;
+        }
+
+        match character {
+            '\'' | '"' => {
+                quote = Some(character);
+                started = true;
+            }
+            '\\' => {
+                if let Some(&next) = characters.peek() {
+                    if matches!(next, '\\' | '"' | '\'' | '#') || next.is_whitespace() {
+                        current.push(characters.next().expect("peeked character must exist"));
+                    } else {
+                        current.push('\\');
+                    }
+                } else {
+                    current.push('\\');
+                }
+                started = true;
+            }
+            character if character.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut current));
+                    started = false;
+                }
+            }
+            _ => {
+                current.push(character);
+                started = true;
+            }
+        }
+    }
+
+    if started {
+        words.push(current);
+    }
+    words
 }
 
 fn strip_unquoted_comment(line: &str) -> String {
@@ -379,6 +444,22 @@ mod tests {
         assert!(prod.agent_forwarding);
         assert_eq!(prod.auth_type, AuthType::KeyWithPassphrase);
         assert!(parsed.iter().any(|profile| profile.name == "bastion"));
+    }
+
+    #[test]
+    fn split_words_preserves_windows_paths_and_quoted_spaces() {
+        assert_eq!(
+            split_words(r#"Include C:\Users\rick\.ssh\extra.conf"#),
+            vec!["Include", r#"C:\Users\rick\.ssh\extra.conf"#]
+        );
+        assert_eq!(
+            split_words(r#"Include "C:\Users\Rick Dev\.ssh\extra.conf""#),
+            vec!["Include", r#"C:\Users\Rick Dev\.ssh\extra.conf"#]
+        );
+        assert_eq!(
+            split_words(r#"Host prod\ server"#),
+            vec!["Host", "prod server"]
+        );
     }
 
     #[test]

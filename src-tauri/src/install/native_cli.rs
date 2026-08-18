@@ -1,9 +1,13 @@
 //! Install the CLI sidecar bundled with the desktop application into a stable
 //! user-level command location.
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::Result;
 
 /// Copy the bundled native CLI to a persistent user command directory.
 ///
