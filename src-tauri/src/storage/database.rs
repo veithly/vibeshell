@@ -8,7 +8,8 @@ use uuid::Uuid;
 
 use super::sync::{self, SyncEntityKind};
 use crate::storage::models::{
-    AuthType, CommandSnippet, PluginInstallation, Recording, Server, TunnelConfig, TunnelType,
+    AuthType, CommandHistoryEntry, CommandSnippet, PluginInstallation, Recording, Server,
+    TunnelConfig, TunnelType,
 };
 
 pub struct Database {
@@ -131,6 +132,21 @@ impl Database {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS command_history (
+                id TEXT PRIMARY KEY,
+                server_id TEXT NOT NULL,
+                command TEXT NOT NULL,
+                is_favorite INTEGER NOT NULL DEFAULT 0,
+                use_count INTEGER NOT NULL DEFAULT 1,
+                last_used_at INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                UNIQUE(server_id, command),
+                FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_command_history_server_last_used
+                ON command_history(server_id, last_used_at DESC);
 
             CREATE TABLE IF NOT EXISTS plugin_installations (
                 plugin_id TEXT PRIMARY KEY,
@@ -871,6 +887,132 @@ impl Database {
 
         Ok(snippets)
     }
+
+    /// List command history for one server, optionally filtered by text and favorites.
+    pub fn history_list(
+        &self,
+        server_id: &str,
+        query: Option<&str>,
+        favorites_only: bool,
+        limit: u32,
+    ) -> Result<Vec<CommandHistoryEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut sql = String::from(
+            "SELECT id, server_id, command, is_favorite, use_count, last_used_at, created_at \
+             FROM command_history WHERE server_id = ?1",
+        );
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(server_id.to_string())];
+
+        if favorites_only {
+            sql.push_str(" AND is_favorite = 1");
+        }
+        if let Some(search) = query.filter(|value| !value.trim().is_empty()) {
+            sql.push_str(" AND command LIKE ?2 ESCAPE '\\'");
+            let escaped = search
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            params.push(Box::new(format!("%{}%", escaped)));
+        }
+        let limit_param = params.len() + 1;
+        sql.push_str(&format!(
+            " ORDER BY is_favorite DESC, last_used_at DESC LIMIT ?{}",
+            limit_param
+        ));
+        params.push(Box::new(i64::from(limit.clamp(1, 500))));
+
+        let mut stmt = conn.prepare(&sql)?;
+        let entries = stmt
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                Ok(CommandHistoryEntry {
+                    id: row.get(0)?,
+                    server_id: row.get(1)?,
+                    command: row.get(2)?,
+                    is_favorite: row.get::<_, i32>(3)? != 0,
+                    use_count: row.get(4)?,
+                    last_used_at: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(entries)
+    }
+
+    /// Record a command execution, merging repeated commands for the same server.
+    pub fn history_record(&self, server_id: &str, command: &str) -> Result<CommandHistoryEntry> {
+        let command = command.trim();
+        if command.is_empty() {
+            anyhow::bail!("Cannot record an empty command");
+        }
+
+        let mut conn = self.conn.lock().unwrap();
+        let now = Utc::now().timestamp();
+        let id = Uuid::new_v4().to_string();
+        let tx = conn.transaction()?;
+        tx.execute(
+            r#"INSERT INTO command_history
+               (id, server_id, command, is_favorite, use_count, last_used_at, created_at)
+               VALUES (?1, ?2, ?3, 0, 1, ?4, ?4)
+               ON CONFLICT(server_id, command) DO UPDATE SET
+                 use_count = command_history.use_count + 1,
+                 last_used_at = excluded.last_used_at"#,
+            rusqlite::params![id, server_id, command, now],
+        )?;
+        let entry = tx.query_row(
+            "SELECT id, server_id, command, is_favorite, use_count, last_used_at, created_at \
+             FROM command_history WHERE server_id = ?1 AND command = ?2",
+            rusqlite::params![server_id, command],
+            |row| {
+                Ok(CommandHistoryEntry {
+                    id: row.get(0)?,
+                    server_id: row.get(1)?,
+                    command: row.get(2)?,
+                    is_favorite: row.get::<_, i32>(3)? != 0,
+                    use_count: row.get(4)?,
+                    last_used_at: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            },
+        )?;
+        tx.commit()?;
+        Ok(entry)
+    }
+
+    /// Mark or unmark a history entry as a favorite.
+    pub fn history_set_favorite(&self, id: &str, is_favorite: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE command_history SET is_favorite = ?2 WHERE id = ?1",
+            rusqlite::params![id, is_favorite as i32],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a single history entry.
+    pub fn history_delete(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM command_history WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Clear history for one server. Favorites are retained by default.
+    pub fn history_clear(&self, server_id: &str, include_favorites: bool) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        if include_favorites {
+            conn.execute(
+                "DELETE FROM command_history WHERE server_id = ?1",
+                [server_id],
+            )?;
+        } else {
+            conn.execute(
+                "DELETE FROM command_history WHERE server_id = ?1 AND is_favorite = 0",
+                [server_id],
+            )?;
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -1200,6 +1342,72 @@ mod tests {
         // Verify list is empty after delete
         let all_after_delete = db.server_list(None, None).unwrap();
         assert_eq!(all_after_delete.len(), 0);
+    }
+
+    #[test]
+    fn test_command_history_is_scoped_and_favorites_survive_clear() {
+        let db = test_db();
+        let mut server_a = Server {
+            id: String::new(),
+            name: "history-a".to_string(),
+            host: "history-a.example.com".to_string(),
+            port: 22,
+            username: "root".to_string(),
+            auth_type: AuthType::Password,
+            credential_id: None,
+            group_id: None,
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            jump_host_id: None,
+            post_login_command: None,
+            agent_forwarding: false,
+        };
+        let mut server_b = Server {
+            name: "history-b".to_string(),
+            host: "history-b.example.com".to_string(),
+            ..server_a.clone()
+        };
+        db.server_add(&mut server_a).unwrap();
+        db.server_add(&mut server_b).unwrap();
+
+        let first = db
+            .history_record(&server_a.id, "systemctl status nginx")
+            .unwrap();
+        let repeated = db
+            .history_record(&server_a.id, "systemctl status nginx")
+            .unwrap();
+        db.history_record(&server_a.id, "journalctl -u nginx")
+            .unwrap();
+        db.history_record(&server_b.id, "systemctl status nginx")
+            .unwrap();
+
+        assert_eq!(first.id, repeated.id);
+        assert_eq!(repeated.use_count, 2);
+        assert_eq!(
+            db.history_list(&server_a.id, None, false, 200)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            db.history_list(&server_b.id, None, false, 200)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.history_list(&server_a.id, Some("journal"), false, 200)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        db.history_set_favorite(&first.id, true).unwrap();
+        db.history_clear(&server_a.id, false).unwrap();
+        let favorites = db.history_list(&server_a.id, None, true, 200).unwrap();
+        assert_eq!(favorites.len(), 1);
+        assert_eq!(favorites[0].command, "systemctl status nginx");
     }
 
     #[test]

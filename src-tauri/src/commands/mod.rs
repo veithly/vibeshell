@@ -8,6 +8,7 @@ pub mod coding_agent;
 pub mod coding_agent;
 pub mod dialog;
 pub mod fingerprint;
+pub mod history;
 pub mod install;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod local_shell;
@@ -30,6 +31,7 @@ pub use cloud_sync::*;
 pub use coding_agent::*;
 pub use dialog::*;
 pub use fingerprint::*;
+pub use history::*;
 pub use install::*;
 pub use local_shell::*;
 pub use logging::*;

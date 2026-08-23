@@ -132,9 +132,13 @@ function fuzzyMatch(pattern: string, text: string): FuzzyMatchResult {
   return { matches: false, score: 0, ranges: [] };
 }
 
-function loadHistory(): string[] {
+function getHistoryStorageKey(scope: string): string {
+  return scope === 'global' ? HISTORY_STORAGE_KEY : `${HISTORY_STORAGE_KEY}:${scope}`;
+}
+
+function loadHistory(scope: string): string[] {
   try {
-    const stored = globalThis.localStorage?.getItem(HISTORY_STORAGE_KEY);
+    const stored = globalThis.localStorage?.getItem(getHistoryStorageKey(scope));
     if (stored) {
       const parsed = JSON.parse(stored);
       if (Array.isArray(parsed)) {
@@ -147,9 +151,12 @@ function loadHistory(): string[] {
   return [];
 }
 
-function saveHistory(history: string[]): void {
+function saveHistory(history: string[], scope: string): void {
   try {
-    globalThis.localStorage?.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history.slice(-MAX_HISTORY_SIZE)));
+    globalThis.localStorage?.setItem(
+      getHistoryStorageKey(scope),
+      JSON.stringify(history.slice(-MAX_HISTORY_SIZE))
+    );
   } catch {
     // Completion still works without persisted history.
   }
@@ -172,7 +179,10 @@ function getEnvVarSuggestions(input: string, maxResults = 5): CompletionItem[] {
     }));
 }
 
-export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [CompletionState, CompletionActions] {
+export function useCompletion(
+  aiPredictionSettings?: AiPredictionSettings,
+  historyScope = 'global'
+): [CompletionState, CompletionActions] {
   const [visible, setVisible] = useState(false);
   const [items, setItems] = useState<CompletionItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -181,7 +191,8 @@ export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [Com
   const [completionPrefix, setCompletionPrefix] = useState('');
   const [ghostText, setGhostText] = useState('');
 
-  const historyRef = useRef<string[]>(loadHistory());
+  const historyRef = useRef<string[]>(loadHistory(historyScope));
+  const historyScopeRef = useRef(historyScope);
   const aiPredictionSettingsRef = useRef(aiPredictionSettings);
   const aiPredictionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aiPredictionAbortRef = useRef<AbortController | null>(null);
@@ -195,8 +206,9 @@ export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [Com
   const localCompletionRequestIdRef = useRef(0);
 
   useEffect(() => {
-    historyRef.current = loadHistory();
-  }, []);
+    historyScopeRef.current = historyScope;
+    historyRef.current = loadHistory(historyScope);
+  }, [historyScope]);
 
   // Clear any pending debounced local completion timer on unmount to avoid
   // leaking a setTimeout that fires setState after the component is gone.
@@ -533,7 +545,7 @@ export function useCompletion(aiPredictionSettings?: AiPredictionSettings): [Com
     if (lastCommand === trimmed) return;
 
     historyRef.current = [...historyRef.current, trimmed].slice(-MAX_HISTORY_SIZE);
-    saveHistory(historyRef.current);
+    saveHistory(historyRef.current, historyScopeRef.current);
   }, []);
 
   const state: CompletionState = useMemo(() => ({

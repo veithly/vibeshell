@@ -34,6 +34,7 @@
   "sidebar": {
     "addServer": "Add Server",
     "quickCmd": "Quick Cmd",
+    "history": "Command history",
     "sftp": "SFTP",
     "tunnels": "Tunnels",
     "snippets": "Snippets",
@@ -606,6 +607,23 @@
     "placeholder": "Type a command...",
     "recentCommands": "Recent Commands",
     "noRecent": "No recent commands"
+  },
+
+  "commandHistory": {
+    "title": "Command history",
+    "noServer": "No server selected",
+    "connectFirst": "Connect to a server first to view command history.",
+    "searchPlaceholder": "Search commands on this server...",
+    "favorites": "Favorites",
+    "favorite": "Favorite command",
+    "unfavorite": "Remove from favorites",
+    "clear": "Clear non-favorites",
+    "clearAll": "Clear all",
+    "clearAllConfirm": "Clear all command history for this server? Favorites will also be removed.",
+    "use": "Run command",
+    "used": "Used {{count}} times",
+    "empty": "No command history yet",
+    "noMatches": "No matching commands"
   },
 
   "titleBar": {

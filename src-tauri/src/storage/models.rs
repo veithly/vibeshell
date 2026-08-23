@@ -149,6 +149,18 @@ pub struct CommandSnippet {
     pub updated_at: i64,
 }
 
+/// A command executed in an SSH session, scoped to one configured server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandHistoryEntry {
+    pub id: String,
+    pub server_id: String,
+    pub command: String,
+    pub is_favorite: bool,
+    pub use_count: i64,
+    pub last_used_at: i64,
+    pub created_at: i64,
+}
+
 // =============================================================================
 // Plugin Models
 // =============================================================================

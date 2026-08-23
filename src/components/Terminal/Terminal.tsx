@@ -10,7 +10,7 @@ import { CompletionPopup, type CompletionItem } from './CompletionPopup';
 import { MobileKeyBar } from './MobileKeyBar';
 import { useCompletion } from './useCompletion';
 import { applyTrackedInput, getClickedInputPosition, getCursorMoveSequence } from './inputCursor';
-import { flushInputBatch } from '../../lib/tauri';
+import { fireAndForgetInvoke, flushInputBatch } from '../../lib/tauri';
 
 type ConnectionStatus = 'initializing' | 'listening' | 'receiving' | 'error';
 
@@ -157,6 +157,13 @@ function useSessionType(sessionId: string | undefined): 'local' | 'ssh' | undefi
   });
 }
 
+function useSessionServerId(sessionId: string | undefined): string | undefined {
+  return useSessionStore((state) => {
+    if (!sessionId) return undefined;
+    return state.sessions.find((session) => session.id === sessionId)?.serverId;
+  });
+}
+
 function useIsCodingAgentSession(sessionId: string | undefined): boolean {
   return useSessionStore((state) => {
     if (!sessionId) return false;
@@ -175,6 +182,7 @@ export interface TerminalHandle {
   clear: () => void;
   focus: () => void;
   getDimensions: () => { cols: number; rows: number } | null;
+  sendCommand: (command: string) => void;
 }
 
 export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
@@ -207,6 +215,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     const { settings } = useSettingsStore();
 
     const sessionType = useSessionType(sessionId);
+    const serverId = useSessionServerId(sessionId);
     const isLocalShell = sessionType === 'local';
     const isCodingAgent = useIsCodingAgentSession(sessionId);
     const rawInputRef = useRef(isCodingAgent);
@@ -228,7 +237,10 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       const currentTheme = themes.find((theme) => theme.name === settings.appearance.theme);
       agentInputColorRef.current = (currentTheme ?? themes[0]).colors.magenta;
     }, [settings.appearance.theme]);
-    const [completionState, completionActions] = useCompletion(settings.aiPrediction);
+    const [completionState, completionActions] = useCompletion(
+      settings.aiPrediction,
+      serverId ? `server:${serverId}` : 'global'
+    );
 
     const [contextMenu, setContextMenu] = useState({
       visible: false,
@@ -257,6 +269,11 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       }
     }, [isCodingAgent]);
 
+    const sessionIdRef = useRef(sessionId);
+    const serverIdRef = useRef(serverId);
+    useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+    useEffect(() => { serverIdRef.current = serverId; }, [serverId]);
+
     useImperativeHandle(ref, () => ({
       write: (data: string | Uint8Array) => {
         xtermRef.current?.write(data);
@@ -279,10 +296,22 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         }
         return null;
       },
+      sendCommand: (command: string) => {
+        const sid = sessionIdRef.current;
+        const normalized = command.trim();
+        if (!sid || !normalized) return;
+        sendInputForSessionRef.current(sid, `\x15${normalized}\r`);
+        inputBufferRef.current = '';
+        cursorPositionRef.current = 0;
+        completionActionsRef.current.hideCompletions();
+        completionActionsRef.current.clearGhostText();
+        if (!isLocalShell && !isCodingAgent && serverIdRef.current) {
+          fireAndForgetInvoke('history_record', {
+            input: { serverId: serverIdRef.current, command: normalized },
+          });
+        }
+      },
     }), []);
-
-    const sessionIdRef = useRef(sessionId);
-    useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
     const handleTerminalResize = useRef(
       throttle((cols: number, rows: number) => {
@@ -828,6 +857,11 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           const command = previousBuffer.trim();
           if (command) {
             compActions.addToHistory(command);
+            if (!isLocalShell && !isCodingAgent && serverIdRef.current) {
+              fireAndForgetInvoke('history_record', {
+                input: { serverId: serverIdRef.current, command },
+              });
+            }
           }
           compActions.hideCompletions();
           compActions.clearGhostText();

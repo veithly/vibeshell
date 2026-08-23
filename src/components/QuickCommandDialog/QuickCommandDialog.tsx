@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { X, Terminal, Play, Loader2, Copy, Check } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useSessionStore } from '../../stores/sessionStore';
-import { safeInvoke } from '../../lib/tauri';
+import { fireAndForgetInvoke, safeInvoke } from '../../lib/tauri';
 
 interface QuickCommandDialogProps {
   isOpen: boolean;
@@ -50,6 +50,14 @@ export function QuickCommandDialog({ isOpen, onClose }: QuickCommandDialogProps)
   const handleRunCommand = useCallback(async () => {
     if (!command.trim() || !selectedSessionId || isRunning) return;
 
+    const selectedSession = sessions.find((session) => session.id === selectedSessionId);
+    const recordHistory = () => {
+      if (selectedSession?.sessionType !== 'ssh') return;
+      fireAndForgetInvoke('history_record', {
+        input: { serverId: selectedSession.serverId, command: command.trim() },
+      });
+    };
+
     setIsRunning(true);
     setOutput('');
 
@@ -61,6 +69,7 @@ export function QuickCommandDialog({ isOpen, onClose }: QuickCommandDialogProps)
       });
 
       if (result.success) {
+        recordHistory();
         setOutput(result.data.output || '(No output)');
         if (result.data.exitCode !== 0) {
           setOutput((prev) => prev + `\n\n[Exit code: ${result.data.exitCode}]`);
@@ -68,19 +77,21 @@ export function QuickCommandDialog({ isOpen, onClose }: QuickCommandDialogProps)
       } else {
         // Fallback: Send command directly to terminal input
         const { sendInput } = useSessionStore.getState();
-        await sendInput(selectedSessionId, command.trim() + '\n');
+        const sent = await sendInput(selectedSessionId, command.trim() + '\n');
+        if (sent) recordHistory();
         setOutput('Command sent to terminal. Check the terminal for output.');
       }
     } catch (error) {
       console.error('Failed to execute command:', error);
       // Fallback to sending to terminal
       const { sendInput } = useSessionStore.getState();
-      await sendInput(selectedSessionId, command.trim() + '\n');
+      const sent = await sendInput(selectedSessionId, command.trim() + '\n');
+      if (sent) recordHistory();
       setOutput('Command sent to terminal. Check the terminal for output.');
     } finally {
       setIsRunning(false);
     }
-  }, [command, selectedSessionId, isRunning]);
+  }, [command, isRunning, selectedSessionId, sessions]);
 
   const handleCopyOutput = useCallback(() => {
     if (output) {

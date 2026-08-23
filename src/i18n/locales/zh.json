@@ -34,6 +34,7 @@
   "sidebar": {
     "addServer": "添加服务器",
     "quickCmd": "快捷命令",
+    "history": "指令历史",
     "sftp": "SFTP",
     "tunnels": "隧道",
     "snippets": "命令片段",
@@ -606,6 +607,23 @@
     "placeholder": "输入命令...",
     "recentCommands": "最近使用的命令",
     "noRecent": "暂无最近命令"
+  },
+
+  "commandHistory": {
+    "title": "指令历史",
+    "noServer": "未选择服务器",
+    "connectFirst": "请先连接一台服务器以查看指令历史。",
+    "searchPlaceholder": "搜索此服务器的指令...",
+    "favorites": "收藏",
+    "favorite": "收藏指令",
+    "unfavorite": "取消收藏",
+    "clear": "清空非收藏",
+    "clearAll": "清空全部",
+    "clearAllConfirm": "确定清空此服务器的全部指令历史吗？收藏也会被删除。",
+    "use": "执行指令",
+    "used": "使用 {{count}} 次",
+    "empty": "暂无指令历史",
+    "noMatches": "没有匹配的指令"
   },
 
   "titleBar": {

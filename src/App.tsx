@@ -17,6 +17,7 @@ import {
   FileDiff,
   Blocks,
   Store,
+  History,
 } from 'lucide-react';
 import { Mosaic, MosaicWindow, type MosaicNode, type MosaicBranch } from 'react-mosaic-component2';
 import 'react-mosaic-component2/react-mosaic-component.css';
@@ -35,6 +36,7 @@ import { EditServerDialog } from './components/EditServerDialog';
 import { ConnectDialog } from './components/ConnectDialog';
 import { SelectServerDialog } from './components/SelectServerDialog';
 import { QuickCommandDialog } from './components/QuickCommandDialog';
+import { CommandHistoryDialog } from './components/CommandHistoryDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Notifications } from './components/Notifications';
 import { AgentActivityPanel } from './components/AgentActivityPanel';
@@ -99,6 +101,7 @@ function App() {
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
   const [isConnectOpen, setIsConnectOpen] = useState(false);
   const [isQuickCommandOpen, setIsQuickCommandOpen] = useState(false);
+  const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false);
   const [isEditServerOpen, setIsEditServerOpen] = useState(false);
   const [isSelectServerOpen, setIsSelectServerOpen] = useState(false);
   const [sessionLauncherTab, setSessionLauncherTab] = useState<'agent' | 'local' | 'ssh' | undefined>();
@@ -579,6 +582,19 @@ function App() {
     setIsQuickCommandOpen(true);
   }, []);
 
+  const handleOpenCommandHistory = useCallback(() => {
+    if (!activeSession || activeSession.sessionType !== 'ssh') {
+      notifyWarning(t('commandHistory.title'), t('commandHistory.connectFirst'));
+      return;
+    }
+    setIsCommandHistoryOpen(true);
+  }, [activeSession, notifyWarning, t]);
+
+  const handleUseHistoryCommand = useCallback((command: string) => {
+    if (!activeSessionId || activeSession?.sessionType !== 'ssh') return;
+    terminalRefs.current.get(activeSessionId)?.sendCommand(command);
+  }, [activeSession?.sessionType, activeSessionId]);
+
   const handleOpenSnippets = useCallback(() => {
     setIsSnippetManagerOpen(true);
   }, []);
@@ -755,6 +771,14 @@ function App() {
                         onSelect: handleQuickCommand,
                       },
                       {
+                        id: 'command-history',
+                        label: t('sidebar.history'),
+                        icon: <History className="h-4 w-4" />,
+                        disabled: !activeSession || activeSession.sessionType !== 'ssh',
+                        pressed: isCommandHistoryOpen,
+                        onSelect: handleOpenCommandHistory,
+                      },
+                      {
                         id: 'snippets',
                         label: t('sidebar.snippets'),
                         icon: <TerminalIcon className="h-4 w-4" />,
@@ -811,6 +835,16 @@ function App() {
                     <Zap className="h-4 w-4" />
                   </button>
                   <button
+                    className={cn('icon-button tooltip-button', isCommandHistoryOpen && 'is-active')}
+                    data-tooltip={t('sidebar.history')}
+                    onClick={handleOpenCommandHistory}
+                    disabled={!activeSession || activeSession.sessionType !== 'ssh'}
+                    aria-pressed={isCommandHistoryOpen}
+                    aria-label={t('sidebar.history')}
+                  >
+                    <History className="h-4 w-4" />
+                  </button>
+                  <button
                     className={cn('icon-button tooltip-button', isSftpOpen && 'is-active')}
                     data-tooltip={t('sidebar.sftp')}
                     onClick={handleOpenSftp}
@@ -862,6 +896,14 @@ function App() {
                         label: t('sidebar.snippets'),
                         icon: <TerminalIcon className="h-4 w-4" />,
                         onSelect: handleOpenSnippets,
+                      },
+                      {
+                        id: 'command-history',
+                        label: t('sidebar.history'),
+                        icon: <History className="h-4 w-4" />,
+                        disabled: !activeSession || activeSession.sessionType !== 'ssh',
+                        pressed: isCommandHistoryOpen,
+                        onSelect: handleOpenCommandHistory,
                       },
                       ...(runtimeCapabilities.localShell ? [{
                         id: 'coding-agent',
@@ -1049,6 +1091,14 @@ function App() {
       <QuickCommandDialog
         isOpen={isQuickCommandOpen}
         onClose={() => setIsQuickCommandOpen(false)}
+      />
+
+      <CommandHistoryDialog
+        isOpen={isCommandHistoryOpen}
+        serverId={activeSession?.sessionType === 'ssh' ? activeSession.serverId : undefined}
+        serverName={activeSession?.sessionType === 'ssh' ? activeSession.serverName : undefined}
+        onClose={() => setIsCommandHistoryOpen(false)}
+        onUseCommand={handleUseHistoryCommand}
       />
 
       <SelectServerDialog
