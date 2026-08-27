@@ -3,9 +3,8 @@
 //! This module provides secure storage and verification of SSH server host key fingerprints.
 //! It stores fingerprints locally to detect potential MITM attacks when a server's key changes.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chrono::Utc;
-use directories::ProjectDirs;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -103,9 +102,7 @@ impl FingerprintStore {
 
     /// Get the path to the fingerprint store file
     fn get_store_path() -> Result<PathBuf> {
-        let proj_dirs = ProjectDirs::from("com", "vibeshell", "VibeShell")
-            .ok_or_else(|| anyhow!("Could not determine project directories"))?;
-        Ok(proj_dirs.data_dir().join("ssh_fingerprints.json"))
+        crate::platform::default_fingerprint_path()
     }
 
     /// Generate a unique key for host:port combination

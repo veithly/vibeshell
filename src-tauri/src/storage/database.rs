@@ -1,6 +1,5 @@
 use anyhow::Result;
 use chrono::Utc;
-use directories::ProjectDirs;
 use rusqlite::{Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -8,12 +7,28 @@ use uuid::Uuid;
 
 use super::sync::{self, SyncEntityKind};
 use crate::storage::models::{
-    AuthType, CommandHistoryEntry, CommandSnippet, PluginInstallation, Recording, Server,
-    TunnelConfig, TunnelType,
+    AuthType, CommandHistoryEntry, CommandSnippet, DatabaseConnection, PluginInstallation,
+    Recording, Server, TunnelConfig, TunnelType,
 };
 
 pub struct Database {
     pub(super) conn: Mutex<Connection>,
+}
+
+fn row_to_database_connection(row: &rusqlite::Row<'_>) -> rusqlite::Result<DatabaseConnection> {
+    Ok(DatabaseConnection {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        engine: row.get(2)?,
+        host: row.get(3)?,
+        port: row.get::<_, i64>(4)? as u16,
+        username: row.get(5)?,
+        password_encrypted: row.get(6)?,
+        default_database: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at: row.get(9)?,
+        last_connected_at: row.get(10)?,
+    })
 }
 
 fn row_to_plugin_installation(row: &rusqlite::Row<'_>) -> rusqlite::Result<PluginInstallation> {
@@ -53,9 +68,7 @@ impl Database {
     }
 
     fn get_db_path() -> Result<PathBuf> {
-        let proj_dirs = ProjectDirs::from("com", "vibeshell", "VibeShell")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine project directories"))?;
-        Ok(proj_dirs.data_dir().join("vibeshell.db"))
+        crate::platform::default_database_path()
     }
 
     fn init_schema(&self) -> Result<()> {
@@ -158,6 +171,20 @@ impl Database {
                 settings_json TEXT NOT NULL DEFAULT '{}',
                 installed_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS database_connections (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                engine TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER NOT NULL,
+                username TEXT NOT NULL DEFAULT '',
+                password_encrypted TEXT NOT NULL DEFAULT '',
+                default_database TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                last_connected_at INTEGER
             );
         "#,
         )?;
@@ -1142,6 +1169,84 @@ impl Database {
 
     // === Plugin Operations ===
 
+
+    // -----------------------------------------------------------------------
+    // Database connections
+    // -----------------------------------------------------------------------
+
+    pub fn database_connection_list(&self) -> Result<Vec<DatabaseConnection>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, engine, host, port, username, password_encrypted, \
+             default_database, created_at, updated_at, last_connected_at \
+             FROM database_connections ORDER BY name COLLATE NOCASE ASC",
+        )?;
+        let records = stmt
+            .query_map([], row_to_database_connection)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(records)
+    }
+
+    pub fn database_connection_get(&self, id: &str) -> Result<Option<DatabaseConnection>> {
+        let conn = self.conn.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT id, name, engine, host, port, username, password_encrypted, \
+             default_database, created_at, updated_at, last_connected_at \
+             FROM database_connections WHERE id = ?1",
+            [id],
+            row_to_database_connection,
+        );
+        match result {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn database_connection_upsert(&self, connection: &DatabaseConnection) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO database_connections \
+             (id, name, engine, host, port, username, password_encrypted, \
+              default_database, created_at, updated_at, last_connected_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+             ON CONFLICT(id) DO UPDATE SET \
+               name = excluded.name, engine = excluded.engine, host = excluded.host, \
+               port = excluded.port, username = excluded.username, \
+               password_encrypted = excluded.password_encrypted, \
+               default_database = excluded.default_database, updated_at = excluded.updated_at",
+            rusqlite::params![
+                connection.id,
+                connection.name,
+                connection.engine,
+                connection.host,
+                connection.port,
+                connection.username,
+                connection.password_encrypted,
+                connection.default_database,
+                connection.created_at,
+                connection.updated_at,
+                connection.last_connected_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn database_connection_touch(&self, id: &str, connected_at: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE database_connections SET last_connected_at = ?2 WHERE id = ?1",
+            rusqlite::params![id, connected_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn database_connection_delete(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM database_connections WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     pub fn plugin_installation_list(&self) -> Result<Vec<PluginInstallation>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -1175,8 +1280,9 @@ impl Database {
     }
 
     pub fn plugin_installation_upsert(&self, installation: &PluginInstallation) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
             r#"INSERT INTO plugin_installations
                (plugin_id, version, manifest_json, source, enabled,
                 granted_permissions_json, settings_json, installed_at, updated_at)
@@ -1201,6 +1307,9 @@ impl Database {
                 installation.updated_at,
             ],
         )?;
+
+        sync::record_plugin_installation_upsert(&tx, installation)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1209,20 +1318,30 @@ impl Database {
         plugin_id: &str,
         settings_json: &str,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE plugin_installations SET settings_json = ?2, updated_at = ?3 WHERE plugin_id = ?1",
             rusqlite::params![plugin_id, settings_json, Utc::now().timestamp()],
         )?;
+
+        // Re-record from the stored row so the synced payload reflects the
+        // bumped updated_at timestamp.
+        sync::record_current_upsert(&tx, SyncEntityKind::PluginInstallation, plugin_id)?;
+        tx.commit()?;
         Ok(())
     }
 
     pub fn plugin_installation_delete(&self, plugin_id: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
             "DELETE FROM plugin_installations WHERE plugin_id = ?1",
             [plugin_id],
         )?;
+
+        sync::record_local_delete(&tx, SyncEntityKind::PluginInstallation, plugin_id)?;
+        tx.commit()?;
         Ok(())
     }
 
