@@ -32,6 +32,12 @@ pub struct PluginIdRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PluginExportRequest {
+    pub plugin_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginEnabledRequest {
     pub plugin_id: String,
     pub enabled: bool,
@@ -91,6 +97,67 @@ pub async fn plugin_import(db: State<'_, Arc<Database>>) -> Result<Option<Plugin
     }
 }
 
+/// Export a plugin manifest as a portable, spec-compliant JSON file. Installed
+/// external plugins export the manifest they were imported from; built-in
+/// plugins export the shipped manifest, which doubles as an authoring
+/// template. Returns `None` when the user cancels the save dialog. Settings
+/// stay out of the export on purpose — they are device state and travel with
+/// the workspace backup instead.
+#[tauri::command]
+pub async fn plugin_export(
+    db: State<'_, Arc<Database>>,
+    request: PluginExportRequest,
+) -> Result<Option<String>, String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = db;
+        return Err("Plugin manifest export is unavailable on mobile".to_string());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let manifest = export_manifest_for(&db, &request.plugin_id)?;
+
+        let manifest_json = serde_json::to_string_pretty(&manifest)
+            .map_err(|error| format!("Failed to encode plugin manifest: {}", error))?
+            + "\n";
+
+        let path = FileDialog::new()
+            .add_filter("VibeShell plugin manifest", &["json"])
+            .set_title("Export VibeShell Plugin")
+            .set_file_name(format!(
+                "{}-{}.plugin.json",
+                manifest.id, manifest.version
+            ))
+            .save_file();
+
+        let Some(path) = path else {
+            return Ok(None);
+        };
+
+        fs::write(&path, manifest_json)
+            .map_err(|error| format!("Failed to write plugin manifest: {}", error))?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    }
+}
+
+fn export_manifest_for(db: &Database, plugin_id: &str) -> Result<PluginManifest, String> {
+    if let Some(installation) = db
+        .plugin_installation_get(plugin_id)
+        .map_err(|error| error.to_string())?
+    {
+        let source = PluginSource::parse(&installation.source)?;
+        return manifest_for_installation(&installation, &source);
+    }
+
+    // Not installed: only built-in catalog entries can be exported (as an
+    // authoring template). External plugins disappear with their installation.
+    builtin_catalog()?
+        .into_iter()
+        .find(|manifest| manifest.id == plugin_id)
+        .ok_or_else(|| format!("Plugin not found: {}", plugin_id))
+}
+
 #[tauri::command]
 pub fn plugin_uninstall(
     db: State<'_, Arc<Database>>,
@@ -144,6 +211,27 @@ pub fn plugin_update_settings(
     record_from_installation(&updated)
 }
 
+/// Whether an installed plugin may exercise `required` right now.
+///
+/// Built-in manifests ship with the app: when an update grants a new
+/// permission (e.g. `local_exec` for local sessions), installations made by an
+/// older build still hold the stale grant snapshot — deriving from the current
+/// catalog manifest self-heals those instead of forcing a reinstall. External
+/// manifests are user-reviewed at enable time and can only change through a
+/// re-import (which revokes grants), so their stored snapshot stays
+/// authoritative.
+fn permission_satisfied(
+    source: PluginSource,
+    manifest: &PluginManifest,
+    granted: &[PluginPermission],
+    required: &PluginPermission,
+) -> bool {
+    match source {
+        PluginSource::Builtin => manifest.permissions.contains(required),
+        PluginSource::External => granted.contains(required),
+    }
+}
+
 #[tauri::command]
 pub async fn plugin_execute(
     manager: State<'_, Arc<SessionManager>>,
@@ -175,7 +263,7 @@ pub async fn plugin_execute(
     } else {
         PluginPermission::RemoteExec
     };
-    if !granted_permissions.contains(&required_permission) {
+    if !permission_satisfied(source, &manifest, &granted_permissions, &required_permission) {
         return Err(format!(
             "Plugin {} has not been granted {} permission",
             request.plugin_id,
@@ -565,6 +653,57 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let db = Database::new_at(directory.path().join("plugins.db")).unwrap();
         (directory, db)
+    }
+
+    #[test]
+    fn built_in_grants_self_heal_from_the_current_manifest() {
+        let manifest = builtin_catalog()
+            .unwrap()
+            .into_iter()
+            .find(|manifest| manifest.id == "docker-containers")
+            .unwrap();
+        // An installation made before local_exec existed holds only
+        // remote_exec, but a local session must still work: the current
+        // built-in manifest is authoritative.
+        assert!(permission_satisfied(
+            PluginSource::Builtin,
+            &manifest,
+            &[PluginPermission::RemoteExec],
+            &PluginPermission::LocalExec,
+        ));
+        // External plugins keep the reviewed snapshot as the source of truth.
+        let external = serde_json::from_value::<PluginManifest>(serde_json::json!({
+            "schemaVersion": 1,
+            "id": "example.tools",
+            "name": "Tools",
+            "description": "Example",
+            "version": "1.0.0",
+            "author": "Example",
+            "category": "operations",
+            "icon": "wrench",
+            "permissions": ["remote_exec", "local_exec"],
+            "sessionTypes": ["ssh", "local"],
+            "entry": {
+                "type": "commands",
+                "actions": [{
+                    "id": "version", "name": "Version", "description": "Show version",
+                    "program": "tool", "args": ["--version"]
+                }]
+            }
+        }))
+        .unwrap();
+        assert!(permission_satisfied(
+            PluginSource::External,
+            &external,
+            &[PluginPermission::LocalExec],
+            &PluginPermission::LocalExec,
+        ));
+        assert!(!permission_satisfied(
+            PluginSource::External,
+            &external,
+            &[PluginPermission::LocalExec],
+            &PluginPermission::RemoteExec,
+        ));
     }
 
     #[test]

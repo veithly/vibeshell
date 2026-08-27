@@ -8,6 +8,7 @@ import {
   Terminal as TerminalIcon,
   ArrowRightLeft,
   Columns2,
+  ExternalLink,
   Rows2,
   PanelRightClose,
   Loader2,
@@ -26,7 +27,13 @@ import { safeInvoke } from './lib/tauri';
 import { useSessionStore, type Session } from './stores/sessionStore';
 import { useNavigationStore } from './stores/navigationStore';
 import { useNotificationStore } from './stores/notificationStore';
-import { useSettingsStore, themes } from './stores/settingsStore';
+import { useThemeSync } from './lib/useThemeSync';
+import {
+  DETACHED_CLOSED_EVENT,
+  removeDetachedFromLayout,
+  openDetachedWindow,
+  restoreDetachedWindows,
+} from './lib/detach';
 import { UPDATE_CHECK_INTERVAL_MS, useUpdateStore } from './stores/updateStore';
 import { SessionTabs } from './components/SessionTabs';
 import { TitleBar } from './components/TitleBar';
@@ -51,8 +58,22 @@ import { useServerStore, type Server } from './stores/serverStore';
 import { useRuntimeCapabilitiesStore } from './stores/runtimeCapabilitiesStore';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { usePluginStore } from './stores/pluginStore';
+import {
+  usePluginWorkspaceStore,
+  type PluginWorkspaceTab,
+} from './stores/pluginWorkspaceStore';
 import { useFileWorkspaceStore } from './stores/fileWorkspaceStore';
 import { SessionPluginDock } from './components/SessionPluginDock';
+import { PluginPanel } from './components/PluginPanel';
+import { PluginTabLauncher } from './components/PluginTabLauncher';
+import { PaneDropZone } from './components/PaneDropZone';
+import {
+  parsePaneId,
+  pluginPaneId,
+  sessionPaneId,
+  SESSION_PANE_PREFIX,
+  PLUGIN_PANE_PREFIX,
+} from './lib/paneIds';
 import type { TerminalHandle } from './components/Terminal';
 import {
   MAX_TERMINAL_PANES,
@@ -67,6 +88,7 @@ const Settings = lazy(() => import('./components/Settings').then((mod) => ({ def
 const PluginMarketplace = lazy(() => import('./components/PluginMarketplace').then((mod) => ({ default: mod.PluginMarketplace })));
 const Terminal = lazy(() => import('./components/Terminal').then((mod) => ({ default: mod.Terminal })));
 const FileWorkspace = lazy(() => import('./components/FileWorkspace').then((mod) => ({ default: mod.FileWorkspace })));
+const PluginWorkspaceView = lazy(() => import('./components/PluginPanel/PluginWorkspaceView').then((mod) => ({ default: mod.PluginWorkspaceView })));
 
 function App() {
   const { t } = useTranslation();
@@ -84,7 +106,6 @@ function App() {
   } = useSessionStore();
   const { currentView, goToMain, goToSettings, goToPlugins } = useNavigationStore();
   const { warning: notifyWarning, error: notifyError } = useNotificationStore();
-  const { settings, initializeSettings, updateAppearanceSettings } = useSettingsStore();
   const { checkForUpdates, markVersionNotified } = useUpdateStore();
   const servers = useServerStore((state) => state.servers);
   const fetchServers = useServerStore((state) => state.fetchServers);
@@ -93,10 +114,15 @@ function App() {
   const loadRuntimeCapabilities = useRuntimeCapabilitiesStore((state) => state.load);
   const isCompactWorkspace = useMediaQuery('(max-width: 767px)');
   const fetchPlugins = usePluginStore((state) => state.fetchPlugins);
+  const plugins = usePluginStore((state) => state.plugins);
   const fileTabs = useFileWorkspaceStore((state) => state.tabs);
   const activeFileTabId = useFileWorkspaceStore((state) => state.activeTabId);
   const activateFileTab = useFileWorkspaceStore((state) => state.activateTab);
   const closeFileTab = useFileWorkspaceStore((state) => state.closeTab);
+  const pluginTabs = usePluginWorkspaceStore((state) => state.tabs);
+  const activePluginTabId = usePluginWorkspaceStore((state) => state.activeTabId);
+  const activatePluginTab = usePluginWorkspaceStore((state) => state.activateTab);
+  const closePluginTab = usePluginWorkspaceStore((state) => state.closeTab);
 
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
   const [isConnectOpen, setIsConnectOpen] = useState(false);
@@ -125,38 +151,7 @@ function App() {
   const sessionBootstrapRef = useRef<Promise<void> | null>(null);
   const terminalPaneCreationRef = useRef(false);
 
-  useEffect(() => {
-    initializeSettings();
-  }, [initializeSettings]);
-
-  // Keep the resolved theme in sync with the operating system while the user
-  // has selected the system mode. The resolved `theme` is shared by terminal
-  // and overlay components, so they update immediately when the OS changes.
-  useEffect(() => {
-    if (settings.appearance.themeMode !== 'system' || typeof window === 'undefined' || !window.matchMedia) {
-      return;
-    }
-
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-    const applySystemTheme = () => {
-      const nextTheme = mediaQuery.matches
-        ? settings.appearance.darkTheme
-        : settings.appearance.lightTheme;
-      if (settings.appearance.theme !== nextTheme) {
-        void updateAppearanceSettings({ theme: nextTheme });
-      }
-    };
-
-    applySystemTheme();
-    mediaQuery.addEventListener?.('change', applySystemTheme);
-    return () => mediaQuery.removeEventListener?.('change', applySystemTheme);
-  }, [
-    settings.appearance.theme,
-    settings.appearance.themeMode,
-    settings.appearance.lightTheme,
-    settings.appearance.darkTheme,
-    updateAppearanceSettings,
-  ]);
+  useThemeSync();
 
   useEffect(() => {
     void loadRuntimeCapabilities();
@@ -244,33 +239,80 @@ function App() {
     };
   }, [createLocalShellSession, fetchSessions, loadRuntimeCapabilities, syncRemoteSessions]);
 
+  // Re-open the detached windows from the previous session so the workspace
+  // comes back exactly as it was left.
   useEffect(() => {
-    const currentTheme = themes.find(t => t.name === settings.appearance.theme);
-    if (!currentTheme) return;
+    void restoreDetachedWindows();
+  }, []);
 
-    const root = document.documentElement;
-    root.style.setProperty('--tokyo-bg', currentTheme.colors.bg);
-    root.style.setProperty('--tokyo-bg-dark', currentTheme.colors.bgDark);
-    root.style.setProperty('--tokyo-bg-hl', currentTheme.colors.bgHl);
-    root.style.setProperty('--tokyo-fg', currentTheme.colors.fg);
-    root.style.setProperty('--tokyo-fg-dark', currentTheme.colors.fgDark);
-    root.style.setProperty('--tokyo-comment', currentTheme.colors.fgDark);
-    root.style.setProperty('--tokyo-selection', currentTheme.colors.bgHl);
-    root.style.setProperty('--tokyo-blue', currentTheme.colors.accent);
-    root.style.setProperty('--tokyo-on-accent', currentTheme.colors.onAccent);
-    root.style.setProperty('--tokyo-red', currentTheme.colors.red);
-    root.style.setProperty('--tokyo-green', currentTheme.colors.green);
-    root.style.setProperty('--tokyo-yellow', currentTheme.colors.yellow);
-    root.style.setProperty('--tokyo-magenta', currentTheme.colors.magenta);
-    root.style.setProperty('--tokyo-cyan', currentTheme.colors.cyan);
-    root.style.setProperty('--tokyo-orange', currentTheme.colors.orange);
-    root.dataset.theme = currentTheme.name;
-    root.style.colorScheme = currentTheme.name === 'paper-white' || currentTheme.name === 'warm-ivory'
-      ? 'light'
-      : 'dark';
-
-    console.log('[App] Applied theme:', currentTheme.name);
-  }, [settings.appearance.theme]);
+  // When a torn-out tab window closes or merges back, re-activate its tab so
+  // the content is immediately visible in the main window again. While the
+  // whole app is quitting, the layout entry is kept so the next launch
+  // restores the same set of windows.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    let appQuitting = false;
+    let stopQuitListener: (() => void) | null = null;
+    void import('@tauri-apps/api/event')
+      .then(async ({ listen }) => {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        // Mark quitting as soon as the main window is asked to close; detached
+        // windows closing after that must not drop their layout entries.
+        void getCurrentWindow()
+          .listen('tauri://close-requested', () => {
+            appQuitting = true;
+          })
+          .then((stop) => {
+            if (disposed) stop();
+            else stopQuitListener = stop;
+          });
+        return listen<{ kind: string; sessionId: string; pluginId?: string }>(
+        DETACHED_CLOSED_EVENT,
+        (event) => {
+          const payload = event.payload;
+          if (!appQuitting) {
+            removeDetachedFromLayout(
+              payload.kind === 'plugin' && payload.pluginId
+                ? {
+                    kind: 'plugin',
+                    pluginId: payload.pluginId,
+                    sessionId: payload.sessionId,
+                    serverName: '',
+                    sessionType: 'ssh',
+                  }
+                : { kind: 'terminal', sessionId: payload.sessionId, title: '' }
+            );
+          }
+          if (payload.kind === 'plugin' && payload.pluginId) {
+            const workspace = usePluginWorkspaceStore.getState();
+            const tab = workspace.tabs.find(
+              (candidate) =>
+                candidate.pluginId === payload.pluginId && candidate.sessionId === payload.sessionId
+            );
+            if (tab) {
+              useFileWorkspaceStore.getState().activateTab(null);
+              workspace.activateTab(tab.id);
+            }
+          } else {
+            usePluginWorkspaceStore.getState().activateTab(null);
+            useFileWorkspaceStore.getState().activateTab(null);
+            useSessionStore.getState().setActiveSession(payload.sessionId);
+          }
+        }
+      );
+      })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+      stopQuitListener?.();
+    };
+  }, []);
 
   const closeInactiveSession = useCallback(async (session: Session) => {
     const success = session.sessionType === 'local'
@@ -297,6 +339,12 @@ function App() {
         if (!fileTab?.dirty || window.confirm(t('fileWorkspace.discardChanges'))) {
           closeFileTab(activeFileTabId);
         }
+        return;
+      }
+
+      if (isCtrl && event.key.toLowerCase() === 'w' && activePluginTabId) {
+        event.preventDefault();
+        closePluginTab(activePluginTabId);
         return;
       }
 
@@ -355,6 +403,10 @@ function App() {
     () => fileTabs.find((tab) => tab.id === activeFileTabId) ?? null,
     [activeFileTabId, fileTabs]
   );
+  const activePluginTab = useMemo(
+    () => pluginTabs.find((tab) => tab.id === activePluginTabId) ?? null,
+    [activePluginTabId, pluginTabs]
+  );
 
   useEffect(() => {
     if (
@@ -367,6 +419,16 @@ function App() {
   }, [activeFileTab, activeSessionId, sessions, setActiveSession]);
 
   useEffect(() => {
+    if (
+      activePluginTab
+      && activeSessionId !== activePluginTab.sessionId
+      && sessions.some((session) => session.id === activePluginTab.sessionId)
+    ) {
+      setActiveSession(activePluginTab.sessionId);
+    }
+  }, [activePluginTab, activeSessionId, sessions, setActiveSession]);
+
+  useEffect(() => {
     if (activeSession?.purpose !== 'coding_agent') {
       setIsWorkspaceChangesOpen(false);
     }
@@ -374,33 +436,47 @@ function App() {
 
   // A selected tab must always reveal its terminal. Keep an existing split when
   // the active session is already one of its panes; otherwise switch to it.
+  // A plugin pane stays pinned only while its tab remains active; switching to
+  // another session collapses back to that session's terminal.
   useEffect(() => {
     if (!activeSessionId) return;
     setMosaicTree((current) => {
-      if (current !== null && getLeaves(current).includes(activeSessionId)) {
+      if (current !== null && getLeaves(current).includes(sessionPaneId(activeSessionId))) {
         return current;
       }
-      return activeSessionId;
+      const pinnedPluginTabId = usePluginWorkspaceStore.getState().activeTabId;
+      if (
+        current !== null
+        && pinnedPluginTabId !== null
+        && getLeaves(current).includes(pluginPaneId(pinnedPluginTabId))
+      ) {
+        // The active plugin is split into the layout — keep it visible.
+        return current;
+      }
+      return sessionPaneId(activeSessionId);
     });
   }, [activeSessionId]);
 
-  // Prune panes whose sessions have been closed, keeping the layout otherwise intact.
+  // Prune panes whose sessions or plugin tabs have been closed, keeping the
+  // layout otherwise intact.
   useEffect(() => {
     setMosaicTree((current) => {
       if (current === null) return current;
-      const validIds = new Set(sessions.map((session) => session.id));
+      const validIds = new Set<string>(sessions.map((session) => sessionPaneId(session.id)));
+      for (const tab of pluginTabs) validIds.add(pluginPaneId(tab.id));
       const pruned = pruneLeaves(current, validIds);
       // If everything was pruned, fall back to the active session (or null).
       if (pruned === null) {
-        return activeSessionId ?? null;
+        return activeSessionId ? sessionPaneId(activeSessionId) : null;
       }
       return pruned === current ? current : pruned;
     });
-  }, [sessions, activeSessionId]);
+  }, [sessions, pluginTabs, activeSessionId]);
 
   const handleConnected = useCallback((sessionId: string) => {
     console.log('[App] handleConnected called with sessionId:', sessionId);
     activateFileTab(null);
+    activatePluginTab(null);
     setActiveSession(sessionId);
 
     // The Terminal component attaches after its event listener is ready so
@@ -409,7 +485,7 @@ function App() {
       console.log('[App] Focusing terminal for session:', sessionId);
       terminalRefs.current.get(sessionId)?.focus();
     }, 100);
-  }, [activateFileTab, setActiveSession]);
+  }, [activateFileTab, activatePluginTab, setActiveSession]);
 
   const handleConnect = useCallback(async (server: Server, options?: { forceNew?: boolean }) => {
     console.log('[App] handleConnect called for server:', server.name);
@@ -510,10 +586,11 @@ function App() {
 
   const handleCodingAgentLaunched = useCallback((sessionId: string) => {
     activateFileTab(null);
+    activatePluginTab(null);
     setActiveSession(sessionId);
-    setMosaicTree(sessionId);
+    setMosaicTree(sessionPaneId(sessionId));
     window.setTimeout(() => terminalRefs.current.get(sessionId)?.focus(), 100);
-  }, [activateFileTab, setActiveSession]);
+  }, [activateFileTab, activatePluginTab, setActiveSession]);
 
   const handleSplitPane = useCallback(async (direction: 'row' | 'column') => {
     if (terminalPaneCreationRef.current) return;
@@ -539,7 +616,7 @@ function App() {
       const session = await createLocalShellSession(shellId, 80, 24);
       if (!session) return;
 
-      setMosaicTree((current) => addPane(current, targetId, session.id, direction));
+      setMosaicTree((current) => addPane(current, sessionPaneId(targetId), sessionPaneId(session.id), direction));
       // Keep the current pane active so repeated splits build outward from the
       // same origin pane instead of chaining off each newly-created pane.
       // The new pane is still immediately usable — clicking it focuses it.
@@ -555,28 +632,97 @@ function App() {
     }
   }, [createLocalShellSession, mosaicTree, notifyError, notifyWarning, setActiveSession, t]);
 
-  const handleRemoveTerminalPane = useCallback((sessionId: string) => {
+  const handleRemoveTerminalPane = useCallback((paneId: string) => {
     setMosaicTree((current) => {
       if (countLeaves(current) <= 1) return current;
 
-      const next = removePane(current, sessionId);
-      // Pick a new active session from the remaining leaves.
+      const next = removePane(current, paneId);
+      // Pick a new active session from the remaining session panes.
       const remaining = getLeaves(next);
-      if (activeSessionId === sessionId) {
-        const nextActive = remaining[0] ?? null;
-        if (nextActive) setActiveSession(nextActive);
+      const pane = parsePaneId(paneId);
+      if (pane.kind === 'session' && activeSessionId === pane.id) {
+        const nextActivePane = remaining.find((leaf) => leaf.startsWith(SESSION_PANE_PREFIX));
+        if (nextActivePane) setActiveSession(nextActivePane.slice(SESSION_PANE_PREFIX.length));
       }
       return next;
     });
   }, [activeSessionId, setActiveSession]);
 
   const handleCollapseTerminalPanes = useCallback(() => {
-    if (activeSessionId) setMosaicTree(activeSessionId);
+    if (activeSessionId) setMosaicTree(sessionPaneId(activeSessionId));
   }, [activeSessionId]);
+
+  // Split a plugin tab into the mosaic layout next to the active terminal.
+  const handleSplitPluginTab = useCallback((tabId: string, direction: 'row' | 'column') => {
+    const paneId = pluginPaneId(tabId);
+    if (mosaicTree !== null && getLeaves(mosaicTree).includes(paneId)) return;
+    if (mosaicTree !== null && countLeaves(mosaicTree) >= MAX_TERMINAL_PANES) {
+      notifyWarning(t('session.splitLimitTitle'), t('session.splitLimitMessage'));
+      return;
+    }
+
+    const leaves = mosaicTree !== null ? getLeaves(mosaicTree) : [];
+    const target = activeSessionId && leaves.includes(sessionPaneId(activeSessionId))
+      ? sessionPaneId(activeSessionId)
+      : leaves[0] ?? null;
+
+    setMosaicTree((current) => addPane(current, target, paneId, direction));
+    // Switch back to the terminal view so the split result is visible.
+    activateFileTab(null);
+  }, [mosaicTree, activeSessionId, notifyWarning, t, activateFileTab]);
+
+  // A tab dropped onto a pane edge (mouse-driven drag): plugin tabs pin a
+  // plugin pane, session tabs pin another terminal pane.
+  const handlePaneDropTab = useCallback((
+    targetPaneId: string,
+    kind: 'session' | 'plugin',
+    tabId: string,
+    direction: 'row' | 'column'
+  ) => {
+    const paneId = kind === 'plugin' ? pluginPaneId(tabId) : sessionPaneId(tabId);
+    setMosaicTree((current) => {
+      if (current === null || getLeaves(current).includes(paneId)) return current;
+      if (countLeaves(current) >= MAX_TERMINAL_PANES) return current;
+      return addPane(current, targetPaneId, paneId, direction);
+    });
+  }, []);
+
+  const handleOpenPluginTab = useCallback((pluginId: string) => {
+    const session = activeSession ?? sessions.find((candidate) => candidate.state === 'connected');
+    if (!session) {
+      notifyWarning(t('plugins.workspace'), t('plugins.openTabNeedsSession'));
+      return;
+    }
+    usePluginWorkspaceStore.getState().openPluginTab({
+      pluginId,
+      sessionId: session.id,
+      sessionType: session.sessionType,
+      serverName: session.serverName,
+    });
+    activateFileTab(null);
+  }, [activeSession, sessions, notifyWarning, t, activateFileTab]);
+
+  const handleClosePluginTab = useCallback((tab: PluginWorkspaceTab) => {
+    closePluginTab(tab.id);
+    // If the tab was split into the layout, drop its pane as well.
+    setMosaicTree((current) => (
+      current === null || !getLeaves(current).includes(pluginPaneId(tab.id))
+        ? current
+        : removePane(current, pluginPaneId(tab.id))
+    ));
+  }, [closePluginTab]);
 
   const handleNewSessionForServer = useCallback((server: Server) => {
     handleConnect(server, { forceNew: true });
   }, [handleConnect]);
+
+  const handleOpenSessionInWindow = useCallback((session: Session) => {
+    void openDetachedWindow({
+      kind: 'terminal',
+      sessionId: session.id,
+      title: session.serverName,
+    });
+  }, []);
 
   const handleQuickCommand = useCallback(() => {
     setIsQuickCommandOpen(true);
@@ -698,6 +844,16 @@ function App() {
       ? t('session.closeLocalShellConfirm', { name: sessionToCloseObj?.serverName })
       : t('session.closeSessionConfirm', { name: sessionToCloseObj?.serverName });
   const canRemoveTerminalPane = countLeaves(mosaicTree) > 1;
+  const pluginPaneLeaves = useMemo(
+    () => new Set(getLeaves(mosaicTree).filter((leaf) => leaf.startsWith(PLUGIN_PANE_PREFIX))),
+    [mosaicTree]
+  );
+  const activePluginTabPinned = activePluginTab !== null
+    && pluginPaneLeaves.has(pluginPaneId(activePluginTab.id));
+  // The terminal mosaic is hidden behind file tabs and behind an unpinned
+  // plugin tab (a pinned plugin already lives inside the mosaic itself).
+  const terminalAreaHidden = activeFileTab !== null
+    || (activePluginTab !== null && !activePluginTabPinned);
 
   return (
     <div className="app-shell h-screen flex flex-col bg-tokyo-bg">
@@ -754,6 +910,8 @@ function App() {
             <SessionTabs
               onNewSession={handleNewSession}
               onReconnectSession={handleReconnectSession}
+              onOpenSessionInWindow={handleOpenSessionInWindow}
+              onPaneDropTab={handlePaneDropTab}
               rightActions={(
                 runtimeCapabilities.isMobile || isCompactWorkspace ? (
                   <MobileWorkspaceActions
@@ -880,6 +1038,20 @@ function App() {
                       </button>
                     </>
                   )}
+                  {activeSession && (
+                    <button
+                      className="icon-button tooltip-button"
+                      data-tooltip={t('session.openInWindow')}
+                      aria-label={t('session.openInWindow')}
+                      onClick={() => handleOpenSessionInWindow(activeSession)}
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                    </button>
+                  )}
+                  <PluginTabLauncher
+                    sessionType={activeSession ? activeSession.sessionType : null}
+                    onOpenPluginTab={handleOpenPluginTab}
+                  />
                   {/* Lower-frequency actions collapse into an overflow menu */}
                   <WorkspaceToolbar
                     label={t('common.more')}
@@ -968,7 +1140,27 @@ function App() {
                     </Suspense>
                   </div>
                 ))}
-                <div className={cn('min-h-0 flex-1 flex-col', activeFileTab ? 'hidden' : 'flex')}>
+                {pluginTabs.map((tab) => (
+                  <div
+                    key={tab.id}
+                    className={cn(
+                      'min-h-0 flex-1',
+                      activePluginTabId === tab.id && activeFileTab === null && !pluginPaneLeaves.has(pluginPaneId(tab.id))
+                        ? 'block'
+                        : 'hidden'
+                    )}
+                  >
+                    <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
+                      <PluginWorkspaceView
+                        tab={tab}
+                        plugin={plugins.find((candidate) => candidate.manifest.id === tab.pluginId)}
+                        onClose={() => handleClosePluginTab(tab)}
+                        onSplit={handleSplitPluginTab}
+                      />
+                    </Suspense>
+                  </div>
+                ))}
+                <div className={cn('min-h-0 flex-1 flex-col', terminalAreaHidden ? 'hidden' : 'flex')}>
                   {sessions.length > 0 ? (
                     <>
                     <div className="mosaic-container relative min-h-0 flex-1 p-2">
@@ -976,12 +1168,60 @@ function App() {
                         value={mosaicTree}
                         onChange={(node) => setMosaicTree(node)}
                         renderTile={(id: string, path: MosaicBranch[]) => {
-                          const session = sessions.find((s) => s.id === id);
+                          const pane = parsePaneId(id);
+
+                          if (pane.kind === 'plugin') {
+                            const tab = pluginTabs.find((candidate) => candidate.id === pane.id);
+                            const plugin = tab
+                              ? plugins.find((candidate) => candidate.manifest.id === tab.pluginId)
+                              : undefined;
+                            const pluginName = plugin
+                              ? t(`plugins.catalog.${plugin.manifest.id}.name`, { defaultValue: plugin.manifest.name })
+                              : tab?.pluginId ?? id;
+                            const paneTitle = tab ? `${pluginName} · ${tab.serverName}` : pluginName;
+                            return (
+                              <MosaicWindow<string>
+                                path={path}
+                                title={paneTitle}
+                                draggable
+                                toolbarControls={canRemoveTerminalPane ? [
+                                  <button
+                                    key="close"
+                                    className="icon-button h-5 w-5"
+                                    onClick={() => handleRemoveTerminalPane(id)}
+                                    aria-label={t('session.removePane', { name: paneTitle })}
+                                    title={t('session.removePane', { name: paneTitle })}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </button>,
+                                ] : []}
+                              >
+                                <PaneDropZone paneId={id}>
+                                  {tab && plugin ? (
+                                    <PluginPanel
+                                      stateKey={tab.id}
+                                      plugin={plugin}
+                                      sessionId={tab.sessionId}
+                                      sessionType={tab.sessionType}
+                                      variant="workspace"
+                                    />
+                                  ) : (
+                                    <div className="flex h-full items-center justify-center text-xs text-tokyo-comment">
+                                      {t('plugins.tabPluginMissing')}
+                                    </div>
+                                  )}
+                                </PaneDropZone>
+                              </MosaicWindow>
+                            );
+                          }
+
+                          const session = sessions.find((s) => s.id === pane.id);
                           const serverName = session?.serverName ?? t('session.localShell');
                           return (
                             <MosaicWindow<string>
                               path={path}
                               title={serverName}
+                              draggable
                               toolbarControls={canRemoveTerminalPane ? [
                                 <button
                                   key="close"
@@ -993,28 +1233,30 @@ function App() {
                                   <X className="h-3 w-3" />
                                 </button>,
                               ] : []}
-                              className={cn(id === activeSessionId && 'mosaic-window-active')}
+                              className={cn(activeSessionId && id === sessionPaneId(activeSessionId) && 'mosaic-window-active')}
                             >
-                              <div
-                                className="relative h-full bg-tokyo-bg"
-                                onMouseDown={() => {
-                                  if (id !== activeSessionId) setActiveSession(id);
-                                }}
-                              >
-                                <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
-                                  <Terminal
-                                    ref={(handle: TerminalHandle | null) => {
-                                      if (handle) {
-                                        terminalRefs.current.set(id, handle);
-                                      } else {
-                                        terminalRefs.current.delete(id);
-                                      }
-                                    }}
-                                    sessionId={id}
-                                    onData={handleData}
-                                  />
-                                </Suspense>
-                              </div>
+                              <PaneDropZone paneId={id}>
+                                <div
+                                  className="relative h-full bg-tokyo-bg"
+                                  onMouseDown={() => {
+                                    if (pane.id !== activeSessionId) setActiveSession(pane.id);
+                                  }}
+                                >
+                                  <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
+                                    <Terminal
+                                      ref={(handle: TerminalHandle | null) => {
+                                        if (handle) {
+                                          terminalRefs.current.set(pane.id, handle);
+                                        } else {
+                                          terminalRefs.current.delete(pane.id);
+                                        }
+                                      }}
+                                      sessionId={pane.id}
+                                      onData={handleData}
+                                    />
+                                  </Suspense>
+                                </div>
+                              </PaneDropZone>
                             </MosaicWindow>
                           );
                         }}
@@ -1027,6 +1269,7 @@ function App() {
                         open={isPluginDockOpen}
                         onClose={() => setIsPluginDockOpen(false)}
                         onOpenMarketplace={goToPlugins}
+                        onOpenPluginTab={handleOpenPluginTab}
                       />
                     )}
                     </>

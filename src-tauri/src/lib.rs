@@ -4,6 +4,7 @@ pub mod cloud_sync;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod coding_agent;
 pub mod commands;
+pub mod dbconn;
 pub mod install;
 pub mod ipc;
 pub mod local_shell;
@@ -95,7 +96,18 @@ use commands::{
     // Dialog commands
     pick_ssh_key_file,
     pick_workspace_directory,
+    db_connection_columns,
+    db_connection_databases,
+    db_connection_delete,
+    db_connection_list,
+    db_connection_probe,
+    db_connection_query,
+    db_connection_save,
+    db_connection_tables,
+    db_connection_test,
+    db_session_detect,
     plugin_execute,
+    plugin_export,
     plugin_import,
     plugin_install,
     plugin_list,
@@ -349,10 +361,21 @@ pub fn run() {
             coding_agent_launch,
             coding_agent_workspace_status,
             coding_agent_workspace_diff,
+            db_connection_list,
+            db_connection_save,
+            db_connection_delete,
+            db_connection_test,
+            db_connection_probe,
+            db_connection_databases,
+            db_connection_tables,
+            db_connection_columns,
+            db_connection_query,
+            db_session_detect,
             // Plugin marketplace commands
             plugin_list,
             plugin_install,
             plugin_import,
+            plugin_export,
             plugin_uninstall,
             plugin_set_enabled,
             plugin_update_settings,

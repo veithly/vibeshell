@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Check,
   Download,
+  FileDown,
   Loader2,
   PackageOpen,
   Search,
@@ -14,6 +15,7 @@ import {
 import { cn } from '../../lib/utils';
 import type { PluginRecord } from '../../plugins/types';
 import { usePluginStore } from '../../stores/pluginStore';
+import { useNotificationStore } from '../../stores/notificationStore';
 import { PluginIcon } from '../PluginIcon';
 
 type InstallFilter = 'all' | 'installed';
@@ -39,10 +41,12 @@ export function PluginMarketplace() {
     fetchPlugins,
     installPlugin,
     importPlugin,
+    exportPlugin,
     uninstallPlugin,
     setPluginEnabled,
     clearError,
   } = usePluginStore();
+  const { success: notifySuccess } = useNotificationStore();
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [installFilter, setInstallFilter] = useState<InstallFilter>('all');
@@ -92,6 +96,13 @@ export function PluginMarketplace() {
       return;
     }
     await uninstallPlugin(plugin.manifest.id);
+  };
+
+  const handleExport = async (plugin: PluginRecord) => {
+    const path = await exportPlugin(plugin.manifest.id);
+    if (path) {
+      notifySuccess(t('plugins.exportedTitle'), path, 8000);
+    }
   };
 
   return (
@@ -262,25 +273,51 @@ export function PluginMarketplace() {
                             />
                             <span>{plugin.enabled ? t('plugins.enabled') : t('plugins.disabled')}</span>
                           </label>
-                          <button
-                            className="icon-button tooltip-button h-8 w-8 text-tokyo-comment hover:text-tokyo-red"
-                            data-tooltip={t('plugins.uninstall')}
-                            aria-label={t('plugins.uninstall')}
-                            disabled={busy}
-                            onClick={() => void handleUninstall(plugin)}
-                          >
-                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                          </button>
+                          <div className="flex items-center gap-1">
+                            <button
+                              className="icon-button tooltip-button h-8 w-8 text-tokyo-comment hover:text-tokyo-fg"
+                              data-tooltip={t('plugins.export')}
+                              aria-label={t('plugins.export')}
+                              disabled={operationId === `export:${pluginId}`}
+                              onClick={() => void handleExport(plugin)}
+                            >
+                              {operationId === `export:${pluginId}`
+                                ? <Loader2 className="h-4 w-4 animate-spin" />
+                                : <FileDown className="h-4 w-4" />}
+                            </button>
+                            <button
+                              className="icon-button tooltip-button h-8 w-8 text-tokyo-comment hover:text-tokyo-red"
+                              data-tooltip={t('plugins.uninstall')}
+                              aria-label={t('plugins.uninstall')}
+                              disabled={busy}
+                              onClick={() => void handleUninstall(plugin)}
+                            >
+                              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            </button>
+                          </div>
                         </>
                       ) : (
-                        <button
-                          className="ml-auto flex h-8 items-center gap-2 rounded-md bg-tokyo-blue px-3 text-xs font-medium text-tokyo-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
-                          onClick={() => void installPlugin(pluginId)}
-                          disabled={busy}
-                        >
-                          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                          {t('plugins.install')}
-                        </button>
+                        <>
+                          <button
+                            className="icon-button tooltip-button h-8 w-8 text-tokyo-comment hover:text-tokyo-fg"
+                            data-tooltip={t('plugins.exportTemplate')}
+                            aria-label={t('plugins.exportTemplate')}
+                            disabled={operationId === `export:${pluginId}`}
+                            onClick={() => void handleExport(plugin)}
+                          >
+                            {operationId === `export:${pluginId}`
+                              ? <Loader2 className="h-4 w-4 animate-spin" />
+                              : <FileDown className="h-4 w-4" />}
+                          </button>
+                          <button
+                            className="flex h-8 items-center gap-2 rounded-md bg-tokyo-blue px-3 text-xs font-medium text-tokyo-on-accent transition-opacity hover:opacity-90 disabled:opacity-50"
+                            onClick={() => void installPlugin(pluginId)}
+                            disabled={busy}
+                          >
+                            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                            {t('plugins.install')}
+                          </button>
+                        </>
                       )}
                     </div>
                   </article>

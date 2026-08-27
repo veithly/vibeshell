@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "id": "kubernetes-pods",
+  "name": "Kubernetes Pods",
+  "description": "Inspect cluster contexts, namespaces, pods, deployments and workload logs with kubectl.",
+  "version": "1.1.0",
+  "author": "VibeShell",
+  "category": "containers",
+  "icon": "boxes",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "contexts",
+        "name": "Contexts",
+        "description": "Show available cluster contexts.",
+        "program": "kubectl",
+        "args": [
+          "config",
+          "get-contexts"
+        ]
+      },
+      {
+        "id": "pods",
+        "name": "Pods",
+        "description": "List pods across all namespaces.",
+        "program": "kubectl",
+        "args": [
+          "get",
+          "pods",
+          "--all-namespaces",
+          "-o",
+          "wide"
+        ]
+      },
+      {
+        "id": "deployments",
+        "name": "Deployments",
+        "description": "List deployments across all namespaces.",
+        "program": "kubectl",
+        "args": [
+          "get",
+          "deployments",
+          "--all-namespaces",
+          "-o",
+          "wide"
+        ]
+      },
+      {
+        "id": "events",
+        "name": "Recent events",
+        "description": "Show recent cluster events.",
+        "program": "kubectl",
+        "args": [
+          "get",
+          "events",
+          "--all-namespaces",
+          "--sort-by=.lastTimestamp"
+        ]
+      },
+      {
+        "id": "pod-logs",
+        "name": "Pod logs",
+        "description": "Read the latest 200 log lines from a pod.",
+        "program": "kubectl",
+        "args": [
+          "logs",
+          "-n",
+          "{{input.namespace}}",
+          "{{input.pod}}",
+          "--tail=200"
+        ],
+        "inputs": [
+          {
+            "id": "namespace",
+            "label": "Namespace",
+            "placeholder": "default",
+            "required": true
+          },
+          {
+            "id": "pod",
+            "label": "Pod",
+            "placeholder": "api-6f8c9d",
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "describe-pod",
+        "name": "Describe pod",
+        "description": "Show pod status, conditions, mounts and recent events.",
+        "program": "kubectl",
+        "args": [
+          "describe",
+          "pod",
+          "-n",
+          "{{input.namespace}}",
+          "{{input.pod}}"
+        ],
+        "inputs": [
+          {
+            "id": "namespace",
+            "label": "Namespace",
+            "placeholder": "default",
+            "required": true
+          },
+          {
+            "id": "pod",
+            "label": "Pod",
+            "placeholder": "api-6f8c9d",
+            "required": true
+          }
+        ]
+      },
+      {
+        "id": "exec-command",
+        "name": "Run in Pod container",
+        "description": "Run one non-interactive shell command inside a selected Pod container.",
+        "program": "kubectl",
+        "args": [
+          "exec",
+          "-n",
+          "{{input.namespace}}",
+          "{{input.pod}}",
+          "-c",
+          "{{input.container}}",
+          "--",
+          "sh",
+          "-lc",
+          "{{input.command}}"
+        ],
+        "inputs": [
+          {
+            "id": "namespace",
+            "label": "Namespace",
+            "placeholder": "default",
+            "required": true
+          },
+          {
+            "id": "pod",
+            "label": "Pod",
+            "placeholder": "api-6f8c9d",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container",
+            "placeholder": "api",
+            "required": true
+          },
+          {
+            "id": "command",
+            "label": "Command",
+            "placeholder": "id",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true
+      }
+    ]
+  }
+}

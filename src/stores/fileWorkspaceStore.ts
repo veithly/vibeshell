@@ -20,6 +20,7 @@ interface FileWorkspaceState {
   openFile: (file: OpenFileInput) => void;
   activateTab: (tabId: string | null) => void;
   closeTab: (tabId: string) => void;
+  moveTabBefore: (fromId: string, toId: string) => void;
   closeTabsForSession: (sessionId: string) => void;
   retainTabsForSessions: (sessionIds: readonly string[]) => void;
   setDirty: (tabId: string, dirty: boolean) => void;
@@ -55,6 +56,17 @@ export const useFileWorkspaceStore = create<FileWorkspaceState>((set) => ({
   }),
 
   activateTab: (tabId) => set({ activeTabId: tabId }),
+
+  moveTabBefore: (fromId, toId) => set((state) => {
+    if (fromId === toId) return state;
+    const fromIndex = state.tabs.findIndex((tab) => tab.id === fromId);
+    const toIndex = state.tabs.findIndex((tab) => tab.id === toId);
+    if (fromIndex === -1 || toIndex === -1) return state;
+    const tabs = [...state.tabs];
+    const [moved] = tabs.splice(fromIndex, 1);
+    tabs.splice(toIndex, 0, moved);
+    return { tabs };
+  }),
 
   closeTab: (tabId) => set((state) => {
     const closingIndex = state.tabs.findIndex((tab) => tab.id === tabId);

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { safeInvoke, TauriError, sendInputBatched } from '../lib/tauri';
 import { useNotificationStore } from './notificationStore';
 import { useFileWorkspaceStore } from './fileWorkspaceStore';
+import { usePluginWorkspaceStore } from './pluginWorkspaceStore';
 import type { CodingAgentLaunchRequest } from '../types/codingAgent';
 
 /**
@@ -138,6 +139,7 @@ interface SessionStore {
   setActiveSession: (id: string | null) => void;
   /** Add a new session */
   addSession: (session: Session) => void;
+  moveSessionBefore: (fromId: string, toId: string) => void;
   /** Remove a session by ID */
   removeSession: (id: string) => void;
   /** Update a session's properties */
@@ -231,8 +233,22 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }));
   },
 
+  /** Drag-reorder: move `fromId` directly before `toId` in the tab strip. */
+  moveSessionBefore: (fromId, toId) => set((state) => {
+    if (fromId === toId) return state;
+    const fromIndex = state.sessions.findIndex((session) => session.id === fromId);
+    const toIndex = state.sessions.findIndex((session) => session.id === toId);
+    if (fromIndex === -1 || toIndex === -1) return state;
+
+    const sessions = [...state.sessions];
+    const [moved] = sessions.splice(fromIndex, 1);
+    sessions.splice(toIndex, 0, moved);
+    return { sessions };
+  }),
+
   removeSession: (id) => {
     useFileWorkspaceStore.getState().closeTabsForSession(id);
+    usePluginWorkspaceStore.getState().closeTabsForSession(id);
     set((state) => {
       const newSessions = state.sessions.filter((s) => s.id !== id);
       let newActiveId = state.activeSessionId;
@@ -275,6 +291,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   clearAllSessions: () => {
     useFileWorkspaceStore.getState().retainTabsForSessions([]);
+    usePluginWorkspaceStore.getState().retainTabsForSessions([]);
     set({ sessions: [], activeSessionId: null });
   },
 
@@ -513,6 +530,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       useFileWorkspaceStore
         .getState()
         .retainTabsForSessions(sessions.map((session) => session.id));
+      usePluginWorkspaceStore
+        .getState()
+        .retainTabsForSessions(sessions.map((session) => session.id));
 
       set((state) => {
         const activeSessionStillExists = state.activeSessionId
@@ -533,6 +553,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         ? 'Running in browser mode'
         : result.error.message;
       useFileWorkspaceStore.getState().retainTabsForSessions([]);
+    usePluginWorkspaceStore.getState().retainTabsForSessions([]);
       set({ sessions: [], loading: false, error: errorMsg });
       // Don't show toast for initial fetch failures when Tauri unavailable
       if (!result.error.isTauriUnavailable) {
@@ -616,6 +637,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       return { sessions: merged, activeSessionId: nextActiveSessionId };
     });
     useFileWorkspaceStore
+      .getState()
+      .retainTabsForSessions(get().sessions.map((session) => session.id));
+    usePluginWorkspaceStore
       .getState()
       .retainTabsForSessions(get().sessions.map((session) => session.id));
   },

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "id": "system-logs",
+  "name": "System Logs",
+  "description": "Read recent systemd journal entries and service logs from the active server.",
+  "version": "1.1.0",
+  "author": "VibeShell",
+  "category": "operations",
+  "icon": "file-text",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "recent",
+        "name": "Recent system log",
+        "description": "Read the latest 200 journal entries.",
+        "program": "journalctl",
+        "args": [
+          "--no-pager",
+          "-n",
+          "200"
+        ]
+      },
+      {
+        "id": "service",
+        "name": "Service log",
+        "description": "Read the latest 200 entries for one systemd unit.",
+        "program": "journalctl",
+        "args": [
+          "--no-pager",
+          "-n",
+          "200",
+          "-u",
+          "{{input.service}}"
+        ],
+        "inputs": [
+          {
+            "id": "service",
+            "label": "Service",
+            "placeholder": "nginx.service",
+            "required": true
+          }
+        ]
+      }
+    ]
+  }
+}

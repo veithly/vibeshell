@@ -30,7 +30,6 @@
     "version": "版本",
     "builtWith": "技术栈"
   },
-
   "sidebar": {
     "addServer": "添加服务器",
     "quickCmd": "快捷命令",
@@ -40,12 +39,10 @@
     "snippets": "命令片段",
     "settings": "设置"
   },
-
   "updates": {
     "availableTitle": "发现新版本",
     "availableMessage": "VibeShell {{version}} 已发布。打开 设置 > 关于 即可下载更新。"
   },
-
   "session": {
     "newSession": "新建会话",
     "newConnection": "新建连接",
@@ -68,9 +65,9 @@
     "splitLimitMessage": "一个页面最多同时显示九个终端分栏。",
     "creatingPane": "正在创建终端分栏",
     "splitFailedTitle": "无法创建终端分栏",
-    "splitFailedMessage": "本地终端启动失败，请重试。"
+    "splitFailedMessage": "本地终端启动失败，请重试。",
+    "openInWindow": "在新窗口中打开"
   },
-
   "server": {
     "addServer": "添加新服务器",
     "editServer": "编辑服务器",
@@ -118,7 +115,6 @@
     "deleteGroup": "删除分组",
     "via": "经由: {{name}} ({{host}}:{{port}})"
   },
-
   "connect": {
     "launcherTitle": "打开连接",
     "searchConnections": "搜索服务器和本地终端",
@@ -136,7 +132,6 @@
     "selectKeyFile": "选择 SSH 密钥",
     "keyLoaded": "密钥已加载: {{path}}"
   },
-
   "agentActivity": {
     "title": "Agent 活动",
     "connected": "就绪",
@@ -223,7 +218,6 @@
   },
   "settings": {
     "title": "设置",
-
     "terminal": "终端",
     "terminalDesc": "自定义终端外观和行为。",
     "fontSize": "字体大小",
@@ -236,7 +230,6 @@
     "cursorBlinkDesc": "启用光标闪烁动画",
     "scrollbackLines": "回滚行数",
     "scrollbackLinesDesc": "历史记录保留的行数 (1,000-100,000)",
-
     "aiPrediction": "AI 指令预测",
     "aiPredictionDesc": "使用你自己的 OpenAI 兼容或 Claude 兼容 API Key 预测行内指令 ghost text。",
     "aiPredictionEnabled": "启用预测",
@@ -257,7 +250,6 @@
       "openai": "OpenAI 兼容",
       "claude": "Claude 兼容"
     },
-
     "appearance": "外观",
     "appearanceDesc": "自定义 VibeShell 的外观。",
     "theme": "主题",
@@ -272,7 +264,6 @@
     "windowOpacityDesc": "透明度级别（仅限 Windows）",
     "language": "语言",
     "languageDesc": "界面语言",
-
     "sshDefaults": "SSH 默认设置",
     "sshDefaultsDesc": "新 SSH 连接的默认值。",
     "defaultPort": "默认端口",
@@ -283,7 +274,6 @@
     "keepaliveIntervalDesc": "心跳包发送间隔（0 为禁用）",
     "defaultUsername": "默认用户名",
     "defaultUsernameDesc": "新连接的预填用户名",
-
     "cloudSync": "云同步",
     "cloudSyncDesc": "通过 GitHub Gist、WebDAV 或便携文件同步工作区数据。",
     "cloudSyncStatus": "状态",
@@ -321,7 +311,6 @@
     "cloudExportFile": "导出文件",
     "cloudFileExportReport": "已将 {{count}} 条记录导出到 {{path}}",
     "cloudFileImportReport": "从 {{path}} 导入 {{applied}} 条，忽略 {{ignored}} 条，冲突 {{conflicts}} 条",
-
     "serverStatus": "服务器状态监控",
     "serverStatusDesc": "配置实时服务器指标监控。",
     "refreshInterval": "刷新间隔",
@@ -330,20 +319,17 @@
     "autoExpandPanelDesc": "连接时自动展开状态面板",
     "showNetworkRates": "显示网络速率",
     "showNetworkRatesDesc": "显示网络传输速率而非总字节数",
-
     "fileTransfer": "文件传输",
     "fileTransferDesc": "配置递归 SFTP 上传和同步行为。",
     "respectGitignore": "遵循 .gitignore",
     "respectGitignoreDesc": "应用上传目录及其子目录中的 .gitignore 规则。",
     "uploadExcludePatterns": "上传排除规则",
     "uploadExcludePatternsDesc": "每行一个规则。VibeShell 的目录上传和同步会使用这些规则。",
-
     "security": "安全",
     "securityDesc": "管理 SSH 主机密钥验证和安全设置。",
     "hostKeyFingerprints": "SSH 主机密钥指纹",
     "hostKeyFingerprintsDesc": "已存储 {{count}} 个受信主机。管理受信 SSH 服务器指纹列表。",
     "manageHostKeys": "管理主机密钥",
-
     "recording": "会话录制",
     "recordingDesc": "录制终端会话以供回放和审计。右键点击会话标签开始录制。",
     "storageLocation": "存储位置",
@@ -352,7 +338,6 @@
     "noRecordings": "暂无录制。右键点击会话标签开始录制。",
     "inProgress": "进行中",
     "deleteRecording": "删除录制",
-
     "gateway": "Agent Gateway",
     "gatewayDesc": "Agent 直接连接当前 VibeShell 窗口，并与您共享 SSH 会话。",
     "gatewayRunning": "Gateway 运行中",
@@ -362,7 +347,6 @@
     "gatewayEndpoint": "本地端点",
     "gatewayManifest": "发现清单",
     "gatewayProtocol": "MCP 协议",
-
     "skills": "技能",
     "skillsDesc": "为 AI 编程工具安装 Gateway 使用说明，直接访问 SSH 和 SFTP。",
     "detectingTools": "正在检测支持的 AI 工具...",
@@ -370,7 +354,6 @@
     "supportedTools": "支持的工具：Claude Code、Cursor、Codex、Open Code、Pi",
     "refreshing": "刷新中...",
     "refreshStatus": "刷新状态",
-
     "about": "关于",
     "aboutDesc": "关于 VibeShell 的信息。",
     "appTitle": "VibeShell",
@@ -389,13 +372,11 @@
     "updateInstalling": "安装中...",
     "updateInstallingProgress": "正在安装更新... {{progress}}%",
     "updateOpenLatest": "最新发布",
-
     "resetSettings": "重置设置",
     "resetSettingsDesc": "将所有设置恢复为默认值。",
     "resetAll": "全部重置",
     "resetConfirm": "确定吗？",
     "yesReset": "是的，重置",
-
     "refreshIntervalOptions": {
       "5s": "5 秒",
       "10s": "10 秒",
@@ -405,7 +386,6 @@
       "manual": "仅手动"
     }
   },
-
   "plugins": {
     "marketplace": "插件市场",
     "workspace": "会话插件",
@@ -428,6 +408,9 @@
     "hostRenderedDesc": "外挂插件使用经过校验的 Manifest，不会向终端窗口注入 JavaScript。",
     "install": "安装",
     "uninstall": "卸载",
+    "export": "导出清单",
+    "exportTemplate": "导出为模板",
+    "exportedTitle": "插件清单已导出",
     "enabled": "已启用",
     "disabled": "已停用",
     "uninstallConfirm": "确定卸载 {{name}}？",
@@ -435,6 +418,111 @@
     "actionConfirm": "确定在当前服务器运行“{{name}}”？继续前请检查输入内容。",
     "noCompatiblePlugins": "没有已启用且支持当前会话的插件。",
     "openMarketplace": "打开插件市场",
+    "openInTab": "在工作区标签页中打开 {{name}}",
+    "openTabLauncher": "打开插件标签页",
+    "openTabNeedsSession": "请先连接服务器，再打开插件标签页。",
+    "splitRight": "分屏到终端右侧",
+    "splitDown": "分屏到终端下方",
+    "tabPluginMissing": "该插件已被卸载。",
+    "dragToSplit": "拖到终端面板上即可分屏",
+    "advancedMode": "高级模式（原始动作）",
+    "dashboardMode": "返回仪表盘",
+    "docker": {
+      "containers": "容器",
+      "images": "镜像",
+      "volumes": "卷",
+      "networks": "网络",
+      "container": "容器",
+      "image": "镜像",
+      "statusHeader": "状态",
+      "memory": "内存",
+      "ports": "端口",
+      "actions": "操作",
+      "size": "大小",
+      "created": "创建时间",
+      "volume": "卷",
+      "network": "网络",
+      "running": "运行中",
+      "stopped": "已停止",
+      "start": "启动",
+      "stop": "停止",
+      "restart": "重启",
+      "logs": "日志",
+      "inspect": "详情",
+      "loading": "加载中…",
+      "noContainers": "没有找到容器。",
+      "autoRefresh": "自动刷新",
+      "refreshOff": "自动：关",
+      "refresh10s": "自动：10秒",
+      "refresh30s": "自动：30秒",
+      "refresh60s": "自动：60秒",
+      "search": "搜索容器…",
+      "filterAll": "全部 ({{count}})",
+      "filterRunning": "运行中 ({{count}})",
+      "filterStopped": "已停止 ({{count}})"
+    },
+    "database": {
+      "title": "数据库",
+      "tables": "数据表",
+      "rows": "行",
+      "loading": "加载中…",
+      "pickDatabase": "选择一个数据库查看其中的数据表。",
+      "pickTable": "点击数据表预览数据，或在上方直接执行 SQL。",
+      "preview": "预览表数据",
+      "sqlResult": "SQL 结果",
+      "sqliteFile": "数据库文件",
+      "sqliteHint": "输入服务器上的 SQLite 文件路径并回车。"
+    },
+    "redis": {
+      "status": "状态",
+      "keys": "键数量",
+      "memory": "内存",
+      "clients": "连接数",
+      "uptimeDays": "运行天数",
+      "down": "不可达",
+      "scan": "扫描",
+      "scanning": "正在扫描键…",
+      "scanHint": "输入匹配模式（如 user:*）后扫描浏览键。",
+      "type": "类型",
+      "value": "值",
+      "forever": "永不过期",
+      "nonStringValue": "{{type}} 类型值 — 暂不支持预览",
+      "deleteKey": "删除键",
+      "loadingKey": "正在读取键…"
+    },
+    "cron": {
+      "title": "定时任务",
+      "crontab": "我的 crontab",
+      "timers": "systemd 定时器",
+      "schedule": "调度表达式",
+      "command": "命令",
+      "add": "添加",
+      "remove": "删除该条目",
+      "search": "筛选条目…",
+      "loading": "加载中…",
+      "empty": "还没有定时任务条目。"
+    },
+    "process": {
+      "title": "进程管理",
+      "byCpu": "按 CPU",
+      "byMemory": "按内存",
+      "kill": "终止进程",
+      "detail": "详情",
+      "search": "筛选进程…",
+      "loading": "加载中…"
+    },
+    "services": {
+      "title": "系统服务",
+      "service": "服务",
+      "state": "状态",
+      "description": "描述",
+      "start": "启动",
+      "stop": "停止",
+      "restart": "重启",
+      "search": "筛选服务…",
+      "activeOnly": "只看运行中",
+      "loading": "加载中…"
+    },
     "run": "运行",
     "runAgain": "再次运行",
     "readyToRun": "选择一个操作，在当前会话中运行。",
@@ -467,26 +555,38 @@
       },
       "docker-containers": {
         "name": "Docker 容器",
-        "description": "通过远程 Docker CLI 查看容器、镜像、资源占用和最近日志。"
+        "description": "通过本地或远程 Docker CLI 查看和管理容器、镜像、卷、网络、资源占用、日志以及容器生命周期。"
       },
       "kubernetes-pods": {
         "name": "Kubernetes Pods",
         "description": "使用 kubectl 查看集群上下文、命名空间、Pod、Deployment 和工作负载日志。"
       },
       "database-inspector": {
-        "name": "数据库检查器",
-        "description": "使用远程服务器已有的认证配置读取 PostgreSQL、MySQL 和 SQLite 元数据。"
+        "name": "数据库",
+        "description": "读取 PostgreSQL、MySQL 和 SQLite 元数据。宿主机缺少客户端时会自动改用 Docker 容器内查询。"
+      },
+      "redis-inspector": {
+        "name": "Redis",
+        "description": "查看和管理 Redis：健康状态、键空间统计、键查询、客户端、慢日志和运行配置。宿主机缺少 redis-cli 时自动改用 Docker 容器。"
+      },
+      "cron-scheduler": {
+        "name": "定时任务",
+        "description": "管理定时任务：查看用户 crontab、/etc/crontab 与 /etc/cron.d，检查 systemd 定时器，并添加或删除条目。"
+      },
+      "systemd-services": {
+        "name": "系统服务",
+        "description": "查看 systemd 服务状态，并支持启动、停止、重启操作。"
       },
       "process-explorer": {
-        "name": "进程浏览器",
-        "description": "在不打断终端的情况下查看活动进程与资源占用。"
+        "name": "进程管理",
+        "description": "查看和管理运行中的进程：按 CPU 或内存排序、查看详情、按 PID 终止进程。"
       },
       "system-logs": {
         "name": "系统日志",
         "description": "读取当前服务器最近的 systemd journal 和服务日志。"
       },
       "network-inspector": {
-        "name": "网络检查器",
+        "name": "网络",
         "description": "查看已连接服务器的监听端口、路由和 DNS 配置。"
       },
       "disk-usage": {
@@ -497,9 +597,89 @@
         "name": "Git 工作区",
         "description": "查看远程登录目录中的仓库状态、分支和最近提交。"
       }
+    },
+    "detach": {
+      "mergeBack": "合并回主窗口"
+    },
+    "dbConn": {
+      "title": "数据库",
+      "connections": "连接",
+      "addTitle": "添加连接",
+      "editTitle": "编辑连接",
+      "name": "名称",
+      "engine": "引擎",
+      "host": "主机",
+      "port": "端口",
+      "user": "用户",
+      "password": "密码",
+      "keepPassword": "保持不变",
+      "defaultDatabase": "默认数据库",
+      "test": "测试连接",
+      "save": "保存",
+      "delete": "删除",
+      "deleteConfirm": "确定删除连接 {{name}}？",
+      "connecting": "正在连接…",
+      "emptyHint": "还没有连接。手动添加一个，或从已连接的服务器探测数据库。",
+      "mainHint": "在左侧树中选择数据表，即可浏览数据、结构和执行 SQL。",
+      "dataTab": "数据",
+      "structureTab": "结构",
+      "column": "列名",
+      "type": "类型",
+      "default": "默认值",
+      "loading": "加载中…",
+      "sqlHint": "执行一条查询以查看结果。",
+      "detectTitle": "从服务器探测",
+      "detectHint": "扫描已连接的 SSH 服务器上的数据库端口与容器，一键添加为连接。",
+      "scan": "开始扫描",
+      "detectFailed": "探测失败。",
+      "detectEmpty": "未在该服务器上探测到数据库。",
+      "adopt": "添加",
+      "noSessions": "没有已连接的 SSH 会话",
+      "redisNote": "检测到 Redis — 请使用 Redis 插件管理。"
+    },
+    "network": {
+      "title": "网络",
+      "sockets": "监听端口",
+      "routes": "路由",
+      "addresses": "网卡",
+      "proto": "协议",
+      "localAddress": "本地地址",
+      "process": "进程",
+      "loading": "加载中…"
+    },
+    "disk": {
+      "title": "磁盘用量",
+      "filesystems": "文件系统",
+      "directories": "目录用量",
+      "directory": "目录",
+      "size": "大小",
+      "used": "已用 {{used}} / {{size}}",
+      "free": "剩余 {{available}}",
+      "loading": "加载中…"
+    },
+    "logs": {
+      "title": "系统日志",
+      "servicePlaceholder": "服务（留空看全部）",
+      "filterPlaceholder": "过滤日志行…",
+      "loading": "正在加载日志…"
+    },
+    "git": {
+      "title": "Git",
+      "status": "状态",
+      "branches": "分支",
+      "history": "历史",
+      "loading": "加载中…",
+      "clean": "工作区干净。"
+    },
+    "kube": {
+      "title": "Kubernetes",
+      "pods": "Pods",
+      "deployments": "Deployments",
+      "events": "事件",
+      "contexts": "上下文",
+      "loading": "加载中…"
     }
   },
-
   "tunnel": {
     "title": "SSH 隧道",
     "configCount": "{{configs}} 个配置 · {{active}} 个活跃",
@@ -523,7 +703,6 @@
     "activeTunnels": "活跃隧道",
     "savedConfigs": "已保存配置"
   },
-
   "snippet": {
     "title": "命令片段",
     "addSnippet": "添加片段",
@@ -543,7 +722,6 @@
     "copyToClipboard": "复制到剪贴板",
     "insertCommand": "插入命令"
   },
-
   "sftp": {
     "title": "SFTP",
     "upload": "上传",
@@ -559,7 +737,6 @@
     "noActiveSessionSftp": "请先连接到服务器以使用 SFTP。",
     "noActiveSessionTunnel": "请先连接到服务器以管理隧道。"
   },
-
   "fileWorkspace": {
     "title": "文件工作区",
     "loading": "正在加载文件...",
@@ -587,7 +764,6 @@
     "zoomOut": "缩小",
     "rotate": "旋转"
   },
-
   "fingerprint": {
     "verifyHostKey": "验证主机密钥",
     "hostKeyVerification": "主机密钥验证",
@@ -601,14 +777,12 @@
     "deleteFingerprint": "删除指纹",
     "clearAll": "清除全部"
   },
-
   "quickCommand": {
     "title": "快捷命令",
     "placeholder": "输入命令...",
     "recentCommands": "最近使用的命令",
     "noRecent": "暂无最近命令"
   },
-
   "commandHistory": {
     "title": "指令历史",
     "noServer": "未选择服务器",
@@ -625,19 +799,16 @@
     "empty": "暂无指令历史",
     "noMatches": "没有匹配的指令"
   },
-
   "titleBar": {
     "connected": "已连接",
     "connecting": "连接中",
     "disconnected": "未连接"
   },
-
   "notifications": {
     "dismiss": "关闭",
     "comingSoon": "即将推出",
     "fullSftpManager": "完整的 SFTP 文件管理器正在开发中。"
   },
-
   "language": {
     "en": "English",
     "zh": "简体中文"

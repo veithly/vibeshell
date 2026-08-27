@@ -1,0 +1,273 @@
+{
+  "schemaVersion": 1,
+  "id": "docker-containers",
+  "name": "Docker Containers",
+  "description": "Inspect and manage containers, images, live resource usage and recent container logs through the remote Docker CLI.",
+  "version": "1.4.0",
+  "author": "VibeShell",
+  "category": "containers",
+  "icon": "box",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "containers",
+        "name": "Containers",
+        "description": "List running and stopped containers.",
+        "program": "docker",
+        "args": [
+          "ps",
+          "--all",
+          "--format",
+          "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+        ],
+        "allowSudo": true,
+        "output": {
+          "kind": "table",
+          "columns": [
+            "ID",
+            "Name",
+            "Image",
+            "Status",
+            "Ports"
+          ]
+        }
+      },
+      {
+        "id": "stats",
+        "name": "Live snapshot",
+        "description": "Capture one resource-usage snapshot for running containers.",
+        "program": "docker",
+        "args": [
+          "stats",
+          "--no-stream",
+          "--format",
+          "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}\t{{.BlockIO}}"
+        ],
+        "allowSudo": true,
+        "output": {
+          "kind": "table",
+          "columns": [
+            "Container",
+            "CPU",
+            "Memory",
+            "Network",
+            "Block I/O"
+          ]
+        }
+      },
+      {
+        "id": "images",
+        "name": "Images",
+        "description": "List locally available Docker images.",
+        "program": "docker",
+        "args": [
+          "images",
+          "--format",
+          "{{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}\t{{.CreatedSince}}"
+        ],
+        "allowSudo": true,
+        "output": {
+          "kind": "table",
+          "columns": [
+            "Image",
+            "ID",
+            "Size",
+            "Created"
+          ]
+        }
+      },
+      {
+        "id": "logs",
+        "name": "Container logs",
+        "description": "Read the latest 200 log lines from a container.",
+        "program": "docker",
+        "args": [
+          "logs",
+          "--tail",
+          "200",
+          "{{input.container}}"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container name or ID",
+            "placeholder": "api",
+            "required": true
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "inspect",
+        "name": "Inspect container",
+        "description": "Return Docker's structured container metadata.",
+        "program": "docker",
+        "args": [
+          "inspect",
+          "{{input.container}}"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container name or ID",
+            "placeholder": "api",
+            "required": true
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "exec-command",
+        "name": "Run in container",
+        "description": "Run one non-interactive shell command inside a container.",
+        "program": "docker",
+        "args": [
+          "exec",
+          "{{input.container}}",
+          "sh",
+          "-lc",
+          "{{input.command}}"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container name or ID",
+            "placeholder": "api",
+            "required": true
+          },
+          {
+            "id": "command",
+            "label": "Command",
+            "placeholder": "id",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      },
+      {
+        "id": "start-container",
+        "name": "Start container",
+        "description": "Start a stopped container.",
+        "program": "docker",
+        "args": [
+          "start",
+          "{{input.container}}"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container name or ID",
+            "placeholder": "api",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      },
+      {
+        "id": "stop-container",
+        "name": "Stop container",
+        "description": "Stop a running container gracefully.",
+        "program": "docker",
+        "args": [
+          "stop",
+          "{{input.container}}"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container name or ID",
+            "placeholder": "api",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      },
+      {
+        "id": "restart-container",
+        "name": "Restart container",
+        "description": "Restart a container.",
+        "program": "docker",
+        "args": [
+          "restart",
+          "{{input.container}}"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container name or ID",
+            "placeholder": "api",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      },
+      {
+        "id": "volumes",
+        "name": "Volumes",
+        "description": "List Docker volumes and their drivers.",
+        "program": "docker",
+        "args": [
+          "volume",
+          "ls",
+          "--format",
+          "{{.Name}}\t{{.Driver}}\t{{.Scope}}"
+        ],
+        "allowSudo": true,
+        "output": {
+          "kind": "table",
+          "columns": [
+            "Volume",
+            "Driver",
+            "Scope"
+          ]
+        }
+      },
+      {
+        "id": "networks",
+        "name": "Networks",
+        "description": "List Docker networks.",
+        "program": "docker",
+        "args": [
+          "network",
+          "ls",
+          "--format",
+          "{{.Name}}\t{{.Driver}}\t{{.Scope}}"
+        ],
+        "allowSudo": true,
+        "output": {
+          "kind": "table",
+          "columns": [
+            "Network",
+            "Driver",
+            "Scope"
+          ]
+        }
+      },
+      {
+        "id": "version",
+        "name": "Docker version",
+        "description": "Show the Docker server version.",
+        "program": "docker",
+        "args": [
+          "version",
+          "--format",
+          "{{.Server.Version}}"
+        ],
+        "allowSudo": true
+      }
+    ]
+  }
+}

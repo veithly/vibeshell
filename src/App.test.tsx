@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import { usePluginWorkspaceStore } from './stores/pluginWorkspaceStore';
 
 interface TestSession {
   id: string;
@@ -66,36 +67,50 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock('react-mosaic-component2', () => ({
-  Mosaic: ({
-    value,
-    renderTile,
-  }: {
-    value: unknown;
-    renderTile: (id: string, path: []) => ReactNode;
-  }) => (
-    <div
-      data-testid="mosaic"
-      data-mosaic-value={typeof value === 'string' ? value : ''}
-    >
-      {typeof value === 'string' ? renderTile(value, []) : null}
-    </div>
-  ),
-  MosaicWindow: ({
-    title,
-    toolbarControls = [],
-    children,
-  }: {
-    title: string;
-    toolbarControls?: ReactNode[];
-    children: ReactNode;
-  }) => (
-    <section aria-label={`pane:${title}`}>
-      <div data-testid="pane-toolbar">{toolbarControls}</div>
-      {children}
-    </section>
-  ),
-}));
+vi.mock('react-mosaic-component2', () => {
+  const renderNode = (node: unknown, renderTile: (id: string, path: []) => ReactNode): ReactNode => {
+    if (typeof node === 'string') return renderTile(node, []);
+    if (node && typeof node === 'object' && 'first' in node && 'second' in node) {
+      return (
+        <>
+          {renderNode((node as { first: unknown }).first, renderTile)}
+          {renderNode((node as { second: unknown }).second, renderTile)}
+        </>
+      );
+    }
+    return null;
+  };
+  return {
+    Mosaic: ({
+      value,
+      renderTile,
+    }: {
+      value: unknown;
+      renderTile: (id: string, path: []) => ReactNode;
+    }) => (
+      <div
+        data-testid="mosaic"
+        data-mosaic-value={typeof value === 'string' ? value : 'branch'}
+      >
+        {renderNode(value, renderTile)}
+      </div>
+    ),
+    MosaicWindow: ({
+      title,
+      toolbarControls = [],
+      children,
+    }: {
+      title: string;
+      toolbarControls?: ReactNode[];
+      children: ReactNode;
+    }) => (
+      <section aria-label={`pane:${title}`}>
+        <div data-testid="pane-toolbar">{toolbarControls}</div>
+        {children}
+      </section>
+    ),
+  };
+});
 
 vi.mock('./stores/sessionStore', () => {
   const getState = () => ({
@@ -124,30 +139,43 @@ vi.mock('./stores/notificationStore', () => ({
   }),
 }));
 
-vi.mock('./stores/settingsStore', () => ({
-  useSettingsStore: () => ({
-    settings: { appearance: { theme: 'test-theme' } },
-    initializeSettings: testState.actions.initializeSettings,
-  }),
-  themes: [{
-    name: 'test-theme',
-    colors: {
-      bg: '#000000',
-      bgDark: '#000000',
-      bgHl: '#111111',
-      fg: '#ffffff',
-      fgDark: '#aaaaaa',
-      accent: '#00aaff',
-      onAccent: '#000000',
-      red: '#ff0000',
-      green: '#00ff00',
-      yellow: '#ffff00',
-      magenta: '#ff00ff',
-      cyan: '#00ffff',
-      orange: '#ff8800',
+vi.mock('./stores/settingsStore', () => {
+  const getState = () => ({
+    settings: {
+      appearance: {
+        theme: 'test-theme',
+        themeMode: 'dark',
+        lightTheme: 'paper-white',
+        darkTheme: 'test-theme',
+      },
     },
-  }],
-}));
+    initializeSettings: testState.actions.initializeSettings,
+    updateAppearanceSettings: vi.fn(),
+  });
+  const useSettingsStore = (selector?: (state: ReturnType<typeof getState>) => unknown) =>
+    selector ? selector(getState()) : getState();
+  return {
+    useSettingsStore: Object.assign(useSettingsStore, { getState }),
+    themes: [{
+      name: 'test-theme',
+      colors: {
+        bg: '#000000',
+        bgDark: '#000000',
+        bgHl: '#111111',
+        fg: '#ffffff',
+        fgDark: '#aaaaaa',
+        accent: '#00aaff',
+        onAccent: '#000000',
+        red: '#ff0000',
+        green: '#00ff00',
+        yellow: '#ffff00',
+        magenta: '#ff00ff',
+        cyan: '#00ffff',
+        orange: '#ff8800',
+      },
+    }],
+  };
+});
 
 vi.mock('./stores/updateStore', () => {
   const useUpdateStore = Object.assign(
@@ -185,10 +213,58 @@ vi.mock('./stores/runtimeCapabilitiesStore', () => {
 });
 
 vi.mock('./stores/pluginStore', () => {
-  const getState = () => ({ fetchPlugins: testState.actions.fetchPlugins });
+  const dockerManifest = {
+    schemaVersion: 1,
+    id: 'docker-containers',
+    name: 'Docker Containers',
+    description: 'Inspect containers',
+    version: '1.2.0',
+    author: 'VibeShell',
+    category: 'containers',
+    icon: 'box',
+    permissions: ['remote_exec'],
+    sessionTypes: ['ssh', 'local'],
+    defaultSettings: {},
+    entry: {
+      type: 'commands',
+      actions: [{
+        id: 'containers',
+        name: 'Containers',
+        description: 'List containers',
+        program: 'docker',
+        args: ['ps', '--all'],
+        inputs: [],
+        requiresConfirmation: false,
+        elevate: false,
+        allowSudo: true,
+        output: { kind: 'text', columns: [], delimiter: '\t' },
+      }],
+    },
+  };
+  const getState = () => ({
+    plugins: [{
+      manifest: dockerManifest,
+      source: 'builtin',
+      installed: true,
+      enabled: true,
+      grantedPermissions: ['remote_exec'],
+      settings: {},
+      installedAt: 1,
+    }],
+    loading: false,
+    initialized: true,
+    operationId: null,
+    error: null,
+    fetchPlugins: testState.actions.fetchPlugins,
+    executePluginAction: vi.fn(async () => null),
+    updatePluginSettings: vi.fn(async () => true),
+    clearError: vi.fn(),
+  });
   return {
-    usePluginStore: (selector: (state: ReturnType<typeof getState>) => unknown) => (
-      selector(getState())
+    usePluginStore: Object.assign(
+      (selector?: (state: ReturnType<typeof getState>) => unknown) =>
+        selector ? selector(getState()) : getState(),
+      { getState }
     ),
   };
 });
@@ -284,6 +360,7 @@ describe('App workspace actions', () => {
     testState.sessions = [codingAgentSession()];
     testState.activeSessionId = 'session-1';
     testState.compact = true;
+    usePluginWorkspaceStore.setState({ tabs: [], activeTabId: null, panels: {} });
     testState.capabilities = {
       platform: 'macos',
       isMobile: false,
@@ -310,13 +387,48 @@ describe('App workspace actions', () => {
     render(<App />);
 
     const mosaic = await screen.findByTestId('mosaic');
-    expect(mosaic).toHaveAttribute('data-mosaic-value', 'session-1');
+    expect(mosaic).toHaveAttribute('data-mosaic-value', 'session:session-1');
 
     const toolbar = await screen.findByTestId('pane-toolbar');
     expect(toolbar).toBeEmptyDOMElement();
     expect(
       within(toolbar).queryByRole('button', { name: 'session.removePane' })
     ).not.toBeInTheDocument();
+  });
+
+  it('opens a plugin as a workspace tab and splits it beside the terminal', async () => {
+    testState.compact = false;
+    render(<App />);
+
+    // The toolbar launcher lists plugins compatible with the active session.
+    const launcher = await screen.findByRole('button', { name: 'plugins.openTabLauncher' });
+    expect(launcher).toBeEnabled();
+    fireEvent.click(launcher);
+
+    const pluginItem = await screen.findByRole('menuitem');
+    fireEvent.click(pluginItem);
+
+    // The plugin takes over the workspace area and offers split controls.
+    const splitButton = await screen.findByRole('button', { name: 'plugins.splitRight' });
+    expect(splitButton).toBeInTheDocument();
+    expect(screen.getByText('Codex')).toBeInTheDocument();
+
+    // Splitting pins the plugin beside the terminal inside the mosaic.
+    fireEvent.click(splitButton);
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('pane:plugins.catalog.docker-containers.name · Codex')
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('terminal-session-1')).toBeInTheDocument();
+
+    // The built-in management dashboard replaces the raw action form.
+    const pluginPane = screen.getByLabelText('pane:plugins.catalog.docker-containers.name · Codex');
+    expect(within(pluginPane).getByText('Docker')).toBeInTheDocument();
+    expect(within(pluginPane).getAllByText(/Containers/).length).toBeGreaterThan(0);
+    // Power users can still drop into the raw runner.
+    fireEvent.click(within(pluginPane).getByText('plugins.advancedMode ⌄'));
+    expect(within(pluginPane).getAllByText('Containers').length).toBeGreaterThan(0);
   });
 
   it('keeps compact coding-agent, workspace-change, and gateway actions distinct', async () => {

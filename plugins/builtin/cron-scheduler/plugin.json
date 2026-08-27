@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "id": "cron-scheduler",
+  "name": "Scheduled Tasks",
+  "description": "Manage cron jobs: browse the user crontab, /etc/crontab and /etc/cron.d, inspect systemd timers, and add or remove entries.",
+  "version": "1.1.0",
+  "author": "VibeShell",
+  "category": "operations",
+  "icon": "clock",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "crontab-list",
+        "name": "My crontab",
+        "description": "List the login user's crontab entries.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "crontab -l 2>&1 || true"
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "timers",
+        "name": "systemd timers",
+        "description": "List all systemd timers with their next and last runs.",
+        "program": "systemctl",
+        "args": [
+          "list-timers",
+          "--all",
+          "--no-pager"
+        ],
+        "allowSudo": true,
+        "output": {
+          "kind": "text",
+          "columns": [],
+          "delimiter": "\t"
+        }
+      },
+      {
+        "id": "cron-d",
+        "name": "cron.d drop-ins",
+        "description": "Show every file in /etc/cron.d with its contents.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "ls -1 /etc/cron.d 2>/dev/null | while IFS= read -r f; do echo \"== $f\"; cat \"/etc/cron.d/$f\"; done"
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "crontab-file",
+        "name": "/etc/crontab",
+        "description": "Read the system-wide crontab file.",
+        "program": "cat",
+        "args": [
+          "/etc/crontab"
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "cron-add",
+        "name": "Add cron entry",
+        "description": "Append one entry to the login user's crontab.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "{ crontab -l 2>/dev/null || true; printf \"%s\\n\" \"$1\"; } | crontab -",
+          "{{input.line}}"
+        ],
+        "inputs": [
+          {
+            "id": "line",
+            "label": "Cron entry",
+            "placeholder": "*/5 * * * * /usr/local/bin/backup",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      },
+      {
+        "id": "cron-remove",
+        "name": "Remove cron entry",
+        "description": "Remove one exact entry from the login user's crontab.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "crontab -l 2>/dev/null | grep -vF -x \"$1\" | crontab -",
+          "{{input.line}}"
+        ],
+        "inputs": [
+          {
+            "id": "line",
+            "label": "Cron entry",
+            "placeholder": "*/5 * * * * /usr/local/bin/backup",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      }
+    ]
+  }
+}

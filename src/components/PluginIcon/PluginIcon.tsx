@@ -3,13 +3,16 @@ import {
   Activity,
   Box,
   Boxes,
+  Clock,
   Cpu,
   Database,
+  DatabaseZap,
   FileText,
   GitBranch,
   HardDrive,
   Network,
   Plug,
+  Settings,
   Wrench,
 } from 'lucide-react';
 
@@ -17,6 +20,7 @@ const icons: Record<string, LucideIcon> = {
   activity: Activity,
   box: Box,
   boxes: Boxes,
+  clock: Clock,
   cpu: Cpu,
   database: Database,
   'file-text': FileText,
@@ -24,6 +28,8 @@ const icons: Record<string, LucideIcon> = {
   'hard-drive': HardDrive,
   network: Network,
   plug: Plug,
+  redis: DatabaseZap,
+  settings: Settings,
   wrench: Wrench,
 };
 

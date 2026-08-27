@@ -179,3 +179,25 @@ pub struct PluginInstallation {
     pub installed_at: i64,
     pub updated_at: i64,
 }
+
+// =============================================================================
+// Database Connection Models
+// =============================================================================
+
+/// A standalone database connection profile (Navicat-style), independent of
+/// SSH sessions. The password is stored encrypted with a device-local key and
+/// never leaves the device, which is why these profiles are not synced.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DatabaseConnection {
+    pub id: String,
+    pub name: String,
+    pub engine: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password_encrypted: String,
+    pub default_database: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_connected_at: Option<i64>,
+}

@@ -1,0 +1,11 @@
+[package]
+name = "vibeshell-plugins"
+description = "VibeShell plugin manifest specification: validation, command rendering, and the built-in plugin catalog."
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

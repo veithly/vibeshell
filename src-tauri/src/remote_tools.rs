@@ -27,23 +27,10 @@ impl RemoteSearchOptions {
 }
 
 /// Quote a string for POSIX shell usage.
-pub fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-
-    if value.chars().all(|ch| {
-        ch.is_ascii_alphanumeric()
-            || matches!(
-                ch,
-                '_' | '@' | '%' | '+' | '=' | ':' | ',' | '.' | '/' | '-'
-            )
-    }) {
-        return value.to_string();
-    }
-
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
+///
+/// Canonical implementation lives in the `vibeshell-plugins` crate so plugin
+/// command rendering and the rest of the app share one quoting boundary.
+pub use vibeshell_plugins::shell_quote;
 
 /// Build a remote command that searches with ripgrep and falls back to grep.
 pub fn build_remote_rg_command(options: &RemoteSearchOptions) -> String {

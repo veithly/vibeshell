@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "disk-usage",
+  "name": "Disk Usage",
+  "description": "Inspect filesystems and directory usage before a full disk becomes an incident.",
+  "version": "1.1.0",
+  "author": "VibeShell",
+  "category": "monitoring",
+  "icon": "hard-drive",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "filesystems",
+        "name": "Filesystems",
+        "description": "Show mounted filesystem capacity and usage.",
+        "program": "df",
+        "args": [
+          "-P",
+          "-h"
+        ]
+      },
+      {
+        "id": "current-directory",
+        "name": "Current directory",
+        "description": "Summarize first-level disk usage in the current directory.",
+        "program": "du",
+        "args": [
+          "-h",
+          "-d",
+          "1",
+          "."
+        ]
+      }
+    ]
+  }
+}

@@ -30,7 +30,6 @@
     "version": "Version",
     "builtWith": "Built with"
   },
-
   "sidebar": {
     "addServer": "Add Server",
     "quickCmd": "Quick Cmd",
@@ -40,12 +39,10 @@
     "snippets": "Snippets",
     "settings": "Settings"
   },
-
   "updates": {
     "availableTitle": "Update available",
     "availableMessage": "VibeShell {{version}} is available. Open Settings > About to download it."
   },
-
   "session": {
     "newSession": "New Session",
     "newConnection": "New connection",
@@ -68,9 +65,9 @@
     "splitLimitMessage": "Up to nine terminal panes can be shown at once.",
     "creatingPane": "Creating terminal pane",
     "splitFailedTitle": "Could not create terminal pane",
-    "splitFailedMessage": "The local terminal failed to start. Please try again."
+    "splitFailedMessage": "The local terminal failed to start. Please try again.",
+    "openInWindow": "Open in new window"
   },
-
   "server": {
     "addServer": "Add New Server",
     "editServer": "Edit Server",
@@ -118,7 +115,6 @@
     "deleteGroup": "Delete Group",
     "via": "Via: {{name}} ({{host}}:{{port}})"
   },
-
   "connect": {
     "launcherTitle": "Open a connection",
     "searchConnections": "Search servers and shells",
@@ -136,7 +132,6 @@
     "selectKeyFile": "Select SSH Key",
     "keyLoaded": "Key loaded: {{path}}"
   },
-
   "agentActivity": {
     "title": "Agent activity",
     "connected": "Ready",
@@ -223,7 +218,6 @@
   },
   "settings": {
     "title": "Settings",
-
     "terminal": "Terminal",
     "terminalDesc": "Customize the terminal appearance and behavior.",
     "fontSize": "Font Size",
@@ -236,7 +230,6 @@
     "cursorBlinkDesc": "Enable blinking cursor animation",
     "scrollbackLines": "Scrollback Lines",
     "scrollbackLinesDesc": "Number of lines to keep in history (1,000-100,000)",
-
     "aiPrediction": "AI Command Prediction",
     "aiPredictionDesc": "Use your own OpenAI-compatible or Claude-compatible API key to predict inline command ghost text.",
     "aiPredictionEnabled": "Enable Prediction",
@@ -257,7 +250,6 @@
       "openai": "OpenAI compatible",
       "claude": "Claude compatible"
     },
-
     "appearance": "Appearance",
     "appearanceDesc": "Customize the look and feel of VibeShell.",
     "theme": "Theme",
@@ -272,7 +264,6 @@
     "windowOpacityDesc": "Transparency level (Windows only)",
     "language": "Language",
     "languageDesc": "Interface language",
-
     "sshDefaults": "SSH Defaults",
     "sshDefaultsDesc": "Default values for new SSH connections.",
     "defaultPort": "Default Port",
@@ -283,7 +274,6 @@
     "keepaliveIntervalDesc": "Interval between keepalive packets (0 to disable)",
     "defaultUsername": "Default Username",
     "defaultUsernameDesc": "Pre-filled username for new connections",
-
     "cloudSync": "Cloud Sync",
     "cloudSyncDesc": "Sync workspace data through GitHub Gist, WebDAV, or a portable file.",
     "cloudSyncStatus": "Status",
@@ -321,7 +311,6 @@
     "cloudExportFile": "Export file",
     "cloudFileExportReport": "Exported {{count}} records to {{path}}",
     "cloudFileImportReport": "Imported {{applied}} records, ignored {{ignored}}, conflicts {{conflicts}} from {{path}}",
-
     "serverStatus": "Server Status Monitoring",
     "serverStatusDesc": "Configure real-time server metrics monitoring.",
     "refreshInterval": "Refresh Interval",
@@ -330,20 +319,17 @@
     "autoExpandPanelDesc": "Automatically expand the status panel when connecting",
     "showNetworkRates": "Show Network Rates",
     "showNetworkRatesDesc": "Display network transfer rates instead of total bytes",
-
     "fileTransfer": "File Transfer",
     "fileTransferDesc": "Configure recursive SFTP upload and sync behavior.",
     "respectGitignore": "Respect .gitignore",
     "respectGitignoreDesc": "Apply .gitignore rules from the uploaded directory and its subdirectories.",
     "uploadExcludePatterns": "Upload Exclude Patterns",
     "uploadExcludePatternsDesc": "One pattern per line. Used by VibeShell directory upload and sync.",
-
     "security": "Security",
     "securityDesc": "Manage SSH host key verification and security settings.",
     "hostKeyFingerprints": "SSH Host Key Fingerprints",
     "hostKeyFingerprintsDesc": "{{count}} trusted host(s) stored. Manage the list of trusted SSH server fingerprints.",
     "manageHostKeys": "Manage Host Keys",
-
     "recording": "Session Recording",
     "recordingDesc": "Record terminal sessions for review and auditing. Right-click a session tab to start recording.",
     "storageLocation": "Storage Location",
@@ -352,7 +338,6 @@
     "noRecordings": "No recordings yet. Right-click a session tab to start recording.",
     "inProgress": "In progress",
     "deleteRecording": "Delete recording",
-
     "gateway": "Agent Gateway",
     "gatewayDesc": "Agents connect directly to this VibeShell window and share its SSH sessions with you.",
     "gatewayRunning": "Gateway running",
@@ -362,7 +347,6 @@
     "gatewayEndpoint": "Local endpoint",
     "gatewayManifest": "Discovery manifest",
     "gatewayProtocol": "MCP protocol",
-
     "skills": "Skills",
     "skillsDesc": "Install Gateway instructions for direct SSH and SFTP access from your AI coding tools.",
     "detectingTools": "Detecting supported AI tools...",
@@ -370,7 +354,6 @@
     "supportedTools": "Supported tools: Claude Code, Cursor, Codex, Open Code, Pi",
     "refreshing": "Refreshing...",
     "refreshStatus": "Refresh Status",
-
     "about": "About",
     "aboutDesc": "Information about VibeShell.",
     "appTitle": "VibeShell",
@@ -389,13 +372,11 @@
     "updateInstalling": "Installing...",
     "updateInstallingProgress": "Installing update... {{progress}}%",
     "updateOpenLatest": "Latest release",
-
     "resetSettings": "Reset Settings",
     "resetSettingsDesc": "Restore all settings to their default values.",
     "resetAll": "Reset All",
     "resetConfirm": "Are you sure?",
     "yesReset": "Yes, Reset",
-
     "refreshIntervalOptions": {
       "5s": "5 seconds",
       "10s": "10 seconds",
@@ -405,7 +386,6 @@
       "manual": "Manual only"
     }
   },
-
   "plugins": {
     "marketplace": "Plugin Marketplace",
     "workspace": "Session plugins",
@@ -428,6 +408,9 @@
     "hostRenderedDesc": "External plugins use validated manifests and never inject JavaScript into the terminal window.",
     "install": "Install",
     "uninstall": "Uninstall",
+    "export": "Export manifest",
+    "exportTemplate": "Export as template",
+    "exportedTitle": "Plugin manifest exported",
     "enabled": "Enabled",
     "disabled": "Disabled",
     "uninstallConfirm": "Uninstall {{name}}?",
@@ -435,6 +418,111 @@
     "actionConfirm": "Run {{name}} on the active server? Review the values before continuing.",
     "noCompatiblePlugins": "No enabled plugins support this session.",
     "openMarketplace": "Open marketplace",
+    "openInTab": "Open {{name}} in a workspace tab",
+    "openTabLauncher": "Open plugin tab",
+    "openTabNeedsSession": "Connect to a server first to open plugin tabs.",
+    "splitRight": "Split beside terminal",
+    "splitDown": "Split below terminal",
+    "tabPluginMissing": "This plugin is no longer installed.",
+    "dragToSplit": "Drag onto a terminal pane to split",
+    "advancedMode": "Advanced (raw actions)",
+    "dashboardMode": "Back to dashboard",
+    "docker": {
+      "containers": "Containers",
+      "images": "Images",
+      "volumes": "Volumes",
+      "networks": "Networks",
+      "container": "Container",
+      "image": "Image",
+      "statusHeader": "Status",
+      "memory": "Memory",
+      "ports": "Ports",
+      "actions": "Actions",
+      "size": "Size",
+      "created": "Created",
+      "volume": "Volume",
+      "network": "Network",
+      "running": "Running",
+      "stopped": "Stopped",
+      "start": "Start",
+      "stop": "Stop",
+      "restart": "Restart",
+      "logs": "Logs",
+      "inspect": "Inspect",
+      "loading": "Loading…",
+      "noContainers": "No containers found.",
+      "autoRefresh": "Auto refresh",
+      "refreshOff": "Auto: off",
+      "refresh10s": "Auto: 10s",
+      "refresh30s": "Auto: 30s",
+      "refresh60s": "Auto: 60s",
+      "search": "Search containers…",
+      "filterAll": "All ({{count}})",
+      "filterRunning": "Running ({{count}})",
+      "filterStopped": "Stopped ({{count}})"
+    },
+    "database": {
+      "title": "Databases",
+      "tables": "Tables",
+      "rows": "rows",
+      "loading": "Loading…",
+      "pickDatabase": "Select a database to list its tables.",
+      "pickTable": "Select a table to preview its data, or run SQL above.",
+      "preview": "Preview table data",
+      "sqlResult": "SQL result",
+      "sqliteFile": "Database file",
+      "sqliteHint": "Enter the SQLite file path on the server and press Enter."
+    },
+    "redis": {
+      "status": "Status",
+      "keys": "Keys",
+      "memory": "Memory",
+      "clients": "Clients",
+      "uptimeDays": "Uptime (days)",
+      "down": "Unreachable",
+      "scan": "Scan",
+      "scanning": "Scanning keys…",
+      "scanHint": "Enter a pattern (e.g. user:*) and scan to browse keys.",
+      "type": "Type",
+      "value": "Value",
+      "forever": "no expiry",
+      "nonStringValue": "{{type}} value — string preview unavailable",
+      "deleteKey": "Delete key",
+      "loadingKey": "Loading key…"
+    },
+    "cron": {
+      "title": "Scheduled Tasks",
+      "crontab": "My crontab",
+      "timers": "systemd timers",
+      "schedule": "Schedule",
+      "command": "Command",
+      "add": "Add",
+      "remove": "Remove entry",
+      "search": "Filter entries…",
+      "loading": "Loading…",
+      "empty": "No cron entries yet."
+    },
+    "process": {
+      "title": "Processes",
+      "byCpu": "By CPU",
+      "byMemory": "By memory",
+      "kill": "Terminate",
+      "detail": "Details",
+      "search": "Filter processes…",
+      "loading": "Loading…"
+    },
+    "services": {
+      "title": "Services",
+      "service": "Service",
+      "state": "State",
+      "description": "Description",
+      "start": "Start",
+      "stop": "Stop",
+      "restart": "Restart",
+      "search": "Filter services…",
+      "activeOnly": "Active only",
+      "loading": "Loading…"
+    },
     "run": "Run",
     "runAgain": "Run again",
     "readyToRun": "Choose an action and run it against the active session.",
@@ -467,7 +555,7 @@
       },
       "docker-containers": {
         "name": "Docker Containers",
-        "description": "Inspect containers, images, live resource usage and recent container logs through the remote Docker CLI."
+        "description": "Inspect and manage containers, images, volumes, networks, resource usage, logs and container lifecycle through the local or remote Docker CLI."
       },
       "kubernetes-pods": {
         "name": "Kubernetes Pods",
@@ -475,11 +563,23 @@
       },
       "database-inspector": {
         "name": "Database Inspector",
-        "description": "Read PostgreSQL, MySQL and SQLite metadata using credentials already configured on the remote server."
+        "description": "Read PostgreSQL, MySQL and SQLite metadata. When the client binary is missing on the host, PostgreSQL and MySQL are queried inside their Docker containers."
+      },
+      "redis-inspector": {
+        "name": "Redis Inspector",
+        "description": "Inspect and manage Redis: health, keyspace stats, key lookups, clients, slowlog and runtime configuration. Falls back to a Docker redis container when redis-cli is absent."
+      },
+      "cron-scheduler": {
+        "name": "Scheduled Tasks",
+        "description": "Manage cron jobs: browse the user crontab, /etc/crontab and /etc/cron.d, inspect systemd timers, and add or remove entries."
+      },
+      "systemd-services": {
+        "name": "Systemd Services",
+        "description": "Browse systemd services with their state, and start, stop or restart them."
       },
       "process-explorer": {
         "name": "Process Explorer",
-        "description": "Inspect active processes and resource consumption without interrupting the terminal."
+        "description": "Inspect and manage running processes: sort by CPU or memory, inspect details, and terminate processes by PID."
       },
       "system-logs": {
         "name": "System Logs",
@@ -497,9 +597,89 @@
         "name": "Git Workspace",
         "description": "Inspect repository status, branches and recent commits in the remote login directory."
       }
+    },
+    "detach": {
+      "mergeBack": "Merge back to main window"
+    },
+    "dbConn": {
+      "title": "Databases",
+      "connections": "Connections",
+      "addTitle": "Add connection",
+      "editTitle": "Edit connection",
+      "name": "Name",
+      "engine": "Engine",
+      "host": "Host",
+      "port": "Port",
+      "user": "User",
+      "password": "Password",
+      "keepPassword": "unchanged",
+      "defaultDatabase": "Default database",
+      "test": "Test connection",
+      "save": "Save",
+      "delete": "Delete",
+      "deleteConfirm": "Delete connection {{name}}?",
+      "connecting": "Connecting…",
+      "emptyHint": "No connections yet. Add one manually, or detect databases from a connected server.",
+      "mainHint": "Pick a table in the tree to browse its data, structure, and run SQL.",
+      "dataTab": "Data",
+      "structureTab": "Structure",
+      "column": "Column",
+      "type": "Type",
+      "default": "Default",
+      "loading": "Loading…",
+      "sqlHint": "Run a query to see results.",
+      "detectTitle": "Detect from server",
+      "detectHint": "Scan a connected SSH server for database ports and containers, then add them as connections.",
+      "scan": "Scan",
+      "detectFailed": "Detection failed.",
+      "detectEmpty": "No databases detected on this server.",
+      "adopt": "Add",
+      "noSessions": "No connected SSH sessions",
+      "redisNote": "Redis detected — manage it with the Redis plugin (session-based)."
+    },
+    "network": {
+      "title": "Network",
+      "sockets": "Listening ports",
+      "routes": "Routes",
+      "addresses": "Interfaces",
+      "proto": "Proto",
+      "localAddress": "Local address",
+      "process": "Process",
+      "loading": "Loading…"
+    },
+    "disk": {
+      "title": "Disk Usage",
+      "filesystems": "Filesystems",
+      "directories": "Directory usage",
+      "directory": "Directory",
+      "size": "Size",
+      "used": "Used {{used}} of {{size}}",
+      "free": "{{available}} free",
+      "loading": "Loading…"
+    },
+    "logs": {
+      "title": "System Logs",
+      "servicePlaceholder": "Service (empty = all)",
+      "filterPlaceholder": "Filter lines…",
+      "loading": "Loading logs…"
+    },
+    "git": {
+      "title": "Git",
+      "status": "Status",
+      "branches": "Branches",
+      "history": "History",
+      "loading": "Loading…",
+      "clean": "Working tree clean."
+    },
+    "kube": {
+      "title": "Kubernetes",
+      "pods": "Pods",
+      "deployments": "Deployments",
+      "events": "Events",
+      "contexts": "Contexts",
+      "loading": "Loading…"
     }
   },
-
   "tunnel": {
     "title": "SSH Tunnels",
     "configCount": "{{configs}} configs · {{active}} active",
@@ -523,7 +703,6 @@
     "activeTunnels": "Active Tunnels",
     "savedConfigs": "Saved Configurations"
   },
-
   "snippet": {
     "title": "Command Snippets",
     "addSnippet": "Add Snippet",
@@ -543,7 +722,6 @@
     "copyToClipboard": "Copy to clipboard",
     "insertCommand": "Insert command"
   },
-
   "sftp": {
     "title": "SFTP",
     "upload": "Upload",
@@ -559,7 +737,6 @@
     "noActiveSessionSftp": "Connect to a server first to use SFTP.",
     "noActiveSessionTunnel": "Connect to a server first to manage tunnels."
   },
-
   "fileWorkspace": {
     "title": "File workspace",
     "loading": "Loading file...",
@@ -587,7 +764,6 @@
     "zoomOut": "Zoom out",
     "rotate": "Rotate"
   },
-
   "fingerprint": {
     "verifyHostKey": "Verify Host Key",
     "hostKeyVerification": "Host Key Verification",
@@ -601,14 +777,12 @@
     "deleteFingerprint": "Delete fingerprint",
     "clearAll": "Clear All"
   },
-
   "quickCommand": {
     "title": "Quick Command",
     "placeholder": "Type a command...",
     "recentCommands": "Recent Commands",
     "noRecent": "No recent commands"
   },
-
   "commandHistory": {
     "title": "Command history",
     "noServer": "No server selected",
@@ -625,19 +799,16 @@
     "empty": "No command history yet",
     "noMatches": "No matching commands"
   },
-
   "titleBar": {
     "connected": "Connected",
     "connecting": "Connecting",
     "disconnected": "Disconnected"
   },
-
   "notifications": {
     "dismiss": "Dismiss",
     "comingSoon": "Coming Soon",
     "fullSftpManager": "Full SFTP file manager view is under development."
   },
-
   "language": {
     "en": "English",
     "zh": "简体中文"

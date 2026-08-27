@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "id": "process-explorer",
+  "name": "Process Explorer",
+  "description": "Inspect and manage running processes: sort by CPU or memory, inspect details, and terminate processes by PID.",
+  "version": "1.2.0",
+  "author": "VibeShell",
+  "category": "operations",
+  "icon": "cpu",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "top-cpu",
+        "name": "CPU usage",
+        "description": "Sort processes by current CPU usage.",
+        "program": "ps",
+        "args": [
+          "-eo",
+          "pid,ppid,user,%cpu,%mem,rss,etime,comm",
+          "--sort=-%cpu"
+        ]
+      },
+      {
+        "id": "top-memory",
+        "name": "Memory usage",
+        "description": "Sort processes by current memory usage.",
+        "program": "ps",
+        "args": [
+          "-eo",
+          "pid,ppid,user,%mem,%cpu,rss,etime,comm",
+          "--sort=-%mem"
+        ]
+      },
+      {
+        "id": "process-detail",
+        "name": "Process detail",
+        "description": "Show full command line, working directory and start time of one PID.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "tr \"\\0\" \" \" < /proc/$1/cmdline; echo; printf \"cwd: \"; readlink /proc/$1/cwd 2>/dev/null || echo -; printf \"exe: \"; readlink /proc/$1/exe 2>/dev/null || echo -",
+          "{{input.pid}}"
+        ],
+        "inputs": [
+          {
+            "id": "pid",
+            "label": "PID",
+            "placeholder": "1234",
+            "required": true,
+            "kind": "integer"
+          }
+        ]
+      },
+      {
+        "id": "kill",
+        "name": "Terminate process",
+        "description": "Send SIGTERM to a process by PID.",
+        "program": "kill",
+        "args": [
+          "{{input.pid}}"
+        ],
+        "inputs": [
+          {
+            "id": "pid",
+            "label": "PID",
+            "placeholder": "1234",
+            "required": true,
+            "kind": "integer"
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      }
+    ]
+  }
+}

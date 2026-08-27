@@ -15,6 +15,8 @@ interface PluginStore {
   fetchPlugins: () => Promise<void>;
   installPlugin: (pluginId: string) => Promise<boolean>;
   importPlugin: () => Promise<PluginRecord | null>;
+  /** Exports a plugin manifest; resolves to the written path, or null when the save dialog was cancelled. */
+  exportPlugin: (pluginId: string) => Promise<string | null>;
   uninstallPlugin: (pluginId: string) => Promise<boolean>;
   setPluginEnabled: (pluginId: string, enabled: boolean) => Promise<boolean>;
   updatePluginSettings: (
@@ -114,6 +116,19 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
     await get().fetchPlugins();
     set({ operationId: null });
     return true;
+  },
+
+  exportPlugin: async (pluginId) => {
+    set({ operationId: `export:${pluginId}`, error: null });
+    const result = await safeInvoke<string | null>('plugin_export', {
+      request: { pluginId },
+    });
+    set({ operationId: null });
+    if (result.success) {
+      return result.data;
+    }
+    set({ error: result.error.message });
+    return null;
   },
 
   setPluginEnabled: async (pluginId, enabled) => {

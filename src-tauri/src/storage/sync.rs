@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::database::{Database, Group};
-use super::models::{AuthType, CommandSnippet, Server};
+use super::models::{AuthType, CommandSnippet, PluginInstallation, Server};
 
 pub const SYNC_CHANGE_SCHEMA_VERSION: u32 = 1;
 
@@ -28,6 +28,7 @@ pub enum SyncEntityKind {
     Server,
     Group,
     CommandSnippet,
+    PluginInstallation,
 }
 
 impl SyncEntityKind {
@@ -36,6 +37,7 @@ impl SyncEntityKind {
             Self::Server => "server",
             Self::Group => "group",
             Self::CommandSnippet => "command_snippet",
+            Self::PluginInstallation => "plugin_installation",
         }
     }
 
@@ -44,6 +46,7 @@ impl SyncEntityKind {
             "server" => Ok(Self::Server),
             "group" => Ok(Self::Group),
             "command_snippet" => Ok(Self::CommandSnippet),
+            "plugin_installation" => Ok(Self::PluginInstallation),
             _ => bail!("Unknown sync entity kind: {value}"),
         }
     }
@@ -704,6 +707,33 @@ pub(super) fn record_snippet_upsert(
     Ok(())
 }
 
+pub(super) fn record_plugin_installation_upsert(
+    conn: &Connection,
+    installation: &PluginInstallation,
+) -> Result<()> {
+    let payload = PluginInstallationSyncPayload {
+        plugin_id: installation.plugin_id.clone(),
+        version: installation.version.clone(),
+        source: installation.source.clone(),
+        enabled: installation.enabled,
+        manifest_json: if installation.source == "external" {
+            Some(installation.manifest_json.clone())
+        } else {
+            None
+        },
+        settings_json: installation.settings_json.clone(),
+        installed_at: installation.installed_at,
+        updated_at: installation.updated_at,
+    };
+    record_local_upsert(
+        conn,
+        SyncEntityKind::PluginInstallation,
+        &installation.plugin_id,
+        serde_json::to_value(payload)?,
+    )?;
+    Ok(())
+}
+
 pub(super) fn record_local_delete(
     conn: &Connection,
     entity_kind: SyncEntityKind,
@@ -774,7 +804,7 @@ fn query_string_column(conn: &Connection, sql: &str, value: &str) -> Result<Vec<
     Ok(values)
 }
 
-fn record_current_upsert(
+pub(super) fn record_current_upsert(
     conn: &Connection,
     entity_kind: SyncEntityKind,
     entity_id: &str,
@@ -1142,6 +1172,10 @@ fn normalize_payload(
             serde_json::from_value::<SnippetSyncPayload>(payload)
                 .context("Invalid command snippet payload in sync change")?,
         )?,
+        SyncEntityKind::PluginInstallation => serde_json::to_value(
+            serde_json::from_value::<PluginInstallationSyncPayload>(payload)
+                .context("Invalid plugin installation payload in sync change")?,
+        )?,
     };
     Ok(Some(canonical))
 }
@@ -1176,7 +1210,10 @@ fn resolve_name_collision(
     prepared: &PreparedChange,
 ) -> Result<NameCollisionDecision> {
     let change = &prepared.change;
-    if change.deleted || change.entity_kind == SyncEntityKind::CommandSnippet {
+    if change.deleted
+        || change.entity_kind == SyncEntityKind::CommandSnippet
+        || change.entity_kind == SyncEntityKind::PluginInstallation
+    {
         return Ok(NameCollisionDecision::NoCollision);
     }
 
@@ -1190,6 +1227,7 @@ fn resolve_name_collision(
         SyncEntityKind::Server => "servers",
         SyncEntityKind::Group => "groups",
         SyncEntityKind::CommandSnippet => unreachable!(),
+        SyncEntityKind::PluginInstallation => unreachable!(),
     };
     let contender_id = conn
         .query_row(
@@ -1423,13 +1461,18 @@ fn delete_domain_entity(
         SyncEntityKind::Server => detach_server_references(conn, entity_id, false)?,
         SyncEntityKind::Group => detach_group_references(conn, entity_id, false)?,
         SyncEntityKind::CommandSnippet => {}
+        SyncEntityKind::PluginInstallation => {}
     }
-    let table = match entity_kind {
-        SyncEntityKind::Server => "servers",
-        SyncEntityKind::Group => "groups",
-        SyncEntityKind::CommandSnippet => "command_snippets",
+    let (table, id_column) = match entity_kind {
+        SyncEntityKind::Server => ("servers", "id"),
+        SyncEntityKind::Group => ("groups", "id"),
+        SyncEntityKind::CommandSnippet => ("command_snippets", "id"),
+        SyncEntityKind::PluginInstallation => ("plugin_installations", "plugin_id"),
     };
-    conn.execute(&format!("DELETE FROM {table} WHERE id = ?1"), [entity_id])?;
+    conn.execute(
+        &format!("DELETE FROM {table} WHERE {id_column} = ?1"),
+        [entity_id],
+    )?;
     Ok(())
 }
 
@@ -1472,6 +1515,11 @@ fn apply_remote_change(conn: &Connection, change: &SyncChange) -> Result<()> {
             let snippet: SnippetSyncPayload = serde_json::from_value(payload)
                 .context("Invalid command snippet payload in remote sync change")?;
             apply_remote_snippet(conn, &change.entity_id, snippet)?;
+        }
+        SyncEntityKind::PluginInstallation => {
+            let installation: PluginInstallationSyncPayload = serde_json::from_value(payload)
+                .context("Invalid plugin installation payload in remote sync change")?;
+            apply_remote_plugin_installation(conn, &change.entity_id, installation)?;
         }
     }
     Ok(())
@@ -1538,12 +1586,104 @@ fn apply_remote_group(conn: &Connection, id: &str, mut group: GroupSyncPayload) 
     Ok(())
 }
 
+/// Recompute the granted permission set for a synced installation. Grants are
+/// never transported: an enabled plugin receives exactly the permissions its
+/// manifest declares on this device, and a disabled one receives none.
+fn synced_grant_permissions(installation: &PluginInstallationSyncPayload) -> Result<String> {
+    if !installation.enabled {
+        return Ok("[]".to_string());
+    }
+
+    let permissions = match installation.source.as_str() {
+        "external" => {
+            let manifest_json = installation
+                .manifest_json
+                .as_deref()
+                .ok_or_else(|| anyhow!("External plugin sync payload is missing a manifest"))?;
+            let manifest = crate::plugins::parse_manifest(
+                manifest_json,
+                crate::plugins::ManifestValidationPolicy::External,
+            )
+            .map_err(|error| anyhow!("Synced external plugin manifest is invalid: {error}"))?;
+            manifest.permissions
+        }
+        _ => crate::plugins::builtin_catalog()
+            .map_err(|error| anyhow!("Built-in plugin catalog is invalid: {error}"))?
+            .into_iter()
+            .find(|manifest| manifest.id == installation.plugin_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Synced built-in plugin {} is unknown on this device",
+                    installation.plugin_id
+                )
+            })?
+            .permissions,
+    };
+
+    serde_json::to_string(&permissions).map_err(|error| anyhow!("Failed to encode grants: {error}"))
+}
+
+fn apply_remote_plugin_installation(
+    conn: &Connection,
+    plugin_id: &str,
+    installation: PluginInstallationSyncPayload,
+) -> Result<()> {
+    // An unknown or invalid plugin never enables itself on restore: it lands
+    // disabled with empty grants instead of failing the whole backup import.
+    let granted_permissions_json = match synced_grant_permissions(&installation) {
+        Ok(grants) => grants,
+        Err(error) => {
+            log::warn!(
+                "Disabling synced plugin {}: {}",
+                installation.plugin_id,
+                error
+            );
+            "[]".to_string()
+        }
+    };
+    let enabled = if granted_permissions_json == "[]" {
+        0
+    } else {
+        installation.enabled as i32
+    };
+    let manifest_json = installation
+        .manifest_json
+        .clone()
+        .unwrap_or_else(|| "{}".to_string());
+
+    conn.execute(
+        r#"INSERT INTO plugin_installations
+           (plugin_id, version, manifest_json, source, enabled,
+            granted_permissions_json, settings_json, installed_at, updated_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           ON CONFLICT(plugin_id) DO UPDATE SET
+             version = excluded.version,
+             manifest_json = excluded.manifest_json,
+             source = excluded.source,
+             enabled = excluded.enabled,
+             granted_permissions_json = excluded.granted_permissions_json,
+             settings_json = excluded.settings_json,
+             updated_at = excluded.updated_at"#,
+        params![
+            plugin_id,
+            installation.version,
+            manifest_json,
+            installation.source,
+            enabled,
+            granted_permissions_json,
+            installation.settings_json,
+            installation.installed_at,
+            installation.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
 fn reference_is_tombstoned(
     conn: &Connection,
     entity_kind: SyncEntityKind,
     entity_id: Option<&str>,
-) -> Result<bool> {
-    let Some(entity_id) = entity_id else {
+) -> Result<bool> {    let Some(entity_id) = entity_id else {
         return Ok(false);
     };
     Ok(entity_state(conn, entity_kind, entity_id)?
@@ -1629,6 +1769,39 @@ fn current_domain_payload(
     entity_id: &str,
 ) -> Result<Option<Value>> {
     match entity_kind {
+        SyncEntityKind::PluginInstallation => {
+            let payload = conn
+                .query_row(
+                    r#"SELECT plugin_id, version, source, enabled, manifest_json,
+                              settings_json, installed_at, updated_at
+                       FROM plugin_installations WHERE plugin_id = ?1"#,
+                    [entity_id],
+                    |row| {
+                        let source: String = row.get(2)?;
+                        Ok(PluginInstallationSyncPayload {
+                            plugin_id: row.get(0)?,
+                            version: row.get(1)?,
+                            enabled: row.get::<_, i64>(3)? != 0,
+                            // Built-in manifests resolve from the local catalog;
+                            // only external manifests travel with the payload.
+                            manifest_json: if source == "external" {
+                                row.get(4)?
+                            } else {
+                                None
+                            },
+                            source,
+                            settings_json: row.get(5)?,
+                            installed_at: row.get(6)?,
+                            updated_at: row.get(7)?,
+                        })
+                    },
+                )
+                .optional()?;
+            payload
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(Into::into)
+        }
         SyncEntityKind::Server => {
             let payload = conn
                 .query_row(
@@ -1713,6 +1886,22 @@ fn bootstrap_existing_rows(conn: &Connection) -> Result<()> {
     bootstrap_servers(conn)?;
     bootstrap_groups(conn)?;
     bootstrap_snippets(conn)?;
+    bootstrap_plugin_installations(conn)?;
+    Ok(())
+}
+
+fn bootstrap_plugin_installations(conn: &Connection) -> Result<()> {
+    let plugin_ids: Vec<String> = {
+        let mut stmt =
+            conn.prepare("SELECT plugin_id FROM plugin_installations ORDER BY plugin_id")?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for plugin_id in plugin_ids {
+        record_current_upsert(conn, SyncEntityKind::PluginInstallation, &plugin_id)?;
+    }
     Ok(())
 }
 
@@ -1904,6 +2093,24 @@ struct SnippetSyncPayload {
     updated_at: i64,
 }
 
+/// Portable representation of a plugin installation. Built-in plugins omit the
+/// manifest (it is resolved from the local catalog); external plugins carry
+/// their imported manifest so a backup can fully reconstruct them. Granted
+/// permissions are intentionally excluded — they are recomputed from the
+/// manifest on the receiving device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInstallationSyncPayload {
+    plugin_id: String,
+    version: String,
+    source: String,
+    enabled: bool,
+    manifest_json: Option<String>,
+    settings_json: String,
+    installed_at: i64,
+    updated_at: i64,
+}
+
 fn auth_type_to_string(auth_type: &AuthType) -> &'static str {
     match auth_type {
         AuthType::Password => "password",
@@ -2055,6 +2262,172 @@ mod tests {
             serde_json::to_string(&SyncEntityKind::CommandSnippet).unwrap(),
             r#""command_snippet""#
         );
+        assert_eq!(
+            serde_json::to_string(&SyncEntityKind::PluginInstallation).unwrap(),
+            r#""plugin_installation""#
+        );
+    }
+
+    const EXTERNAL_MANIFEST: &str = r#"{
+      "schemaVersion": 1,
+      "id": "example.remote-tools",
+      "name": "Remote Tools",
+      "description": "Read remote tool output",
+      "version": "1.0.0",
+      "author": "Example",
+      "category": "operations",
+      "icon": "wrench",
+      "permissions": ["remote_exec"],
+      "sessionTypes": ["ssh"],
+      "entry": {
+        "type": "commands",
+        "actions": [{
+          "id": "version",
+          "name": "Version",
+          "description": "Show the tool version",
+          "program": "tool",
+          "args": ["--version"]
+        }]
+      }
+    }"#;
+
+    fn plugin_installation(
+        plugin_id: &str,
+        source: &str,
+        enabled: bool,
+        manifest_json: &str,
+    ) -> PluginInstallation {
+        PluginInstallation {
+            plugin_id: plugin_id.to_string(),
+            version: "1.0.0".to_string(),
+            manifest_json: manifest_json.to_string(),
+            source: source.to_string(),
+            enabled,
+            granted_permissions_json: r#"["remote_exec"]"#.to_string(),
+            settings_json: "{}".to_string(),
+            installed_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn plugin_installations_join_backups_and_carry_external_manifests() {
+        let (_dir, database) = test_database();
+
+        database
+            .plugin_installation_upsert(&plugin_installation(
+                "docker-containers",
+                "builtin",
+                true,
+                "{}",
+            ))
+            .unwrap();
+        database
+            .plugin_installation_upsert(&plugin_installation(
+                "example.remote-tools",
+                "external",
+                false,
+                EXTERNAL_MANIFEST,
+            ))
+            .unwrap();
+
+        // Both CRUD writes were captured in the sync outbox.
+        let outbox_kinds = pending(&database)
+            .into_iter()
+            .filter(|change| change.entity_kind == SyncEntityKind::PluginInstallation)
+            .count();
+        assert_eq!(outbox_kinds, 2);
+
+        // The backup snapshot carries external manifests; built-in plugins
+        // resolve their manifest from the local catalog instead.
+        let snapshot = database.cloud_sync().export_snapshot().unwrap();
+        let docker = snapshot
+            .changes
+            .iter()
+            .find(|change| change.entity_id == "docker-containers")
+            .unwrap();
+        assert!(docker.payload.as_ref().unwrap()["manifestJson"].is_null());
+        let external = snapshot
+            .changes
+            .iter()
+            .find(|change| change.entity_id == "example.remote-tools")
+            .unwrap();
+        assert_eq!(
+            external.payload.as_ref().unwrap()["manifestJson"],
+            json!(EXTERNAL_MANIFEST)
+        );
+
+        // Deleting emits a tombstone like every other entity.
+        database.plugin_installation_delete("docker-containers").unwrap();
+        let tombstone = pending(&database)
+            .into_iter()
+            .find(|change| {
+                change.entity_kind == SyncEntityKind::PluginInstallation
+                    && change.entity_id == "docker-containers"
+                    && change.deleted
+            })
+            .expect("plugin delete should emit a tombstone");
+    }
+
+    #[test]
+    fn restored_plugins_recompute_grants_and_gate_unknown_builtins() {
+        let (_dir, database) = test_database();
+
+        let enabled_external = json!({
+            "pluginId": "example.remote-tools",
+            "version": "1.0.0",
+            "source": "external",
+            "enabled": true,
+            "manifestJson": EXTERNAL_MANIFEST,
+            "settingsJson": "{\"rows\":25}",
+            "installedAt": 1,
+            "updatedAt": 2,
+        });
+        database
+            .cloud_sync()
+            .apply_imported_changes(&[remote_upsert(
+                SyncEntityKind::PluginInstallation,
+                "example.remote-tools",
+                100,
+                enabled_external,
+            )])
+            .unwrap();
+        let restored = database
+            .plugin_installation_get("example.remote-tools")
+            .unwrap()
+            .unwrap();
+        assert!(restored.enabled);
+        // Grants are recomputed from the manifest, never transported.
+        assert_eq!(restored.granted_permissions_json, r#"["remote_exec"]"#);
+        assert_eq!(restored.settings_json, r#"{"rows":25}"#);
+
+        // A built-in plugin this app does not know restores disabled with no
+        // grants instead of failing the whole backup import.
+        let unknown_builtin = json!({
+            "pluginId": "future.toolkit",
+            "version": "9.0.0",
+            "source": "builtin",
+            "enabled": true,
+            "manifestJson": null,
+            "settingsJson": "{}",
+            "installedAt": 1,
+            "updatedAt": 2,
+        });
+        database
+            .cloud_sync()
+            .apply_imported_changes(&[remote_upsert(
+                SyncEntityKind::PluginInstallation,
+                "future.toolkit",
+                200,
+                unknown_builtin,
+            )])
+            .unwrap();
+        let gated = database
+            .plugin_installation_get("future.toolkit")
+            .unwrap()
+            .unwrap();
+        assert!(!gated.enabled);
+        assert_eq!(gated.granted_permissions_json, "[]");
     }
 
     #[test]

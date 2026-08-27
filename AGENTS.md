@@ -79,7 +79,13 @@ src-tauri/                    # Rust backend
   └── Cargo.toml
 
 cli/                          # CLI client (workspace member)
+
+plugins/                      # Built-in plugin catalog (workspace member: vibeshell-plugins)
+├── src/lib.rs                # Plugin spec: manifest types, validation, command rendering
+└── builtin/<plugin-id>/plugin.json   # One directory per built-in plugin
 ```
+
+**Plugin spec:** `docs/plugin-spec.md` is normative. Built-in plugins live in `plugins/builtin/<id>/plugin.json` and must be registered in `BUILTIN_MANIFESTS` (plugins/src/lib.rs); a test enforces directory ↔ registration parity. Plugin installations sync/back up as the `plugin_installation` entity (see storage/sync.rs).
 
 ## Database Schema (SQLite)
 

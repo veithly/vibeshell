@@ -1,0 +1,376 @@
+{
+  "schemaVersion": 1,
+  "id": "redis-inspector",
+  "name": "Redis Inspector",
+  "description": "Inspect and manage Redis: health, keyspace stats, key lookups, clients, slowlog and runtime configuration. Automatically uses a Docker redis container when redis-cli is not installed on the host.",
+  "version": "1.2.0",
+  "author": "VibeShell",
+  "category": "data",
+  "icon": "redis",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "ping",
+        "name": "Ping",
+        "description": "Check that the Redis server answers.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "PING"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "info",
+        "name": "Server info",
+        "description": "Read one INFO section from the Redis server.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "INFO",
+          "{{input.section}}"
+        ],
+        "inputs": [
+          {
+            "id": "section",
+            "label": "Section",
+            "placeholder": "all",
+            "required": true,
+            "kind": "select",
+            "options": [
+              "all",
+              "server",
+              "clients",
+              "memory",
+              "persistence",
+              "stats",
+              "replication",
+              "cpu",
+              "keyspace"
+            ]
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "keyspace",
+        "name": "Keyspace",
+        "description": "Show per-database key counts and expiry stats.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "INFO",
+          "keyspace"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "db-size",
+        "name": "Key count",
+        "description": "Return the number of keys in the selected database.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "DBSIZE"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "scan-keys",
+        "name": "Scan keys",
+        "description": "List keys matching a glob pattern.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "--scan",
+          "--pattern",
+          "{{input.pattern}}"
+        ],
+        "inputs": [
+          {
+            "id": "pattern",
+            "label": "Pattern",
+            "placeholder": "*",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "get-key",
+        "name": "Get key value",
+        "description": "Read the string value stored under a key.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "GET",
+          "{{input.key}}"
+        ],
+        "inputs": [
+          {
+            "id": "key",
+            "label": "Key",
+            "placeholder": "session:42",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "key-ttl",
+        "name": "Key TTL",
+        "description": "Show the remaining time-to-live of a key in seconds (-1 forever, -2 missing).",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "TTL",
+          "{{input.key}}"
+        ],
+        "inputs": [
+          {
+            "id": "key",
+            "label": "Key",
+            "placeholder": "session:42",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "delete-key",
+        "name": "Delete key",
+        "description": "Delete one key from the database.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "DEL",
+          "{{input.key}}"
+        ],
+        "inputs": [
+          {
+            "id": "key",
+            "label": "Key",
+            "placeholder": "session:42",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      },
+      {
+        "id": "clients",
+        "name": "Connected clients",
+        "description": "List clients currently connected to the Redis server.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "CLIENT",
+          "LIST"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "slowlog",
+        "name": "Slow log",
+        "description": "Show the 20 slowest recent commands.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "SLOWLOG",
+          "GET",
+          "20"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "bigkeys",
+        "name": "Biggest keys",
+        "description": "Sample the dataset and report the largest key per type.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "--bigkeys"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "config-get",
+        "name": "Runtime config",
+        "description": "Read one runtime configuration value.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "CONFIG",
+          "GET",
+          "{{input.setting}}"
+        ],
+        "inputs": [
+          {
+            "id": "setting",
+            "label": "Setting",
+            "placeholder": "maxmemory",
+            "required": true,
+            "kind": "select",
+            "options": [
+              "maxmemory",
+              "maxmemory-policy",
+              "appendonly",
+              "appendfsync",
+              "save",
+              "databases",
+              "timeout",
+              "tcp-keepalive",
+              "lazyfree-lazy-eviction"
+            ]
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "key-type",
+        "name": "Key type",
+        "description": "Show the value type stored under a key.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" redis-cli \"$@\"; fi; if command -v redis-cli >/dev/null 2>&1; then exec redis-cli \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i redis | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" redis-cli \"$@\"; echo \"redis-cli not found and no redis container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "TYPE",
+          "{{input.key}}"
+        ],
+        "inputs": [
+          {
+            "id": "key",
+            "label": "Key",
+            "placeholder": "session:42",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          }
+        ],
+        "allowSudo": true
+      }
+    ]
+  }
+}

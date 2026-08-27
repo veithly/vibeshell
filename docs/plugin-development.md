@@ -2,18 +2,26 @@
 
 VibeShell plugin API v1 adds session tools without loading third-party code into the main webview. A plugin is a validated JSON manifest. VibeShell renders its controls and chooses the declared command on the Rust side.
 
+The normative reference is the [Plugin Specification](plugin-spec.md); this guide focuses on authoring workflow. Field rules summarized here are defined by the spec.
+
 ## Marketplace Model
 
 The plugin marketplace combines two sources:
 
-- `builtin`: reviewed manifests shipped with VibeShell. Installing one enables it immediately.
+- `builtin`: reviewed manifests shipped with VibeShell, one directory per plugin in the [`plugins/builtin/`](../plugins/builtin) monorepo crate. Installing one enables it immediately.
 - `external`: a local JSON manifest imported by the user. External plugins are unsigned, installed disabled, and require an explicit permission confirmation before they can run.
 
 Open **Plugin Marketplace** from the workspace toolbar. Use **Import manifest** to select a local `plugin.json`. The complete working example is [examples/plugins/system-info/plugin.json](../examples/plugins/system-info/plugin.json).
 
+Every plugin can also be **exported** from the marketplace: external plugins export the manifest they were imported with, built-in plugins export the shipped manifest (a ready-made authoring template). Settings never travel with an export — they are device state and are included in workspace backups instead.
+
 To update an external plugin, import a newer manifest with the same `id`. VibeShell preserves its non-sensitive settings, replaces the manifest, disables the plugin, and revokes its grants. Review the new version before enabling it again.
 
 Version 1 intentionally does not download remote packages or load JavaScript, HTML, Rust dynamic libraries, or WASM. A future remote registry needs package signing and update verification before it can safely extend this model.
+
+## Backups
+
+Plugin installations are part of the encrypted portable backup file and of cloud sync, alongside servers, groups, and command snippets. External plugins carry their full manifest; granted permissions are always recomputed on the receiving device, and a plugin unknown to the restoring device lands disabled. See the specification's *Backup and cloud sync* section for the exact semantics.
 
 ## Manifest
 
@@ -66,7 +74,7 @@ Version 1 intentionally does not download remote packages or load JavaScript, HT
 | `category` | yes | Uses the same identifier rules as `id`. |
 | `icon` | yes | A host-known Lucide icon name. Unknown names use the plug icon. |
 | `permissions` | yes | Command plugins must include `remote_exec`. |
-| `sessionTypes` | yes | One or both of `ssh` and `local`. External command plugins currently execute only against SSH sessions. |
+| `sessionTypes` | yes | One or both of `ssh` and `local`. Local execution runs through the machine's own shell. |
 | `defaultSettings` | no | Non-secret JSON object, limited to 16 KB once installed. |
 | `entry` | yes | `commands` for external plugins. `native` is reserved for compiled VibeShell plugins. |
 
@@ -136,12 +144,13 @@ The command should print one row per line. Table output supports 1-16 columns. V
 
 ## Built-in Catalog
 
-VibeShell currently ships these installable plugins, all uninstalled by default:
+Built-in plugins live in the `plugins/` workspace crate (`vibeshell-plugins`), one directory per plugin under `plugins/builtin/<id>/plugin.json`. To add one, create the directory, then register the id in `BUILTIN_MANIFESTS` in `plugins/src/lib.rs` — a test fails the build if the directory list and the registration list drift apart. VibeShell currently ships these installable plugins, all uninstalled by default:
 
 - Server Performance
-- Docker Containers
+- Docker Containers (inspect + lifecycle: start/stop/restart, volumes, networks)
 - Kubernetes Pods
-- Database Inspector for PostgreSQL, MySQL, and SQLite metadata
+- Database Inspector for PostgreSQL, MySQL, and SQLite metadata (falls back to Docker containers when the host client is missing)
+- Redis Inspector (falls back to a Docker redis container when redis-cli is missing)
 - Process Explorer
 - System Logs
 - Network Inspector

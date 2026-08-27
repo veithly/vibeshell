@@ -1,0 +1,406 @@
+{
+  "schemaVersion": 1,
+  "id": "database-inspector",
+  "name": "Database Inspector",
+  "description": "Read PostgreSQL, MySQL and SQLite metadata. When the client binary is missing on the host, PostgreSQL and MySQL are queried inside their Docker containers.",
+  "version": "1.3.0",
+  "author": "VibeShell",
+  "category": "data",
+  "icon": "database",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "postgres-databases",
+        "name": "PostgreSQL databases",
+        "description": "List non-template PostgreSQL databases. Uses the host psql client, or a Docker postgres container when psql is absent.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; u=\"$1\"; shift; [ -n \"$u\" ] || u=postgres; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" psql -U \"$u\" \"$@\"; fi; if command -v psql >/dev/null 2>&1; then exec psql \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i postgres | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" psql -U \"$u\" \"$@\"; echo \"psql not found and no postgres container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "{{input.user}}",
+          "-Atqc",
+          "SELECT datname FROM pg_database WHERE NOT datistemplate ORDER BY datname;"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          },
+          {
+            "id": "user",
+            "label": "Docker user",
+            "placeholder": "postgres",
+            "required": false
+          }
+        ]
+      },
+      {
+        "id": "postgres-tables",
+        "name": "PostgreSQL tables",
+        "description": "List user tables in a PostgreSQL database. Uses the host psql client, or a Docker postgres container when psql is absent.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; u=\"$1\"; shift; [ -n \"$u\" ] || u=postgres; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" psql -U \"$u\" \"$@\"; fi; if command -v psql >/dev/null 2>&1; then exec psql \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i postgres | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" psql -U \"$u\" \"$@\"; echo \"psql not found and no postgres container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "{{input.user}}",
+          "-d",
+          "{{input.database}}",
+          "-Atqc",
+          "SELECT schemaname || '.' || tablename FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema') ORDER BY 1;"
+        ],
+        "inputs": [
+          {
+            "id": "database",
+            "label": "Database",
+            "placeholder": "app",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          },
+          {
+            "id": "user",
+            "label": "Docker user",
+            "placeholder": "postgres",
+            "required": false
+          }
+        ]
+      },
+      {
+        "id": "postgres-query",
+        "name": "PostgreSQL query",
+        "description": "Run one SQL statement using the remote psql authentication context, or inside a Docker postgres container.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; u=\"$1\"; shift; [ -n \"$u\" ] || u=postgres; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" psql -U \"$u\" \"$@\"; fi; if command -v psql >/dev/null 2>&1; then exec psql \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i postgres | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" psql -U \"$u\" \"$@\"; echo \"psql not found and no postgres container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "{{input.user}}",
+          "-d",
+          "{{input.database}}",
+          "--pset",
+          "pager=off",
+          "--command",
+          "{{input.query}}"
+        ],
+        "inputs": [
+          {
+            "id": "database",
+            "label": "Database",
+            "placeholder": "app",
+            "required": true
+          },
+          {
+            "id": "query",
+            "label": "SQL",
+            "placeholder": "SELECT now();",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          },
+          {
+            "id": "user",
+            "label": "Docker user",
+            "placeholder": "postgres",
+            "required": false
+          }
+        ],
+        "requiresConfirmation": true
+      },
+      {
+        "id": "mysql-databases",
+        "name": "MySQL databases",
+        "description": "List databases visible to the configured MySQL client. Uses the host mysql client, or a Docker mysql/mariadb container when it is absent.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; u=\"$1\"; shift; [ -n \"$u\" ] || u=root; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" mysql -u \"$u\" \"$@\"; fi; if command -v mysql >/dev/null 2>&1; then exec mysql \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -iE \"mysql|mariadb\" | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" mysql -u \"$u\" \"$@\"; echo \"mysql not found and no mysql or mariadb container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "{{input.user}}",
+          "--batch",
+          "--skip-column-names",
+          "--execute",
+          "SHOW DATABASES;"
+        ],
+        "inputs": [
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          },
+          {
+            "id": "user",
+            "label": "Docker user",
+            "placeholder": "root",
+            "required": false
+          }
+        ]
+      },
+      {
+        "id": "mysql-tables",
+        "name": "MySQL tables",
+        "description": "List tables in a MySQL database. Uses the host mysql client, or a Docker mysql/mariadb container when it is absent.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; u=\"$1\"; shift; [ -n \"$u\" ] || u=root; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" mysql -u \"$u\" \"$@\"; fi; if command -v mysql >/dev/null 2>&1; then exec mysql \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -iE \"mysql|mariadb\" | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" mysql -u \"$u\" \"$@\"; echo \"mysql not found and no mysql or mariadb container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "{{input.user}}",
+          "--batch",
+          "--skip-column-names",
+          "{{input.database}}",
+          "--execute",
+          "SHOW TABLES;"
+        ],
+        "inputs": [
+          {
+            "id": "database",
+            "label": "Database",
+            "placeholder": "app",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          },
+          {
+            "id": "user",
+            "label": "Docker user",
+            "placeholder": "root",
+            "required": false
+          }
+        ]
+      },
+      {
+        "id": "mysql-query",
+        "name": "MySQL query",
+        "description": "Run one SQL statement using the remote mysql authentication context, or inside a Docker mysql/mariadb container.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; u=\"$1\"; shift; [ -n \"$u\" ] || u=root; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" mysql -u \"$u\" \"$@\"; fi; if command -v mysql >/dev/null 2>&1; then exec mysql \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -iE \"mysql|mariadb\" | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" mysql -u \"$u\" \"$@\"; echo \"mysql not found and no mysql or mariadb container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "{{input.user}}",
+          "--table",
+          "{{input.database}}",
+          "--execute",
+          "{{input.query}}"
+        ],
+        "inputs": [
+          {
+            "id": "database",
+            "label": "Database",
+            "placeholder": "app",
+            "required": true
+          },
+          {
+            "id": "query",
+            "label": "SQL",
+            "placeholder": "SELECT NOW();",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          },
+          {
+            "id": "user",
+            "label": "Docker user",
+            "placeholder": "root",
+            "required": false
+          }
+        ],
+        "requiresConfirmation": true
+      },
+      {
+        "id": "sqlite-files",
+        "name": "SQLite files",
+        "description": "Find common SQLite database files below the remote login directory.",
+        "program": "find",
+        "args": [
+          ".",
+          "-maxdepth",
+          "4",
+          "-type",
+          "f",
+          "(",
+          "-name",
+          "*.db",
+          "-o",
+          "-name",
+          "*.sqlite",
+          "-o",
+          "-name",
+          "*.sqlite3",
+          ")"
+        ]
+      },
+      {
+        "id": "sqlite-query",
+        "name": "SQLite query",
+        "description": "Open a SQLite file and run one SQL statement.",
+        "program": "sqlite3",
+        "args": [
+          "-header",
+          "-column",
+          "{{input.path}}",
+          "{{input.query}}"
+        ],
+        "inputs": [
+          {
+            "id": "path",
+            "label": "Database file",
+            "placeholder": "./app.db",
+            "required": true
+          },
+          {
+            "id": "query",
+            "label": "SQL",
+            "placeholder": "SELECT name FROM sqlite_master;",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true
+      },
+      {
+        "id": "postgres-query-csv",
+        "name": "PostgreSQL query (CSV)",
+        "description": "Run one SQL statement and return CSV rows with a header line.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; u=\"$1\"; shift; [ -n \"$u\" ] || u=postgres; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" psql -U \"$u\" \"$@\"; fi; if command -v psql >/dev/null 2>&1; then exec psql \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -i postgres | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" psql -U \"$u\" \"$@\"; echo \"psql not found and no postgres container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "{{input.user}}",
+          "-d",
+          "{{input.database}}",
+          "--csv",
+          "--command",
+          "{{input.query}}"
+        ],
+        "inputs": [
+          {
+            "id": "database",
+            "label": "Database",
+            "placeholder": "app",
+            "required": true
+          },
+          {
+            "id": "query",
+            "label": "SQL",
+            "placeholder": "SELECT now();",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          },
+          {
+            "id": "user",
+            "label": "Docker user",
+            "placeholder": "postgres",
+            "required": false
+          }
+        ],
+        "requiresConfirmation": true
+      },
+      {
+        "id": "mysql-query-batch",
+        "name": "MySQL query (TSV)",
+        "description": "Run one SQL statement and return tab-separated rows with a header line.",
+        "program": "sh",
+        "args": [
+          "-c",
+          "c=\"$0\"; u=\"$1\"; shift; [ -n \"$u\" ] || u=root; if [ -n \"$c\" ]; then exec docker exec -i \"$c\" mysql -u \"$u\" \"$@\"; fi; if command -v mysql >/dev/null 2>&1; then exec mysql \"$@\"; fi; c=$(docker ps --format \"{{.Names}}\" 2>/dev/null | grep -iE \"mysql|mariadb\" | head -n 1); [ -n \"$c\" ] && exec docker exec -i \"$c\" mysql -u \"$u\" \"$@\"; echo \"mysql not found and no mysql or mariadb container detected\" >&2; exit 127",
+          "{{input.container}}",
+          "{{input.user}}",
+          "--batch",
+          "{{input.database}}",
+          "--execute",
+          "{{input.query}}"
+        ],
+        "inputs": [
+          {
+            "id": "database",
+            "label": "Database",
+            "placeholder": "app",
+            "required": true
+          },
+          {
+            "id": "query",
+            "label": "SQL",
+            "placeholder": "SELECT NOW();",
+            "required": true
+          },
+          {
+            "id": "container",
+            "label": "Container (optional)",
+            "placeholder": "auto-detect",
+            "required": false
+          },
+          {
+            "id": "user",
+            "label": "Docker user",
+            "placeholder": "root",
+            "required": false
+          }
+        ],
+        "requiresConfirmation": true
+      },
+      {
+        "id": "sqlite-query-csv",
+        "name": "SQLite query (CSV)",
+        "description": "Open a SQLite file, run one SQL statement, and return CSV rows with a header line.",
+        "program": "sqlite3",
+        "args": [
+          "-header",
+          "-csv",
+          "{{input.path}}",
+          "{{input.query}}"
+        ],
+        "inputs": [
+          {
+            "id": "path",
+            "label": "Database file",
+            "placeholder": "./app.db",
+            "required": true
+          },
+          {
+            "id": "query",
+            "label": "SQL",
+            "placeholder": "SELECT name FROM sqlite_master;",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true
+      }
+    ]
+  }
+}

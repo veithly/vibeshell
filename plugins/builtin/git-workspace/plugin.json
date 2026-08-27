@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "id": "git-workspace",
+  "name": "Git Workspace",
+  "description": "Inspect repository status, branches and recent commits in the remote login directory.",
+  "version": "1.1.0",
+  "author": "VibeShell",
+  "category": "developer",
+  "icon": "git-branch",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "status",
+        "name": "Status",
+        "description": "Show branch and working tree state.",
+        "program": "git",
+        "args": [
+          "status",
+          "--short",
+          "--branch"
+        ]
+      },
+      {
+        "id": "branches",
+        "name": "Branches",
+        "description": "Show local branches and upstream tracking.",
+        "program": "git",
+        "args": [
+          "branch",
+          "--verbose",
+          "--verbose"
+        ]
+      },
+      {
+        "id": "history",
+        "name": "Recent history",
+        "description": "Show the latest 30 commits.",
+        "program": "git",
+        "args": [
+          "log",
+          "--oneline",
+          "--decorate",
+          "-n",
+          "30"
+        ]
+      }
+    ]
+  }
+}

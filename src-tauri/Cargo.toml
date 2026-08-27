@@ -23,7 +23,11 @@ tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+vibeshell-plugins = { path = "../plugins" }
 rusqlite = { version = "0.31", features = ["bundled"] }
+tokio-postgres = "0.7"
+tokio-stream = "0.1"
+mysql_async = { version = "0.34", default-features = false, features = ["minimal"] }
 directories = "5"
 anyhow = "1"
 log = "0.4"

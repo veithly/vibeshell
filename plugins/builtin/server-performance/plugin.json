@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "server-performance",
+  "name": "Server Performance",
+  "description": "Live CPU, memory, disk, network, load and uptime metrics for the active host.",
+  "version": "1.0.0",
+  "author": "VibeShell",
+  "category": "monitoring",
+  "icon": "activity",
+  "permissions": [
+    "local_system_read"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "defaultSettings": {
+    "refreshInterval": "30s",
+    "defaultExpanded": true
+  },
+  "entry": {
+    "type": "native",
+    "view": "server-status"
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 1,
+  "id": "systemd-services",
+  "name": "Systemd Services",
+  "description": "Browse systemd services with their state, and start, stop or restart them.",
+  "version": "1.1.0",
+  "author": "VibeShell",
+  "category": "operations",
+  "icon": "settings",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "list",
+        "name": "Services",
+        "description": "List loaded services with load state, active state and description.",
+        "program": "systemctl",
+        "args": [
+          "list-units",
+          "--type=service",
+          "--all",
+          "--no-legend",
+          "--no-pager",
+          "--plain",
+          "-o",
+          "json"
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "status",
+        "name": "Service status",
+        "description": "Show the runtime status of one service.",
+        "program": "systemctl",
+        "args": [
+          "status",
+          "{{input.service}}",
+          "--no-pager",
+          "-l"
+        ],
+        "inputs": [
+          {
+            "id": "service",
+            "label": "Service",
+            "placeholder": "nginx.service",
+            "required": true
+          }
+        ],
+        "allowSudo": true
+      },
+      {
+        "id": "start",
+        "name": "Start service",
+        "description": "Start a systemd service.",
+        "program": "systemctl",
+        "args": [
+          "start",
+          "{{input.service}}"
+        ],
+        "inputs": [
+          {
+            "id": "service",
+            "label": "Service",
+            "placeholder": "nginx.service",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      },
+      {
+        "id": "stop",
+        "name": "Stop service",
+        "description": "Stop a systemd service.",
+        "program": "systemctl",
+        "args": [
+          "stop",
+          "{{input.service}}"
+        ],
+        "inputs": [
+          {
+            "id": "service",
+            "label": "Service",
+            "placeholder": "nginx.service",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      },
+      {
+        "id": "restart",
+        "name": "Restart service",
+        "description": "Restart a systemd service.",
+        "program": "systemctl",
+        "args": [
+          "restart",
+          "{{input.service}}"
+        ],
+        "inputs": [
+          {
+            "id": "service",
+            "label": "Service",
+            "placeholder": "nginx.service",
+            "required": true
+          }
+        ],
+        "requiresConfirmation": true,
+        "allowSudo": true
+      }
+    ]
+  }
+}

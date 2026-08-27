@@ -971,3 +971,15 @@
     outline-offset: 2px;
   }
 }
+
+/* Mouse-driven tab drag (see lib/tabDragController.ts) */
+body.tab-dragging,
+body.tab-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+.pane-drop-hover {
+  box-shadow: inset 0 0 0 2px var(--tokyo-blue);
+  border-radius: 8px;
+}

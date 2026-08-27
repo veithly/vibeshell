@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "id": "network-inspector",
+  "name": "Network Inspector",
+  "description": "Inspect listening sockets, routes and DNS configuration on the connected server.",
+  "version": "1.1.0",
+  "author": "VibeShell",
+  "category": "network",
+  "icon": "network",
+  "permissions": [
+    "remote_exec",
+    "local_exec"
+  ],
+  "sessionTypes": [
+    "ssh",
+    "local"
+  ],
+  "entry": {
+    "type": "commands",
+    "actions": [
+      {
+        "id": "sockets",
+        "name": "Listening sockets",
+        "description": "Show listening TCP and UDP sockets with owning processes.",
+        "program": "ss",
+        "args": [
+          "-lntup"
+        ]
+      },
+      {
+        "id": "routes",
+        "name": "Routes",
+        "description": "Show the active IP routing table.",
+        "program": "ip",
+        "args": [
+          "route",
+          "show"
+        ]
+      },
+      {
+        "id": "addresses",
+        "name": "Addresses",
+        "description": "Show network interfaces and addresses.",
+        "program": "ip",
+        "args": [
+          "address",
+          "show"
+        ]
+      },
+      {
+        "id": "dns",
+        "name": "DNS configuration",
+        "description": "Show resolver configuration.",
+        "program": "resolvectl",
+        "args": [
+          "status"
+        ]
+      }
+    ]
+  }
+}

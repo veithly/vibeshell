@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import type {
   PluginAction,
   PluginRecord,
@@ -18,6 +19,12 @@ export function isPluginCompatible(
   return plugin.installed
     && plugin.enabled
     && plugin.manifest.sessionTypes.includes(sessionType);
+}
+
+export function localizedPluginName(t: TFunction, plugin: PluginRecord): string {
+  return t(`plugins.catalog.${plugin.manifest.id}.name`, {
+    defaultValue: plugin.manifest.name,
+  });
 }
 
 export function parsePluginTable(action: PluginAction, output: string): ParsedPluginTable {
