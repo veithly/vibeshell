@@ -3,7 +3,7 @@ members = ["src-tauri", "cli", "plugins"]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.12"
+version = "1.0.13"
 authors = ["veithly"]
 edition = "2021"
 
