@@ -224,11 +224,12 @@ pub fn run() {
 
     log::info!("[VibeShell] Starting application v{}", version());
 
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().manage(commands::local_files::PendingOpenFiles::default());
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            commands::local_files::queue_file_arguments(app, args, std::path::Path::new(&cwd));
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.unminimize();
@@ -242,11 +243,18 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            commands::local_files::install_workspace_menu(app)?;
+            if let Ok(cwd) = std::env::current_dir() {
+                commands::local_files::queue_file_arguments(app.handle(), std::env::args(), &cwd);
+            }
             let app_data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_data_dir)?;
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            platform::copy_legacy_app_data(&app_data_dir)?;
+            let primary_install = app.config().identifier == platform::APP_BUNDLE_IDENTIFIER;
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if primary_install { platform::copy_legacy_app_data(&app_data_dir)?; }
 
             let database = Arc::new(Database::new_at(platform::database_path(&app_data_dir))?);
             let session_manager = Arc::new(SessionManager::new(database.clone()));
@@ -293,14 +301,16 @@ pub fn run() {
                         persisted_auto_approve_until,
                     ));
 
-                let gateway = AgentGateway::start(
-                    database.clone(),
-                    session_manager.clone(),
-                    activity_emitter,
-                    terminal_input_emitter,
-                    approval_manager.clone(),
-                    agent_input_tracker.clone(),
-                )?;
+                let gateway = if primary_install {
+                    AgentGateway::start(database.clone(), session_manager.clone(), activity_emitter,
+                        terminal_input_emitter, approval_manager.clone(), agent_input_tracker.clone())
+                } else {
+                    // Alternate bundle identifiers must not replace the normal
+                    // application's CLI/agent discovery manifest during UI QA.
+                    AgentGateway::start_at_path(database.clone(), session_manager.clone(), activity_emitter,
+                        terminal_input_emitter, approval_manager.clone(), agent_input_tracker.clone(),
+                        app_data_dir.join("agent-gateway.json"))
+                }?;
                 app.manage(gateway);
                 app.manage(approval_manager);
             }
@@ -338,6 +348,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             open_devtools,
+            commands::workspace_window::workspace_pointer_state,
+            commands::workspace_window::workspace_exit,
+            commands::workspace_window::workspace_save_handler_ready,
             open_external_url,
             get_app_version,
             get_runtime_capabilities,
@@ -433,6 +446,12 @@ pub fn run() {
             sftp_stat,
             sftp_read_file,
             sftp_write_file,
+            commands::local_files::pick_local_files,
+            commands::local_files::local_file_stat,
+            commands::local_files::local_file_read,
+            commands::local_files::local_file_write,
+            commands::local_files::take_pending_open_files,
+            commands::local_files::export_theme_css,
             sftp_compress,
             sftp_extract,
             sftp_get_upload_ignore_config,
@@ -488,6 +507,24 @@ pub fn run() {
             delete_recording,
             get_recording_content,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let tauri::RunEvent::Opened { ref urls } = event {
+                commands::local_files::queue_open_files(app, urls.iter().filter_map(|url| url.to_file_path().ok()));
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show(); let _ = window.unminimize(); let _ = window.set_focus();
+                }
+            }
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+                if commands::workspace_window::save_handler_ready()
+                    && app.get_webview_window("main").is_some()
+                {
+                    // The frontend flushes all windows, then workspace_exit uses code Some(0).
+                    api.prevent_exit();
+                    let _ = app.emit_to("main", "vibeshell://save-and-quit", ());
+                }
+            }
+        });
 }

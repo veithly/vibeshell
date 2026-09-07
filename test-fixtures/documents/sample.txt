@@ -1,0 +1,2 @@
+VibeShell standalone text file.
+中文 UTF-8 内容。

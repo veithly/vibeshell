@@ -1,210 +1,95 @@
-import { cursorPosition, getCurrentWindow } from '@tauri-apps/api/window';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-
-/**
- * Mouse-driven tab drag with native tear-out.
- *
- * Unlike HTML5 drag-and-drop (whose ghost image never leaves the webview and
- * whose coordinates WebKit clamps to the viewport), this controller follows
- * the iTerm/Chrome model:
- *
- * - press a tab, move a few pixels → drag engages; hovering other tabs of the
- *   same kind reorders them live
- * - while the pointer crosses outside the main window, a detached window is
- *   created under the cursor and handed to the OS native drag loop
- *   (`startDragging`), so the new window tracks the mouse exactly like a
- *   normal window move until the button is released
- * - releasing over a terminal pane's edge splits that pane
- */
+import type { MouseEvent as ReactMouseEvent } from 'react';
+import { clearDockPreview, paneAtPoint, showDockPreview, type DockSide } from './docking';
 
 export type TabKind = 'session' | 'file' | 'plugin';
-
 export interface TabDragStart {
   kind: TabKind;
   id: string;
-  /** Live reorder: move the dragged tab before the hovered one. */
   onReorderOver?: (targetId: string) => void;
-  /** Drop over a pane edge: split that pane. */
-  onPaneDrop?: (paneId: string, direction: 'row' | 'column') => void;
-  /** Cursor left the main window: open this tab in its own OS window at the
-   * given cursor position. May resolve to the created window label so the
-   * native drag loop takes over. */
-  onTearOut: (at?: { x: number; y: number }) => unknown;
+  onPaneDrop?: (paneId: string, direction: 'row' | 'column', side?: DockSide) => void;
+  onTearOut: (at: { x: number; y: number }) => unknown;
 }
-
-interface ActiveDragState {
-  start: TabDragStart;
-  startX: number;
-  startY: number;
-  engaged: boolean;
-  outside: boolean;
+interface Drag { start: TabDragStart; x: number; y: number; source: HTMLElement; engaged: boolean; lastReorder?: string }
+let active: Drag | null = null;
+let trailingClick: { source: HTMLElement; expires: number } | null = null;
+function isTearOutZone(x: number, y: number): boolean {
+  return y <= 34 || x <= (y < 92 ? 12 : 7) || x >= window.innerWidth - (y < 92 ? 12 : 7) || y >= window.innerHeight - 7;
 }
-
-const ENGAGE_THRESHOLD_PX = 6;
-const EDGE_MARGIN_RATIO = 0.3;
-
-let active: ActiveDragState | null = null;
-let pollTimer: number | null = null;
-
-function setBodyDragging(on: boolean) {
-  document.body.classList.toggle('tab-dragging', on);
+function finishDrag(): Drag | null {
+  const previous = active;
+  active = null;
+  if (previous?.engaged) trailingClick = { source: previous.source, expires: Date.now() + 150 };
+  previous?.source.classList.remove('tab-drag-source');
+  document.body.classList.remove('tab-dragging');
+  clearDockPreview();
+  return previous;
 }
-
-function clearPaneHighlight() {
-  document.querySelectorAll('.pane-drop-hover').forEach((element) => {
-    element.classList.remove('pane-drop-hover');
-  });
-}
-
-function paneEdgeUnder(x: number, y: number): { paneId: string; direction: 'row' | 'column' } | null {
-  const element = document.elementFromPoint(x, y);
-  const pane = element?.closest?.('[data-pane-id]') as HTMLElement | null;
-  if (!pane) return null;
-  const paneId = pane.dataset.paneId;
-  if (!paneId) return null;
-
-  const rect = pane.getBoundingClientRect();
-  const relX = (x - rect.left) / rect.width;
-  const relY = (y - rect.top) / rect.height;
-  const margin = EDGE_MARGIN_RATIO;
-  const rowDepth = margin - Math.min(relX, 1 - relX);
-  const columnDepth = margin - Math.min(relY, 1 - relY);
-  if (rowDepth < 0 && columnDepth < 0) return null;
-  const direction = rowDepth >= columnDepth ? 'row' : 'column';
-  return { paneId, direction };
-}
-
-function reorderTargetUnder(x: number, y: number, kind: TabKind): string | null {
-  const element = document.elementFromPoint(x, y);
-  const tab = element?.closest?.('[data-tab-kind][data-tab-id]') as HTMLElement | null;
-  if (!tab || tab.dataset.tabKind !== kind) return null;
-  return tab.dataset.tabId ?? null;
-}
-
-async function pollOutside(): Promise<void> {
-  if (!active?.engaged || active.outside) return;
-  try {
-    const [cursor, position, size] = await Promise.all([
-      cursorPosition(),
-      getCurrentWindow().outerPosition(),
-      getCurrentWindow().outerSize(),
-    ]);
-    if (!active || active.outside) return;
-    const localX = cursor.x - position.x;
-    const localY = cursor.y - position.y;
-    const width = size.width;
-    const height = size.height;
-    if (localX >= 0 && localX <= width && localY >= 0 && localY <= height) return;
-
-    // Pointer left the main window: hand this tab to a real OS window that
-    // follows the cursor through the native drag loop.
-    active.outside = true;
-    const { onTearOut } = active.start;
+function onMouseMove(event: MouseEvent): void {
+  const drag = active;
+  if (!drag) return;
+  if (event.buttons === 0) { finishDrag(); return; }
+  if (!drag.engaged && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5) return;
+  drag.engaged = true;
+  drag.source.classList.add('tab-drag-source');
+  document.body.classList.add('tab-dragging');
+  if (isTearOutZone(event.clientX, event.clientY)) {
     finishDrag();
-    try {
-      const label = await onTearOut({ x: cursor.x, y: cursor.y });
-      if (typeof label === 'string' && label) {
-        const detached = await WebviewWindow.getByLabel(label);
-        await detached?.startDragging();
-      }
-    } catch (error) {
-      console.error('[TabDrag] Tear-out failed:', error);
-    }
-  } catch (error) {
-    console.error('[TabDrag] Outside-detection failed:', error);
-  }
-}
-
-function handleMouseMove(event: MouseEvent) {
-  if (!active) return;
-  if (!active.engaged) {
-    const dx = event.clientX - active.startX;
-    const dy = event.clientY - active.startY;
-    if (dx * dx + dy * dy < ENGAGE_THRESHOLD_PX * ENGAGE_THRESHOLD_PX) return;
-    active.engaged = true;
-    setBodyDragging(true);
-    if (pollTimer === null) {
-      pollTimer = window.setInterval(() => void pollOutside(), 24);
-    }
-  }
-  if (active.outside) return;
-
-  event.preventDefault();
-  clearPaneHighlight();
-
-  const reorderId = active.start.onReorderOver
-    ? reorderTargetUnder(event.clientX, event.clientY, active.start.kind)
-    : null;
-  if (reorderId && reorderId !== active.start.id) {
-    active.start.onReorderOver?.(reorderId);
+    void drag.start.onTearOut({ x: event.screenX, y: event.screenY });
     return;
   }
-
-  if (active.start.onPaneDrop) {
-    const edge = paneEdgeUnder(event.clientX, event.clientY);
-    if (edge) {
-      const pane = document.querySelector(`[data-pane-id="${CSS.escape(edge.paneId)}"]`);
-      pane?.classList.add('pane-drop-hover');
+  const target = document.elementFromPoint?.(event.clientX, event.clientY)?.closest<HTMLElement>('[data-tab-kind]');
+  if (target?.dataset.tabKind === drag.start.kind && target.dataset.tabId && target.dataset.tabId !== drag.start.id) {
+    clearDockPreview();
+    if (drag.lastReorder !== target.dataset.tabId) {
+      drag.lastReorder = target.dataset.tabId;
+      drag.start.onReorderOver?.(target.dataset.tabId);
     }
+    return;
+  }
+  drag.lastReorder = undefined;
+  showDockPreview(paneAtPoint(event.clientX, event.clientY));
+}
+function onMouseUp(event: MouseEvent): void {
+  const placement = paneAtPoint(event.clientX, event.clientY);
+  const drag = finishDrag();
+  if (drag?.engaged && placement) {
+    drag.start.onPaneDrop?.(placement.paneId, placement.side === 'left' || placement.side === 'right' ? 'row' : 'column', placement.side);
   }
 }
-
-function finishDrag() {
-  if (pollTimer !== null) {
-    window.clearInterval(pollTimer);
-    pollTimer = null;
-  }
-  clearPaneHighlight();
-  setBodyDragging(false);
-  active = null;
-}
-
-function handleMouseUp(event: MouseEvent) {
-  const state = active;
-  if (!state) return;
-  const wasEngaged = state.engaged;
-  finishDrag();
-  if (!wasEngaged || state.outside) return;
-
-  if (state.start.onPaneDrop) {
-    const edge = paneEdgeUnder(event.clientX, event.clientY);
-    if (edge) {
-      state.start.onPaneDrop(edge.paneId, edge.direction);
-      return;
-    }
-  }
-}
-
-function handleKeyDown(event: KeyboardEvent) {
-  if (event.key === 'Escape' && active) {
+const listeners = typeof document !== 'undefined' ? new AbortController() : null;
+if (listeners) {
+  const options = { signal: listeners.signal };
+  document.addEventListener('mousemove', onMouseMove, options);
+  document.addEventListener('mouseup', onMouseUp, options);
+  document.addEventListener('mouseleave', (event) => {
+    const drag = active;
+    if (!drag || !(event.buttons & 1)) return;
+    drag.engaged = true;
     finishDrag();
-  }
+    void drag.start.onTearOut({ x: event.screenX, y: event.screenY });
+  }, options);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') finishDrag(); }, options);
+  window.addEventListener('blur', () => finishDrag(), options);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) finishDrag(); }, options);
+  document.addEventListener('click', (event) => {
+    const pending = trailingClick;
+    trailingClick = null;
+    const target = event.target instanceof Element ? event.target : null;
+    // Only suppress the click produced by releasing this drag, never a real
+    // button, keyboard activation, or the next click elsewhere in the app.
+    if (pending && event.detail !== 0 && Date.now() < pending.expires
+      && target && pending.source.contains(target) && !target.closest('button, input, select, textarea, a')) {
+      event.preventDefault(); event.stopPropagation();
+    }
+  }, { ...options, capture: true });
 }
-
-let listenersInstalled = false;
-
-function installListeners() {
-  if (listenersInstalled || typeof document === 'undefined') return;
-  listenersInstalled = true;
-  document.addEventListener('mousemove', handleMouseMove);
-  document.addEventListener('mouseup', handleMouseUp);
-  document.addEventListener('blur', () => finishDrag());
-  document.addEventListener('keydown', handleKeyDown);
+if (import.meta.hot) import.meta.hot.dispose(() => {
+  listeners?.abort(); finishDrag(); trailingClick = null;
+});
+export function beginTabDragOnMouseDown(event: ReactMouseEvent, start: TabDragStart): void {
+  if (event.button !== 0 || (event.target as Element).closest('button, input, select, textarea, a')) return;
+  finishDrag();
+  trailingClick = null;
+  active = { start, x: event.clientX, y: event.clientY, source: event.currentTarget as HTMLElement, engaged: false };
 }
-installListeners();
-
-/**
- * Attach to a tab chip's onMouseDown. Returns early for non-primary buttons
- * and clicks on inner action buttons (close / detach) so they behave normally.
- */
-export function beginTabDragOnMouseDown(event: React.MouseEvent, start: TabDragStart): void {
-  if (event.button !== 0) return;
-  if ((event.target as HTMLElement).closest('button, input, select, a')) return;
-  active = {
-    start,
-    startX: event.clientX,
-    startY: event.clientY,
-    engaged: false,
-    outside: false,
-  };
-}
+export const __internals = { isTearOutZone, paneUnder: paneAtPoint };

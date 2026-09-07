@@ -1,4 +1,31 @@
 {
+  "markdown": { "preview": "Markdown preview", "mode": "Document view", "blockedImage": "Only images inside the document folder load automatically", "loadImage": "Load external image", "image": "Image", "large": "Preview is limited to 512 Ki characters. Switch to Source to read the rest." },
+  "customTheme": {
+    "title": "Custom CSS · Vibe Coding", "description": "Style the entire app with CSS: colors, fonts, tab shapes, backgrounds and pseudo-elements. Preview first, then apply to save across launches and windows.",
+    "enabled": "Custom CSS enabled", "disabled": "Base theme", "previewing": "Unsaved preview", "cssLabel": "Custom theme CSS", "apply": "Apply and save", "preview": "Preview CSS", "revert": "Revert preview", "disable": "Disable custom CSS", "import": "Import CSS", "export": "Export CSS", "image": "Insert background image", "example": "Insert example", "tooLarge": "Choose an image up to 1 MiB or a CSS file up to 2 MiB.",
+    "warning": "Only apply CSS you trust. It can hide controls or request external URLs. Imported CSS is not applied automatically. Embedded local images stay in the CSS; previewed documents never execute JavaScript.", "recovery": "Emergency recovery, including when controls are hidden:"
+  },
+  "localFiles": { "open": "Open files", "openFailed": "Could not open file", "preview": "Preview", "source": "Source", "split": "Source and preview" },
+  "workspaceLayout": {
+    "restoreFailed": "Could not restore the previous layout",
+    "quitWithoutLayout": "The latest window layout could not be saved. Quit using the previously saved layout? Cancel to stay in the app.",
+    "save": "Save window layout",
+    "saved": "Window layout saved",
+    "savedDescription": "Windows, tabs and split ratios will be restored on the next launch. Changes are also saved automatically.",
+    "saveFailed": "Could not save window layout",
+    "restored": "Workspace restored",
+    "restoreAttention": "These sessions need attention: {{names}}. Finished agents are not restarted automatically; a normal shell is restored instead when available.",
+    "detach": "Open in a separate window",
+    "mergeBack": "Return to main window",
+    "closeAndReturn": "Close window and return tab",
+    "transferRejected": "The main window could not accept this tab. Your content remains in this window.",
+    "empty": "Drag a window here to return its tab, or open a new session.",
+    "recoveryStorageFull": "Recovery storage is unavailable or full. Your edits remain in memory; save the file before quitting.",
+    "minimize": "Minimize window",
+    "maximize": "Maximize or restore window",
+    "returnBeforeClose": "This session is used by a separate window. Return its tabs to the main window before closing or recreating the connection.",
+    "detachFailed": "Could not open the separate window. The original tab has been kept."
+  },
   "common": {
     "save": "Save",
     "cancel": "Cancel",

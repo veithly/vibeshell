@@ -6,6 +6,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useSettingsStore, themes } from '../../stores/settingsStore';
+import { CUSTOM_THEME_EVENT, customTerminalColors } from '../../lib/customTheme';
 import { CompletionPopup, type CompletionItem } from './CompletionPopup';
 import { MobileKeyBar } from './MobileKeyBar';
 import { useCompletion } from './useCompletion';
@@ -666,7 +667,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       const terminalElement = terminalRef.current;
 
       const xterm = new XTerm({
-        theme: getXtermTheme(),
+        theme: { ...getXtermTheme(), ...customTerminalColors() },
         fontSize: settings.terminal.fontSize,
         fontFamily: `${settings.terminal.fontFamily}, Menlo, Monaco, Consolas, monospace`,
         cursorBlink: settings.terminal.cursorBlink,
@@ -765,6 +766,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       terminalScreen?.addEventListener('click', handleTerminalClick);
 
       xterm.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+        if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'o') return false;
         if (rawInputRef.current) {
           return true;
         }
@@ -992,11 +994,14 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       xterm.options.cursorBlink = settings.terminal.cursorBlink;
       xterm.options.cursorStyle = settings.terminal.cursorStyle;
       xterm.options.scrollback = settings.terminal.scrollbackLines;
-      xterm.options.theme = getXtermTheme();
+      const syncTheme = () => { xterm.options.theme = { ...getXtermTheme(), ...customTerminalColors() }; };
+      syncTheme();
+      window.addEventListener(CUSTOM_THEME_EVENT, syncTheme);
 
       if (fitAddonRef.current) {
         fitTerminalIfRenderable(fitAddonRef.current, terminalRef.current);
       }
+      return () => window.removeEventListener(CUSTOM_THEME_EVENT, syncTheme);
     }, [sessionId, terminalReadyFor, settings.terminal, settings.appearance.theme, getXtermTheme]);
 
     const currentTheme = themes.find((t) => t.name === settings.appearance.theme);
@@ -1008,7 +1013,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         <div
           ref={terminalRef}
           className="terminal-viewport w-full min-h-0 flex-1 relative overflow-hidden"
-          style={{ backgroundColor: bgColor }}
+          style={{ backgroundColor: `var(--tokyo-bg, ${bgColor})` }}
           onContextMenu={handleContextMenu}
         />
 

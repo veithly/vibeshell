@@ -204,6 +204,7 @@ pub async fn local_shell_resize(
 #[tauri::command]
 pub async fn local_shell_attach(
     app: AppHandle,
+    webview: tauri::WebviewWindow,
     manager: State<'_, Arc<LocalShellManager>>,
     request: LocalShellSessionRequest,
 ) -> Result<LocalShellInfo, String> {
@@ -226,7 +227,7 @@ pub async fn local_shell_attach(
             session_id: session_id.clone(),
             data,
         };
-        let _ = app.emit("session-output", event);
+        let _ = webview.emit_to(webview.label(), "session-output", event);
     }
 
     ensure_local_shell_output_bridge(app, session.clone());

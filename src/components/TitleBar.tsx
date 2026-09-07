@@ -43,24 +43,36 @@ export const TitleBar = memo(function TitleBar({
 
     let cancelled = false;
     let unlisten: (() => void) | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let reading = false;
 
     const setup = async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         const win = getCurrentWindow();
         const updateWindowState = async () => {
-          const [maximized, fullscreen] = await Promise.all([
-            win.isMaximized(),
-            win.isFullscreen(),
-          ]);
-          if (cancelled) return;
-          setIsMaximized(maximized);
-          setIsFullscreen(fullscreen);
+          if (cancelled || reading) return;
+          reading = true;
+          try {
+            // The macOS green control represents fullscreen, not AppKit's
+            // zoomed state. Avoid expensive isZoomed/standardFrame probing.
+            if (platform === 'macos') {
+              const fullscreen = await win.isFullscreen();
+              if (!cancelled) setIsFullscreen(fullscreen);
+            } else {
+              const maximized = await win.isMaximized();
+              if (!cancelled) setIsMaximized(maximized);
+            }
+          } finally { reading = false; }
         };
         await updateWindowState();
 
         const { listen } = await import('@tauri-apps/api/event');
-        const stop = await listen('tauri://resize', updateWindowState);
+        const stop = await listen('tauri://resize', () => {
+          if (cancelled || reading) return;
+          clearTimeout(timer);
+          timer = setTimeout(() => { void updateWindowState().catch(console.error); }, 200);
+        });
         if (cancelled) {
           // Effect tore down while we were awaiting listen(); release it now.
           stop();
@@ -75,9 +87,10 @@ export const TitleBar = memo(function TitleBar({
     setup();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
       unlisten?.();
     };
-  }, [supportsWindowControls]);
+  }, [supportsWindowControls, platform]);
 
   const handleMinimize = useCallback(async () => {
     try {

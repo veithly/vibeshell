@@ -356,15 +356,16 @@ echo === ; docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' 2>/dev/null"#
             continue;
         }
         for (port_text, engine) in [("5432", "postgresql"), ("3306", "mysql"), ("6379", "redis")] {
-            if line.ends_with(&format!(":{port_text}")) || line.contains(&format!(":{port_text} ")) {
-                if seen.insert(format!("tcp:{engine}")) {
-                    suggestions.push(DatabaseSuggestion {
-                        engine: engine.to_string(),
-                        port: port_text.parse().unwrap_or_default(),
-                        source: "tcp".to_string(),
-                        detail: format!("listening :{port_text}"),
-                    });
-                }
+            if (line.ends_with(&format!(":{port_text}"))
+                || line.contains(&format!(":{port_text} ")))
+                && seen.insert(format!("tcp:{engine}"))
+            {
+                suggestions.push(DatabaseSuggestion {
+                    engine: engine.to_string(),
+                    port: port_text.parse().unwrap_or_default(),
+                    source: "tcp".to_string(),
+                    detail: format!("listening :{port_text}"),
+                });
             }
         }
     }

@@ -33,6 +33,11 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "fileAssociations": [
+      { "ext": ["md", "markdown", "mdx"], "name": "Markdown document", "role": "Editor", "rank": "Alternate" },
+      { "ext": ["txt", "log", "csv", "json", "yaml", "yml", "toml", "css", "xml", "ini", "conf"], "name": "Text document", "role": "Editor", "rank": "Alternate" },
+      { "ext": ["svg", "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif"], "name": "Image", "role": "Viewer", "rank": "Alternate" }
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

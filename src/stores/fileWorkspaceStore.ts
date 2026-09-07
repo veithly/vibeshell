@@ -1,8 +1,14 @@
 import { create } from 'zustand';
+import { forgetTextBuffer } from '../lib/fileEditBuffer';
 import { getFileViewerKind, type FileViewerKind } from '../lib/fileWorkspace';
 
+export const LOCAL_FILE_ORIGIN = 'local-files';
+
 export interface OpenFileInput {
+  /** Local documents use an origin identity, never a fabricated shell session. */
+  source?: 'local';
   sessionId: string;
+  viewerKind?: FileViewerKind;
   path: string;
   name: string;
   size: number;
@@ -47,7 +53,7 @@ export const useFileWorkspaceStore = create<FileWorkspaceState>((set) => ({
         {
           ...file,
           id,
-          kind: getFileViewerKind(file.name),
+          kind: file.viewerKind ?? getFileViewerKind(file.name),
           dirty: false,
         },
       ],
@@ -72,6 +78,7 @@ export const useFileWorkspaceStore = create<FileWorkspaceState>((set) => ({
     const closingIndex = state.tabs.findIndex((tab) => tab.id === tabId);
     if (closingIndex === -1) return state;
 
+    forgetTextBuffer(tabId);
     const tabs = state.tabs.filter((tab) => tab.id !== tabId);
     if (state.activeTabId !== tabId) return { tabs };
 
@@ -98,11 +105,11 @@ export const useFileWorkspaceStore = create<FileWorkspaceState>((set) => ({
   retainTabsForSessions: (sessionIds) => set((state) => {
     const retainedSessionIds = new Set(sessionIds);
     const firstClosingIndex = state.tabs.findIndex(
-      (tab) => !retainedSessionIds.has(tab.sessionId)
+      (tab) => tab.source !== 'local' && !retainedSessionIds.has(tab.sessionId)
     );
     if (firstClosingIndex === -1) return state;
 
-    const tabs = state.tabs.filter((tab) => retainedSessionIds.has(tab.sessionId));
+    const tabs = state.tabs.filter((tab) => tab.source === 'local' || retainedSessionIds.has(tab.sessionId));
     if (tabs.some((tab) => tab.id === state.activeTabId)) return { tabs };
 
     return {
@@ -111,7 +118,8 @@ export const useFileWorkspaceStore = create<FileWorkspaceState>((set) => ({
     };
   }),
 
-  setDirty: (tabId, dirty) => set((state) => ({
-    tabs: state.tabs.map((tab) => tab.id === tabId ? { ...tab, dirty } : tab),
-  })),
+  setDirty: (tabId, dirty) => set((state) => {
+    if (!state.tabs.some((tab) => tab.id === tabId && tab.dirty !== dirty)) return state;
+    return { tabs: state.tabs.map((tab) => tab.id === tabId ? { ...tab, dirty } : tab) };
+  }),
 }));

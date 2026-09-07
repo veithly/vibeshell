@@ -381,7 +381,7 @@ async fn remote_exec_command(session_id: &str, command: String) -> Result<(), St
 }
 
 /// Get MIME type from file extension
-fn get_mime_type(path: &str) -> String {
+pub(super) fn get_mime_type(path: &str) -> String {
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
 
     match ext.as_str() {

@@ -1,6 +1,6 @@
 import { useState, useCallback, memo, useRef, useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle, RefreshCw, Code2, ExternalLink } from 'lucide-react';
+import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle, RefreshCw, Code2, ExternalLink, Save } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useSessionStore, type Session, type SessionState, type SessionType } from '../../stores/sessionStore';
 import { useRecordingStore } from '../../stores/recordingStore';
@@ -8,11 +8,14 @@ import { useFileWorkspaceStore, type FileWorkspaceTab as FileTabModel } from '..
 import { usePluginWorkspaceStore, type PluginWorkspaceTab } from '../../stores/pluginWorkspaceStore';
 import { usePluginStore } from '../../stores/pluginStore';
 import { localizedPluginName } from '../../plugins/pluginUtils';
-import { openDetachedWindow, type DetachTarget } from '../../lib/detach';
+import { openDetachedWindow, useDetachedOwnership, canCloseWorkspaceSession, type DetachTarget } from '../../lib/detach';
+import { sessionPaneId, pluginPaneId, filePaneId } from '../../lib/paneIds';
+import type { DockSide } from '../../lib/docking';
 import { beginTabDragOnMouseDown } from '../../lib/tabDragController';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { FileIcon } from '../SftpPanel/FileIcon';
 import { PluginIcon } from '../PluginIcon';
+import { OpenLocalFilesButton } from '../OpenLocalFilesButton';
 
 interface SessionTabsProps {
   /** Callback when "New Session" is clicked */
@@ -24,12 +27,14 @@ interface SessionTabsProps {
   /** Drop a dragged tab onto a terminal pane edge: split that pane. */
   onPaneDropTab?: (
     paneId: string,
-    kind: 'session' | 'plugin',
+    kind: 'session' | 'file' | 'plugin',
     tabId: string,
-    direction: 'row' | 'column'
+    direction: 'row' | 'column',
+    side?: DockSide
   ) => void;
   /** Commands pinned to the right of the scrollable session strip. */
   rightActions?: ReactNode;
+  onSaveLayout?: () => void;
 }
 
 /**
@@ -76,7 +81,7 @@ interface SessionTabProps {
   onContextMenu: (e: React.MouseEvent) => void;
   onTearOut: (at?: { x: number; y: number }) => unknown;
   onReorder: (draggedId: string) => void;
-  onPaneDrop?: (paneId: string, direction: 'row' | 'column') => void;
+  onPaneDrop?: (paneId: string, direction: 'row' | 'column', side?: DockSide) => void;
 }
 
 /**
@@ -196,9 +201,11 @@ interface FileTabProps {
   onSelect: () => void;
   onClose: () => void;
   onReorder: (draggedId: string) => void;
+  onTearOut: (at?: { x: number; y: number }) => unknown;
+  onPaneDrop?: (paneId: string, direction: 'row' | 'column', side?: DockSide) => void;
 }
 
-const FileTab = memo(function FileTab({ tab, isActive, onSelect, onClose, onReorder }: FileTabProps) {
+const FileTab = memo(function FileTab({ tab, isActive, onSelect, onClose, onReorder, onPaneDrop, onTearOut }: FileTabProps) {
   return (
     <div
       data-tab-kind="file"
@@ -207,7 +214,8 @@ const FileTab = memo(function FileTab({ tab, isActive, onSelect, onClose, onReor
         kind: 'file',
         id: tab.id,
         onReorderOver: onReorder,
-        onTearOut: () => null,
+        onTearOut,
+        onPaneDrop,
       })}
       className={cn(
         'session-tab-item group flex h-8 min-w-[120px] max-w-[240px] cursor-grab select-none items-center gap-2 rounded-lg border px-2.5',
@@ -229,6 +237,7 @@ const FileTab = memo(function FileTab({ tab, isActive, onSelect, onClose, onReor
       title={tab.path}
     >
       <FileIcon filename={tab.name} isDirectory={false} />
+      <button type="button" className="session-tab-action icon-button h-6 w-6 opacity-0 group-hover:opacity-100 focus:opacity-100" aria-label={`Open ${tab.name} in new window`} title="Open in new window" onClick={(event) => { event.stopPropagation(); onTearOut(); }}><ExternalLink className="h-3.5 w-3.5" /></button>
       <span className="min-w-0 flex-1 truncate text-sm font-medium">{tab.name}</span>
       {tab.dirty && <span className="h-2 w-2 flex-shrink-0 rounded-full bg-tokyo-orange" />}
       <button
@@ -258,7 +267,7 @@ interface PluginTabChipProps {
   onClose: () => void;
   onDetach: (target: DetachTarget, at?: { x: number; y: number }) => unknown;
   onReorder: (draggedId: string) => void;
-  onPaneDrop?: (paneId: string, direction: 'row' | 'column') => void;
+  onPaneDrop?: (paneId: string, direction: 'row' | 'column', side?: DockSide) => void;
 }
 
 /**
@@ -463,7 +472,7 @@ function TabContextMenu({
 /**
  * Session tabs component displaying all active sessions
  */
-export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInWindow, onPaneDropTab, rightActions }: SessionTabsProps) {
+export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInWindow, onPaneDropTab, rightActions, onSaveLayout }: SessionTabsProps) {
   const { t } = useTranslation();
   const { sessions, activeSessionId, setActiveSession, killSession, killLocalShellSession, removeSession, moveSessionBefore } =
     useSessionStore();
@@ -483,6 +492,10 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
   } = usePluginWorkspaceStore();
   const plugins = usePluginStore((state) => state.plugins);
   const { isRecording, startRecording, stopRecording } = useRecordingStore();
+  const owners = useDetachedOwnership((state) => state.owners);
+  const visibleSessions = sessions.filter((session) => !owners[sessionPaneId(session.id)]);
+  const visibleFiles = fileTabs.filter((tab) => !owners[filePaneId(tab.id)]);
+  const visiblePlugins = pluginTabs.filter((tab) => !owners[pluginPaneId(tab.id)]);
 
   // Confirmation dialog state
   const [confirmClose, setConfirmClose] = useState<Session | null>(null);
@@ -528,6 +541,7 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
   }, [killSession, killLocalShellSession, removeSession]);
 
   const handleRequestClose = useCallback((session: Session) => {
+    if (!canCloseWorkspaceSession(session.id)) return;
     const hasUnsavedFiles = fileTabs.some((tab) => tab.sessionId === session.id && tab.dirty);
     if (session.state === 'connected' || session.state === 'connecting' || hasUnsavedFiles) {
       setConfirmClose(session);
@@ -540,6 +554,7 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
     if (!confirmClose) return;
 
     const sessionId = confirmClose.id;
+    if (!canCloseWorkspaceSession(sessionId)) { setConfirmClose(null); return; }
     const sessionType = confirmClose.sessionType;
     setConfirmClose(null);
 
@@ -570,6 +585,7 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
   }, [stopRecording]);
 
   const handleReconnect = useCallback((session: Session) => {
+    if (!canCloseWorkspaceSession(session.id)) return;
     const dirtyFileCount = fileTabs.filter((tab) => tab.sessionId === session.id && tab.dirty).length;
     if (dirtyFileCount > 0 && !window.confirm(t('fileWorkspace.sessionUnsavedWarning', { count: dirtyFileCount }))) {
       return;
@@ -596,10 +612,10 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
               <i />
               <i />
             </span>
-            <span className="session-rail-count">{sessions.length + fileTabs.length + pluginTabs.length}</span>
+            <span className="session-rail-count">{visibleSessions.length + visibleFiles.length + visiblePlugins.length}</span>
           </div>
 
-          {sessions.map((session) => (
+          {visibleSessions.map((session) => (
             <SessionTab
               key={session.id}
               session={session}
@@ -615,27 +631,29 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
                   sessionId: session.id,
                   title: session.serverName,
                 },
-                at ? { x: at.x - 90, y: at.y - 16 } : undefined
+                { drag: !!at }
               )}
-              onReorder={(draggedId) => moveSessionBefore(draggedId, session.id)}
+              onReorder={(targetId) => moveSessionBefore(session.id, targetId)}
               onPaneDrop={onPaneDropTab
-                ? (paneId, direction) => onPaneDropTab(paneId, 'session', session.id, direction)
+                ? (paneId, direction, side) => onPaneDropTab(paneId, 'session', session.id, direction, side)
                 : undefined}
             />
           ))}
 
-          {fileTabs.map((tab) => (
+          {visibleFiles.map((tab) => (
             <FileTab
               key={tab.id}
               tab={tab}
               isActive={activeFileTabId === tab.id}
               onSelect={() => handleSelectFile(tab)}
               onClose={() => handleCloseFile(tab)}
-              onReorder={(draggedId) => moveFileTabBefore(draggedId, tab.id)}
+              onReorder={(targetId) => moveFileTabBefore(tab.id, targetId)}
+              onTearOut={(at) => openDetachedWindow({ kind: 'file', source: tab.source, sessionId: tab.sessionId, path: tab.path, name: tab.name, size: tab.size }, { drag: !!at })}
+              onPaneDrop={onPaneDropTab ? (paneId, direction, side) => onPaneDropTab(paneId, 'file', tab.id, direction, side) : undefined}
             />
           ))}
 
-          {pluginTabs.map((tab) => {
+          {visiblePlugins.map((tab) => {
             const plugin = plugins.find((candidate) => candidate.manifest.id === tab.pluginId);
             return (
               <PluginTabChip
@@ -650,11 +668,11 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
                 onClose={() => closePluginTab(tab.id)}
                 onDetach={(target, at) => openDetachedWindow(
                   target,
-                  at ? { x: at.x - 90, y: at.y - 16 } : undefined
+                  { drag: !!at }
                 )}
-                onReorder={(draggedId) => movePluginTabBefore(draggedId, tab.id)}
+                onReorder={(targetId) => movePluginTabBefore(tab.id, targetId)}
                 onPaneDrop={onPaneDropTab
-                  ? (paneId, direction) => onPaneDropTab(paneId, 'plugin', tab.id, direction)
+                  ? (paneId, direction, side) => onPaneDropTab(paneId, 'plugin', tab.id, direction, side)
                   : undefined}
               />
             );
@@ -674,6 +692,8 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
             <Plus className="w-4 h-4" />
           </button>
         </div>
+        <OpenLocalFilesButton />
+        {onSaveLayout && <button type="button" className="icon-button h-8 w-8 shrink-0" title={t('workspaceLayout.save')} aria-label={t('workspaceLayout.save')} onClick={onSaveLayout}><Save className="h-4 w-4" /></button>}
         {rightActions}
       </div>
 

@@ -2359,7 +2359,7 @@ mod tests {
 
         // Deleting emits a tombstone like every other entity.
         database.plugin_installation_delete("docker-containers").unwrap();
-        let tombstone = pending(&database)
+        pending(&database)
             .into_iter()
             .find(|change| {
                 change.entity_kind == SyncEntityKind::PluginInstallation
@@ -3562,7 +3562,10 @@ mod tests {
     #[test]
     fn remote_future_revisions_and_local_clock_saturation_are_rejected() {
         let (_dir, database) = test_database();
-        let too_far_future = Utc::now().timestamp_millis() + MAX_REMOTE_CLOCK_SKEW_MILLIS + 1;
+        // Leave a real scheduling margin: validation samples `now` after this line,
+        // so a +1 ms boundary makes the test race the wall clock on slower CI hosts.
+        let too_far_future =
+            Utc::now().timestamp_millis() + MAX_REMOTE_CLOCK_SKEW_MILLIS + 60_000;
         let future = remote_upsert(
             SyncEntityKind::Group,
             "future-group",

@@ -88,7 +88,7 @@ impl AgentGateway {
         )
     }
 
-    fn start_at_path(
+    pub(crate) fn start_at_path(
         database: Arc<Database>,
         session_manager: Arc<SessionManager>,
         activity_emitter: Arc<dyn Fn(AgentActivityEvent) + Send + Sync>,

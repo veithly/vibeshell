@@ -1,4 +1,31 @@
 {
+  "markdown": { "preview": "Markdown 预览", "mode": "文档视图", "blockedImage": "仅自动加载文档目录内的图片", "loadImage": "加载外部图片", "image": "图片", "large": "预览最多显示 512 Ki 字符，其余内容请切换到源码查看。" },
+  "customTheme": {
+    "title": "自定义 CSS · Vibe Coding", "description": "用 CSS 改造整个应用：颜色、字体、标签形状、背景图和伪元素。先预览，再应用保存，重启后保留并同步到独立窗口。",
+    "enabled": "自定义 CSS 已启用", "disabled": "基础主题", "previewing": "未保存的预览", "cssLabel": "自定义主题 CSS", "apply": "应用并保存", "preview": "预览 CSS", "revert": "撤销预览", "disable": "停用自定义 CSS", "import": "导入 CSS", "export": "导出 CSS", "image": "插入背景图片", "example": "插入示例", "tooLarge": "请选择不超过 1 MiB 的图片或不超过 2 MiB 的 CSS 文件。",
+    "warning": "只应用你信任的 CSS：它可以隐藏控件，也可能请求外部网址。导入后不会自动启用。本地图片嵌入 CSS，预览文档不会执行 JavaScript。", "recovery": "控件被隐藏时仍可紧急恢复："
+  },
+  "localFiles": { "open": "打开文件", "openFailed": "无法打开文件", "preview": "预览", "source": "源码", "split": "源码与预览" },
+  "workspaceLayout": {
+    "restoreFailed": "无法恢复上次布局，基础功能仍可使用",
+    "quitWithoutLayout": "无法保存最新窗口布局。仍然退出并保留上次保存的布局吗？取消可返回应用。",
+    "save": "保存窗口布局",
+    "saved": "窗口布局已保存",
+    "savedDescription": "下次启动时将恢复窗口、标签页和分屏比例。布局变更也会自动保存。",
+    "saveFailed": "无法保存窗口布局",
+    "restored": "工作区已恢复",
+    "restoreAttention": "这些会话需要检查：{{names}}。已结束的 Agent 不会自动重新执行；支持时会恢复为普通终端。",
+    "detach": "在独立窗口中打开",
+    "mergeBack": "移回主窗口",
+    "closeAndReturn": "关闭窗口并移回标签页",
+    "transferRejected": "主窗口无法接收此标签页，内容仍保留在当前窗口中。",
+    "empty": "将独立窗口拖到这里以移回标签页，或创建一个新会话。",
+    "recoveryStorageFull": "草稿恢复存储不可用或已满。编辑内容仍保留在内存中，请在退出前保存文件。",
+    "minimize": "最小化窗口",
+    "maximize": "最大化或还原窗口",
+    "returnBeforeClose": "此会话仍被独立窗口使用。请先将相关标签页移回主窗口，再关闭或重建连接。",
+    "detachFailed": "无法打开独立窗口，已保留原来的标签页。"
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",

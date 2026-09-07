@@ -1,0 +1,27 @@
+/* VibeShell · Vibe Coding starter
+   Import in Settings → Appearance → Custom CSS.
+   Recovery: Cmd/Ctrl+Shift+F12 or Workspace → Disable Custom CSS.
+   No network assets. Add a local image with Insert background image. */
+:root {
+  --tokyo-bg: #181e2c !important;
+  --tokyo-bg-dark: #131824 !important;
+  --tokyo-bg-hl: #29334a !important;
+  --tokyo-fg: #dde4eb !important;
+  --tokyo-fg-dark: #a5b1c5 !important;
+  --tokyo-comment: #a5b1c5 !important;
+  --tokyo-selection: #35465f !important;
+  --tokyo-blue: #83bbd6 !important;
+  --tokyo-on-accent: #131824 !important;
+  --tokyo-red: #ef9b97 !important;
+  --tokyo-green: #a8c79d !important;
+  --tokyo-yellow: #dbc08b !important;
+  --tokyo-magenta: #c4a6d5 !important;
+  --tokyo-cyan: #91c9c8 !important;
+  --tokyo-orange: #dcb394 !important;
+  --vibe-wallpaper-opacity: 0.12;
+}
+.session-tabbar [role="tab"] { border-radius: 9px; }
+[data-vibe-surface="markdown"] { font-size: 16px; line-height: 1.8; }
+[data-vibe-surface="markdown"] h1 { letter-spacing: -0.025em; }
+[data-vibe-surface="markdown"] pre { border: 1px solid var(--tokyo-bg-hl); }
+/* Style only decorative layers with pointer-events:none. */

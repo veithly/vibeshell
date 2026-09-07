@@ -24,16 +24,20 @@ import { Mosaic, MosaicWindow, type MosaicNode, type MosaicBranch } from 'react-
 import 'react-mosaic-component2/react-mosaic-component.css';
 import { cn } from './lib/utils';
 import { safeInvoke } from './lib/tauri';
+import { withDeadline } from './lib/deadline';
 import { useSessionStore, type Session } from './stores/sessionStore';
 import { useNavigationStore } from './stores/navigationStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useThemeSync } from './lib/useThemeSync';
+import { listenForLocalFileRequests, openLocalFiles } from './lib/localFiles';
 import {
-  DETACHED_CLOSED_EVENT,
-  removeDetachedFromLayout,
-  openDetachedWindow,
-  restoreDetachedWindows,
+  openDetachedWindow, useDetachedOwnership, detachTargetKey, hydrateTransfer, canCloseWorkspaceSession,
+  releaseDetached, readDetachedLayout, WORKSPACE_QUITTING_EVENT, type TransferSnapshot,
 } from './lib/detach';
+import { dockPane, replaceLeaf, type DockSide, type PanePlacement } from './lib/docking';
+import { receiveWindowDrops } from './lib/nativeDock';
+import { trackWindowGeometry, captureWindowGeometry } from './lib/windowGeometry';
+import { restoreWorkspaceLayout, restoreWorkspaceWindows, saveWorkspaceLayout } from './lib/workspacePersistence';
 import { UPDATE_CHECK_INTERVAL_MS, useUpdateStore } from './stores/updateStore';
 import { SessionTabs } from './components/SessionTabs';
 import { TitleBar } from './components/TitleBar';
@@ -69,6 +73,7 @@ import { PluginTabLauncher } from './components/PluginTabLauncher';
 import { PaneDropZone } from './components/PaneDropZone';
 import {
   parsePaneId,
+  filePaneId,
   pluginPaneId,
   sessionPaneId,
   SESSION_PANE_PREFIX,
@@ -89,6 +94,20 @@ const PluginMarketplace = lazy(() => import('./components/PluginMarketplace').th
 const Terminal = lazy(() => import('./components/Terminal').then((mod) => ({ default: mod.Terminal })));
 const FileWorkspace = lazy(() => import('./components/FileWorkspace').then((mod) => ({ default: mod.FileWorkspace })));
 const PluginWorkspaceView = lazy(() => import('./components/PluginPanel/PluginWorkspaceView').then((mod) => ({ default: mod.PluginWorkspaceView })));
+
+function activateWorkspacePane(id: string): void {
+  const pane = parsePaneId(id);
+  const files = useFileWorkspaceStore.getState();
+  const plugins = usePluginWorkspaceStore.getState();
+  files.activateTab(pane.kind === 'file' ? pane.id : null);
+  plugins.activateTab(pane.kind === 'plugin' ? pane.id : null);
+  const sessionId = pane.kind === 'session' ? pane.id
+    : pane.kind === 'file' ? files.tabs.find((tab) => tab.id === pane.id)?.sessionId
+    : plugins.tabs.find((tab) => tab.id === pane.id)?.sessionId;
+  if (sessionId && useSessionStore.getState().sessions.some(session => session.id === sessionId)) {
+    useSessionStore.getState().setActiveSession(sessionId);
+  }
+}
 
 function App() {
   const { t } = useTranslation();
@@ -143,6 +162,13 @@ function App() {
   const [sessionToClose, setSessionToClose] = useState<string | null>(null);
   const [mosaicTree, setMosaicTree] = useState<MosaicNode<string> | null>(null);
   const [isCreatingTerminalPane, setIsCreatingTerminalPane] = useState(false);
+  const [workspaceReady, setWorkspaceReady] = useState(!('__TAURI_INTERNALS__' in window));
+  const workspaceInitialized = useRef(!('__TAURI_INTERNALS__' in window));
+  const detachedOwners = useDetachedOwnership((state) => state.owners);
+  const treeRef = useRef(mosaicTree);
+  treeRef.current = mosaicTree;
+  const focusedPaneRef = useRef<string | null>(null);
+  const dockReceiverRef = useRef<(snapshot: TransferSnapshot, placement: PanePlacement | null) => boolean>(() => false);
 
   // Per-pane terminal handles. Mosaic can render multiple panes at once, so a
   // single ref is insufficient; each pane registers/unregisters via callback ref.
@@ -152,6 +178,24 @@ function App() {
   const terminalPaneCreationRef = useRef(false);
 
   useThemeSync();
+
+  useEffect(() => {
+    if (!workspaceReady) return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    // Restoring layout must finish before files received from Finder are added.
+    void Promise.resolve(sessionBootstrapRef.current).then(() => {
+      if (disposed) return;
+      return listenForLocalFileRequests().then(unlisten => { if (disposed) unlisten(); else stop = unlisten; });
+    }).catch(console.error);
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'o') {
+        event.preventDefault(); if (!event.repeat) void openLocalFiles();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => { disposed = true; stop?.(); window.removeEventListener('keydown', onKey); };
+  }, [workspaceReady]);
 
   useEffect(() => {
     void loadRuntimeCapabilities();
@@ -197,11 +241,33 @@ function App() {
   useEffect(() => {
     if (!sessionBootstrapRef.current) {
       sessionBootstrapRef.current = (async () => {
-        const capabilities = await loadRuntimeCapabilities();
-        await fetchSessions();
-        if (capabilities.localShell && useSessionStore.getState().sessions.length === 0) {
-          await createLocalShellSession(undefined, 80, 24);
-        }
+        try {
+          const capabilities = await loadRuntimeCapabilities();
+          await fetchSessions();
+          if ('__TAURI_INTERNALS__' in window) {
+            await syncRemoteSessions();
+            const restored = await restoreWorkspaceLayout(capabilities.localShell);
+            if (restored.layout) {
+              focusedPaneRef.current = restored.layout.focusedPane;
+              treeRef.current = restored.layout.tree;
+              setMosaicTree(restored.layout.tree);
+            }
+            setWorkspaceReady(true);
+            await restoreWorkspaceWindows(restored.layout);
+            if (restored.warnings.length) {
+              useNotificationStore.getState().warning(
+                t('workspaceLayout.restored'),
+                t('workspaceLayout.restoreAttention', { names: restored.warnings.join(', ') })
+              );
+            }
+          }
+          if (capabilities.localShell && useSessionStore.getState().sessions.length === 0) {
+            await createLocalShellSession(undefined, 80, 24);
+          }
+          workspaceInitialized.current = true;
+        } catch (error) {
+          notifyError(t('workspaceLayout.restoreFailed'), String(error));
+        } finally { setWorkspaceReady(true); }
       })();
     }
 
@@ -209,7 +275,7 @@ function App() {
     // avoid pointless IPC when the app is in the background. On regaining
     // visibility, sync immediately so stale UI refreshes without waiting.
     let intervalId: number | null = window.setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || !workspaceInitialized.current) return;
       void syncRemoteSessions();
     }, 2000);
 
@@ -220,10 +286,10 @@ function App() {
           intervalId = null;
         }
       } else {
-        void syncRemoteSessions();
+        if (workspaceInitialized.current) void syncRemoteSessions();
         if (intervalId === null) {
           intervalId = window.setInterval(() => {
-            if (document.hidden) return;
+            if (document.hidden || !workspaceInitialized.current) return;
             void syncRemoteSessions();
           }, 2000);
         }
@@ -239,82 +305,70 @@ function App() {
     };
   }, [createLocalShellSession, fetchSessions, loadRuntimeCapabilities, syncRemoteSessions]);
 
-  // Re-open the detached windows from the previous session so the workspace
-  // comes back exactly as it was left.
   useEffect(() => {
-    void restoreDetachedWindows();
-  }, []);
-
-  // When a torn-out tab window closes or merges back, re-activate its tab so
-  // the content is immediately visible in the main window again. While the
-  // whole app is quitting, the layout entry is kept so the next launch
-  // restores the same set of windows.
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    if (!('__TAURI_INTERNALS__' in window)) return;
     let disposed = false;
-    let appQuitting = false;
-    let stopQuitListener: (() => void) | null = null;
-    void import('@tauri-apps/api/event')
-      .then(async ({ listen }) => {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        // Mark quitting as soon as the main window is asked to close; detached
-        // windows closing after that must not drop their layout entries.
-        void getCurrentWindow()
-          .listen('tauri://close-requested', () => {
-            appQuitting = true;
-          })
-          .then((stop) => {
-            if (disposed) stop();
-            else stopQuitListener = stop;
-          });
-        return listen<{ kind: string; sessionId: string; pluginId?: string }>(
-        DETACHED_CLOSED_EVENT,
-        (event) => {
-          const payload = event.payload;
-          if (!appQuitting) {
-            removeDetachedFromLayout(
-              payload.kind === 'plugin' && payload.pluginId
-                ? {
-                    kind: 'plugin',
-                    pluginId: payload.pluginId,
-                    sessionId: payload.sessionId,
-                    serverName: '',
-                    sessionType: 'ssh',
-                  }
-                : { kind: 'terminal', sessionId: payload.sessionId, title: '' }
-            );
-          }
-          if (payload.kind === 'plugin' && payload.pluginId) {
-            const workspace = usePluginWorkspaceStore.getState();
-            const tab = workspace.tabs.find(
-              (candidate) =>
-                candidate.pluginId === payload.pluginId && candidate.sessionId === payload.sessionId
-            );
-            if (tab) {
-              useFileWorkspaceStore.getState().activateTab(null);
-              workspace.activateTab(tab.id);
-            }
-          } else {
-            usePluginWorkspaceStore.getState().activateTab(null);
-            useFileWorkspaceStore.getState().activateTab(null);
-            useSessionStore.getState().setActiveSession(payload.sessionId);
-          }
-        }
-      );
-      })
-      .then((stop) => {
-        if (disposed) stop();
-        else unlisten = stop;
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-      unlisten?.();
-      stopQuitListener?.();
+    let closing = false;
+    const stops: (() => void)[] = [];
+    const keep = (stop: () => void) => disposed ? stop() : stops.push(stop);
+    const flush = () => {
+      if (!workspaceInitialized.current) return;
+      saveWorkspaceLayout(treeRef.current, focusedPaneRef.current);
     };
-  }, []);
+    const quit = async () => {
+      if (closing) return;
+      closing = true;
+      try {
+        try { flush(); } catch (error) {
+          notifyError(t('workspaceLayout.saveFailed'), String(error));
+          if (!window.confirm(t('workspaceLayout.quitWithoutLayout'))) return;
+        }
+        try {
+          await withDeadline((async () => {
+            const { getCurrentWindow, Window: NativeWindow } = await import('@tauri-apps/api/window');
+            await captureWindowGeometry('main', getCurrentWindow());
+            for (const entry of readDetachedLayout()) {
+              const label = useDetachedOwnership.getState().owners[detachTargetKey(entry.target)];
+              const native = label ? await NativeWindow.getByLabel(label) : null;
+              if (native) await captureWindowGeometry(entry.geometryKey, native);
+            }
+          })(), 1500, 'Window geometry capture timed out');
+        } catch (error) { console.warn('[Workspace] Keeping last saved window bounds:', error); }
+        const { emit } = await import('@tauri-apps/api/event');
+        await withDeadline(emit(WORKSPACE_QUITTING_EVENT, { quitting: true }), 1000, 'Quit notification timed out').catch(console.warn);
+        const result = await safeInvoke('workspace_exit');
+        if (!result.success) throw result.error;
+      } catch (error) {
+        const { emit } = await import('@tauri-apps/api/event');
+        void emit(WORKSPACE_QUITTING_EVENT, { quitting: false }).catch(console.warn);
+        useNotificationStore.getState().error(t('workspaceLayout.saveFailed'), String(error));
+      } finally { closing = false; }
+    };
+    void receiveWindowDrops((snapshot, placement) => dockReceiverRef.current(snapshot, placement)).then(keep).catch(console.error);
+    void trackWindowGeometry('main').then(keep).catch(console.error);
+    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().onCloseRequested((event) => {
+      event.preventDefault(); void quit();
+    })).then(keep).catch(console.error);
+    void import('@tauri-apps/api/event').then(({ listen }) => listen('vibeshell://save-and-quit', () => { void quit(); })).then((stop) => {
+      keep(stop);
+      if (!disposed) return safeInvoke('workspace_save_handler_ready');
+    }).catch(console.error);
+    const flushOnHide = () => { try { flush(); } catch (error) { console.error('[Workspace] Save failed:', error); } };
+    window.addEventListener('pagehide', flushOnHide);
+    return () => { disposed = true; stops.forEach((stop) => stop()); window.removeEventListener('pagehide', flushOnHide); };
+  }, [t]);
+
+  useEffect(() => {
+    if (!workspaceReady || !workspaceInitialized.current || !('__TAURI_INTERNALS__' in window)) return;
+    const timer = setTimeout(() => {
+      try { saveWorkspaceLayout(treeRef.current, focusedPaneRef.current); }
+      catch (error) { notifyError(t('workspaceLayout.saveFailed'), String(error)); }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [workspaceReady, mosaicTree, sessions, fileTabs, pluginTabs, detachedOwners, activeSessionId, activeFileTabId, activePluginTabId, notifyError, t]);
 
   const closeInactiveSession = useCallback(async (session: Session) => {
+    if (!canCloseWorkspaceSession(session.id)) return false;
     const success = session.sessionType === 'local'
       ? await killLocalShellSession(session.id)
       : await killSession(session.id);
@@ -322,6 +376,7 @@ function App() {
     if (!success) {
       removeSession(session.id);
     }
+    return true;
   }, [killSession, killLocalShellSession, removeSession]);
 
   useEffect(() => {
@@ -434,44 +489,44 @@ function App() {
     }
   }, [activeSession?.purpose]);
 
-  // A selected tab must always reveal its terminal. Keep an existing split when
-  // the active session is already one of its panes; otherwise switch to it.
-  // A plugin pane stays pinned only while its tab remains active; switching to
-  // another session collapses back to that session's terminal.
+  // Selecting a new page in a split replaces only the focused pane, never the entire layout.
   useEffect(() => {
-    if (!activeSessionId) return;
+    if (!workspaceReady) return;
+    const selected = activeFileTabId ? filePaneId(activeFileTabId)
+      : activePluginTabId ? pluginPaneId(activePluginTabId)
+      : activeSessionId ? sessionPaneId(activeSessionId) : null;
+    if (!selected || detachedOwners[selected]) return;
     setMosaicTree((current) => {
-      if (current !== null && getLeaves(current).includes(sessionPaneId(activeSessionId))) {
-        return current;
+      const leaves = getLeaves(current);
+      if (leaves.includes(selected)) { focusedPaneRef.current = selected; return current; }
+      if (leaves.length > 1) {
+        const target = focusedPaneRef.current && leaves.includes(focusedPaneRef.current) ? focusedPaneRef.current : leaves[0];
+        focusedPaneRef.current = selected;
+        return replaceLeaf(current, target, selected);
       }
-      const pinnedPluginTabId = usePluginWorkspaceStore.getState().activeTabId;
-      if (
-        current !== null
-        && pinnedPluginTabId !== null
-        && getLeaves(current).includes(pluginPaneId(pinnedPluginTabId))
-      ) {
-        // The active plugin is split into the layout — keep it visible.
-        return current;
-      }
-      return sessionPaneId(activeSessionId);
+      // Standalone file/plugin pages keep their previous terminal alive until explicitly split.
+      return parsePaneId(selected).kind === 'session' ? selected : current;
     });
-  }, [activeSessionId]);
+  }, [workspaceReady, activeSessionId, activeFileTabId, activePluginTabId, detachedOwners]);
 
-  // Prune panes whose sessions or plugin tabs have been closed, keeping the
-  // layout otherwise intact.
   useEffect(() => {
-    setMosaicTree((current) => {
-      if (current === null) return current;
-      const validIds = new Set<string>(sessions.map((session) => sessionPaneId(session.id)));
-      for (const tab of pluginTabs) validIds.add(pluginPaneId(tab.id));
-      const pruned = pruneLeaves(current, validIds);
-      // If everything was pruned, fall back to the active session (or null).
-      if (pruned === null) {
-        return activeSessionId ? sessionPaneId(activeSessionId) : null;
-      }
-      return pruned === current ? current : pruned;
-    });
-  }, [sessions, pluginTabs, activeSessionId]);
+    if (!workspaceReady) return;
+    const valid = new Set(sessions.map((session) => sessionPaneId(session.id)));
+    for (const tab of pluginTabs) valid.add(pluginPaneId(tab.id));
+    for (const tab of fileTabs) valid.add(filePaneId(tab.id));
+    for (const id of Object.keys(detachedOwners)) valid.delete(id);
+    const fallback = activeSessionId && valid.has(sessionPaneId(activeSessionId))
+      ? sessionPaneId(activeSessionId) : [...valid][0] ?? null;
+    setMosaicTree((current) => pruneLeaves(current, valid) ?? fallback);
+    const selected = activeFileTabId ? filePaneId(activeFileTabId)
+      : activePluginTabId ? pluginPaneId(activePluginTabId)
+      : activeSessionId ? sessionPaneId(activeSessionId) : null;
+    if (selected && detachedOwners[selected]) {
+      const next = getLeaves(treeRef.current).find((id) => valid.has(id)) ?? fallback;
+      if (next) activateWorkspacePane(next);
+      else { activateFileTab(null); activatePluginTab(null); setActiveSession(null); }
+    }
+  }, [workspaceReady, sessions, pluginTabs, fileTabs, detachedOwners, activeSessionId, activeFileTabId, activePluginTabId, activateFileTab, activatePluginTab, setActiveSession]);
 
   const handleConnected = useCallback((sessionId: string) => {
     console.log('[App] handleConnected called with sessionId:', sessionId);
@@ -561,7 +616,7 @@ function App() {
       return;
     }
 
-    await closeInactiveSession(session);
+    if (!await closeInactiveSession(session)) return;
     await handleConnect(server, { forceNew: true });
   }, [resolveServerForSession, notifyWarning, closeInactiveSession, handleConnect]);
 
@@ -671,21 +726,41 @@ function App() {
     activateFileTab(null);
   }, [mosaicTree, activeSessionId, notifyWarning, t, activateFileTab]);
 
-  // A tab dropped onto a pane edge (mouse-driven drag): plugin tabs pin a
-  // plugin pane, session tabs pin another terminal pane.
-  const handlePaneDropTab = useCallback((
-    targetPaneId: string,
-    kind: 'session' | 'plugin',
-    tabId: string,
-    direction: 'row' | 'column'
-  ) => {
-    const paneId = kind === 'plugin' ? pluginPaneId(tabId) : sessionPaneId(tabId);
-    setMosaicTree((current) => {
-      if (current === null || getLeaves(current).includes(paneId)) return current;
-      if (countLeaves(current) >= MAX_TERMINAL_PANES) return current;
-      return addPane(current, targetPaneId, paneId, direction);
-    });
-  }, []);
+  const handlePaneDropTab = useCallback((targetPaneId: string, kind: 'session' | 'plugin' | 'file', tabId: string, direction: 'row' | 'column', side?: DockSide) => {
+    const paneId = kind === 'file' ? filePaneId(tabId) : kind === 'plugin' ? pluginPaneId(tabId) : sessionPaneId(tabId);
+    const base = getLeaves(treeRef.current).includes(targetPaneId) ? treeRef.current : targetPaneId;
+    const next = dockPane(base, targetPaneId, paneId, side ?? (direction === 'row' ? 'right' : 'bottom'));
+    if (next === base && targetPaneId !== paneId) {
+      notifyWarning(t('session.splitLimitTitle'), t('session.splitLimitMessage'));
+      return;
+    }
+    treeRef.current = next;
+    focusedPaneRef.current = paneId;
+    setMosaicTree(next);
+    activateWorkspacePane(paneId);
+  }, [notifyWarning, t]);
+
+  dockReceiverRef.current = (snapshot, placement) => {
+    const id = detachTargetKey(snapshot.target);
+    const current = treeRef.current;
+    const base = placement && !getLeaves(current).includes(placement.paneId) ? placement.paneId : current;
+    const next = placement ? dockPane(base, placement.paneId, id, placement.side)
+      : getLeaves(current).includes(id) ? current
+      : countLeaves(current) > 1 ? replaceLeaf(current, focusedPaneRef.current && getLeaves(current).includes(focusedPaneRef.current) ? focusedPaneRef.current : getLeaves(current)[0], id)
+      : id;
+    if (placement && next === base && !getLeaves(base).includes(id)) {
+      notifyWarning(t('session.splitLimitTitle'), t('session.splitLimitMessage'));
+      return false;
+    }
+    hydrateTransfer(snapshot);
+    releaseDetached(snapshot.target);
+    treeRef.current = next;
+    focusedPaneRef.current = id;
+    setMosaicTree(next);
+    activateWorkspacePane(id);
+    try { saveWorkspaceLayout(next, id); } catch (error) { notifyError(t('workspaceLayout.saveFailed'), String(error)); }
+    return true;
+  };
 
   const handleOpenPluginTab = useCallback((pluginId: string) => {
     const session = activeSession ?? sessions.find((candidate) => candidate.state === 'connected');
@@ -723,6 +798,16 @@ function App() {
       title: session.serverName,
     });
   }, []);
+
+  const handleSaveLayout = useCallback(async () => {
+    if (!workspaceReady) return;
+    try {
+      saveWorkspaceLayout(treeRef.current, focusedPaneRef.current);
+      workspaceInitialized.current = true;
+      if ('__TAURI_INTERNALS__' in window) await withDeadline(captureWindowGeometry('main'), 1500, 'Window geometry capture timed out');
+      useNotificationStore.getState().success(t('workspaceLayout.saved'), t('workspaceLayout.savedDescription'));
+    } catch (error) { notifyError(t('workspaceLayout.saveFailed'), String(error)); }
+  }, [workspaceReady, notifyError, t]);
 
   const handleQuickCommand = useCallback(() => {
     setIsQuickCommandOpen(true);
@@ -815,6 +900,7 @@ function App() {
     if (!sessionToClose) return;
 
     const sessionId = sessionToClose;
+    if (!canCloseWorkspaceSession(sessionId)) { setSessionToClose(null); return; }
     const session = sessions.find((s) => s.id === sessionId);
     setSessionToClose(null);
 
@@ -850,10 +936,9 @@ function App() {
   );
   const activePluginTabPinned = activePluginTab !== null
     && pluginPaneLeaves.has(pluginPaneId(activePluginTab.id));
-  // The terminal mosaic is hidden behind file tabs and behind an unpinned
-  // plugin tab (a pinned plugin already lives inside the mosaic itself).
-  const terminalAreaHidden = activeFileTab !== null
-    || (activePluginTab !== null && !activePluginTabPinned);
+  const filePaneLeaves = new Set(getLeaves(mosaicTree).filter((leaf) => parsePaneId(leaf).kind === 'file'));
+  const terminalAreaHidden = (activeFileTab !== null && !filePaneLeaves.has(filePaneId(activeFileTab.id)) && !detachedOwners[filePaneId(activeFileTab.id)])
+    || (activePluginTab !== null && !activePluginTabPinned && !detachedOwners[pluginPaneId(activePluginTab.id)]);
 
   return (
     <div className="app-shell h-screen flex flex-col bg-tokyo-bg">
@@ -912,6 +997,7 @@ function App() {
               onReconnectSession={handleReconnectSession}
               onOpenSessionInWindow={handleOpenSessionInWindow}
               onPaneDropTab={handlePaneDropTab}
+              onSaveLayout={() => { void handleSaveLayout(); }}
               rightActions={(
                 runtimeCapabilities.isMobile || isCompactWorkspace ? (
                   <MobileWorkspaceActions
@@ -1132,19 +1218,26 @@ function App() {
             />
 
             <div className="relative flex min-h-0 flex-1">
-              <div className="flex min-w-0 flex-1 flex-col">
-                {fileTabs.map((tab) => (
-                  <div key={tab.id} className={cn('min-h-0 flex-1', activeFileTabId === tab.id ? 'block' : 'hidden')}>
+              <div className="workspace-return-zone flex min-w-0 flex-1 flex-col" onMouseDownCapture={(event) => {
+                const pane = (event.target as Element).closest<HTMLElement>('[data-pane-id]');
+                if (pane?.dataset.paneId) {
+                  focusedPaneRef.current = pane.dataset.paneId;
+                  activateWorkspacePane(pane.dataset.paneId);
+                }
+              }}>
+                {fileTabs.filter((tab) => !filePaneLeaves.has(filePaneId(tab.id)) && !detachedOwners[filePaneId(tab.id)]).map((tab) => (
+                  <div key={tab.id} data-pane-id={filePaneId(tab.id)} className={cn('relative min-h-0 flex-1', activeFileTabId === tab.id ? 'block' : 'hidden')}>
                     <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
                       <FileWorkspace tab={tab} isActive={activeFileTabId === tab.id} />
                     </Suspense>
                   </div>
                 ))}
-                {pluginTabs.map((tab) => (
+                {pluginTabs.filter((tab) => !pluginPaneLeaves.has(pluginPaneId(tab.id)) && !detachedOwners[pluginPaneId(tab.id)]).map((tab) => (
                   <div
+                    data-pane-id={pluginPaneId(tab.id)}
                     key={tab.id}
                     className={cn(
-                      'min-h-0 flex-1',
+                      'relative min-h-0 flex-1',
                       activePluginTabId === tab.id && activeFileTab === null && !pluginPaneLeaves.has(pluginPaneId(tab.id))
                         ? 'block'
                         : 'hidden'
@@ -1161,14 +1254,29 @@ function App() {
                   </div>
                 ))}
                 <div className={cn('min-h-0 flex-1 flex-col', terminalAreaHidden ? 'hidden' : 'flex')}>
-                  {sessions.length > 0 ? (
+                  {sessions.length > 0 || mosaicTree !== null ? (
                     <>
                     <div className="mosaic-container relative min-h-0 flex-1 p-2">
                       <Mosaic<string>
                         value={mosaicTree}
-                        onChange={(node) => setMosaicTree(node)}
+                        onChange={(node) => { treeRef.current = node; setMosaicTree(node); }}
+                        zeroStateView={<div className="workspace-return-zone flex h-full items-center justify-center p-8 text-center text-sm text-tokyo-comment">{t(workspaceReady ? 'workspaceLayout.empty' : 'common.loading')}</div>}
                         renderTile={(id: string, path: MosaicBranch[]) => {
                           const pane = parsePaneId(id);
+                          if (detachedOwners[id] || !workspaceReady) return <div className="h-full bg-tokyo-bg" />;
+                          if (pane.kind === 'file') {
+                            const tab = fileTabs.find((candidate) => candidate.id === pane.id);
+                            if (!tab) return <div />;
+                            return (
+                              <MosaicWindow<string> path={path} title={`${tab.dirty ? '● ' : ''}${tab.name}`} draggable
+                                toolbarControls={[
+                                  <button key="detach" className="icon-button h-5 w-5" aria-label={t('workspaceLayout.detach')} title={t('workspaceLayout.detach')} onClick={() => { void openDetachedWindow({ kind: 'file', sessionId: tab.sessionId, path: tab.path, name: tab.name, size: tab.size }); }}><ExternalLink className="h-3 w-3" /></button>,
+                                  ...(canRemoveTerminalPane ? [<button key="close" className="icon-button h-5 w-5" onClick={() => handleRemoveTerminalPane(id)} aria-label={t('session.removePane', { name: tab.name })}><X className="h-3 w-3" /></button>] : []),
+                                ]}>
+                                <PaneDropZone paneId={id}><Suspense fallback={<div className="h-full bg-tokyo-bg" />}><FileWorkspace tab={tab} isActive={activeFileTabId === tab.id} /></Suspense></PaneDropZone>
+                              </MosaicWindow>
+                            );
+                          }
 
                           if (pane.kind === 'plugin') {
                             const tab = pluginTabs.find((candidate) => candidate.id === pane.id);

@@ -54,6 +54,23 @@ describe('TitleBar window controls', () => {
 
   afterEach(cleanup);
 
+  it('never probes AppKit zoom state for macOS titlebar controls', async () => {
+    render(<TitleBar />);
+    await waitFor(() => expect(listenMock).toHaveBeenCalled());
+    expect(windowApi.isFullscreen).toHaveBeenCalled();
+    expect(windowApi.isMaximized).not.toHaveBeenCalled();
+  });
+
+  it('coalesces resize bursts into one native state read', async () => {
+    render(<TitleBar />);
+    await waitFor(() => expect(listenMock).toHaveBeenCalled());
+    const onResize = listenMock.mock.calls[0][1];
+    windowApi.isFullscreen.mockClear();
+    for (let index = 0; index < 100; index++) onResize();
+    await waitFor(() => expect(windowApi.isFullscreen).toHaveBeenCalledTimes(1));
+    expect(windowApi.isMaximized).not.toHaveBeenCalled();
+  });
+
   it('uses native fullscreen for the macOS green button', async () => {
     render(<TitleBar />);
 

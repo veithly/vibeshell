@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useCustomTheme } from './useCustomTheme';
 import { useSettingsStore, themes } from '../stores/settingsStore';
 
 /**
@@ -66,4 +67,6 @@ export function useThemeSync(): void {
       ? 'light'
       : 'dark';
   }, [settings.appearance.theme]);
+
+  useCustomTheme(settings.appearance.theme);
 }

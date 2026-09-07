@@ -1,0 +1,27 @@
+.vibe-markdown { height: 100%; overflow: auto; padding: clamp(1rem, 3vw, 2.5rem); color: var(--tokyo-fg); line-height: 1.75; overflow-wrap: anywhere; }
+.vibe-markdown > * { max-width: 76ch; margin: 0 auto 1rem; }
+.vibe-markdown h1 { font-size: 2rem; line-height: 1.25; font-weight: 700; }
+.vibe-markdown h2 { font-size: 1.5rem; font-weight: 650; }
+.vibe-markdown h3 { font-size: 1.2rem; font-weight: 650; }
+.vibe-markdown h4, .vibe-markdown h5, .vibe-markdown h6 { font-weight: 650; }
+.vibe-markdown :is(h1,h2,h3) { margin-top: 1.5rem; text-wrap: balance; }
+.vibe-markdown p { white-space: pre-line; }
+.vibe-markdown a { color: var(--tokyo-blue); text-decoration: underline; text-underline-offset: 3px; }
+.vibe-markdown ul { list-style: disc; padding-inline-start: 1.5rem; }
+.vibe-markdown ol { list-style: decimal; padding-inline-start: 1.5rem; }
+.vibe-markdown li { margin-block: 0.25rem; }
+.vibe-markdown code { font-family: ui-monospace, monospace; font-size: 0.9em; background: var(--tokyo-bg-hl); padding: 0.12em 0.3em; border-radius: 3px; }
+.vibe-markdown pre { padding: 1rem; overflow: auto; background: var(--tokyo-bg-dark); border-radius: 6px; white-space: pre; }
+.vibe-markdown pre code { background: none; padding: 0; }
+.vibe-markdown blockquote { background: var(--tokyo-bg-hl); padding: 1rem 1.25rem; border-radius: 6px; }
+.vibe-markdown blockquote > :last-child { margin-bottom: 0; }
+.vibe-markdown img { max-width: 100%; height: auto; display: block; margin-block: 1rem; }
+.vibe-markdown hr { border: 0; border-top: 1px solid var(--tokyo-bg-hl); }
+.markdown-table { overflow: auto; }
+.vibe-markdown table { width: 100%; border-collapse: collapse; text-align: start; }
+.vibe-markdown th, .vibe-markdown td { padding: 0.5rem 0.75rem; border: 1px solid var(--tokyo-bg-hl); }
+.vibe-markdown th { background: var(--tokyo-bg-dark); font-weight: 650; }
+.markdown-workspace { display: flex; min-height: 0; flex: 1; }
+.markdown-workspace > * { min-width: 0; flex: 1; }
+.markdown-workspace.is-split > :last-child { border-inline-start: 1px solid var(--tokyo-bg-hl); }
+@media (max-width: 640px) { .markdown-workspace.is-split { flex-direction: column; } .markdown-workspace.is-split > :last-child { border-inline-start: 0; border-top: 1px solid var(--tokyo-bg-hl); } }

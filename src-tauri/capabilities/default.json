@@ -48,6 +48,19 @@
     "core:window:allow-inner-size",
     "core:window:allow-set-title",
     "core:window:allow-cursor-position",
-    "core:window:allow-set-position"
+    "core:window:allow-set-position",
+    "core:webview:allow-get-all-webviews",
+    "core:window:allow-get-all-windows",
+    "core:event:allow-emit-to",
+    "core:window:allow-inner-position",
+    "core:window:allow-scale-factor",
+    "core:window:allow-set-size",
+    "core:window:allow-available-monitors",
+    "core:window:allow-destroy",
+    "core:window:allow-unminimize"
+  ],
+  "webviews": [
+    "main",
+    "detach-*"
   ]
 }

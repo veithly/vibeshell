@@ -125,10 +125,9 @@ fn emit_session_output_event(app: &AppHandle, session_id: &str, data: Vec<u8>) {
     let _ = app.emit("session-output", event);
 }
 
-async fn emit_replay_output(app: &AppHandle, session: &Arc<Session>) {
-    let session_id = session.id.clone();
+async fn emit_replay_output(webview: &tauri::WebviewWindow, session: &Arc<Session>) {
     for data in session.replay_output().await {
-        emit_session_output_event(app, &session_id, data);
+        let _ = webview.emit_to(webview.label(), "session-output", SessionOutputEvent { session_id: session.id.clone(), data });
     }
 }
 
@@ -632,6 +631,7 @@ pub async fn session_resize(
 #[tauri::command]
 pub async fn session_attach(
     app: AppHandle,
+    webview: tauri::WebviewWindow,
     manager: State<'_, Arc<SessionManager>>,
     access_state: State<'_, Arc<SessionAccessState>>,
     request: SessionIdRequest,
@@ -653,7 +653,7 @@ pub async fn session_attach(
     session.attach().await;
 
     // Replay buffered output so late listeners still receive the initial prompt/MOTD.
-    emit_replay_output(&app, &session).await;
+    emit_replay_output(&webview, &session).await;
 
     // Ensure future output continues flowing to the frontend without duplicate forwarders.
     ensure_session_output_forwarder(app, session.clone()).await;

@@ -23,6 +23,7 @@ import {
   type CreateCloudSyncVaultInput,
 } from '../../stores/cloudSyncStore';
 import { IntegrationCard } from './IntegrationCard';
+import { CustomThemeEditor } from './CustomThemeEditor';
 import {
   Monitor,
   Palette,
@@ -1242,6 +1243,8 @@ export function Settings() {
             </div>
           )}
         </SettingRow>
+
+        <CustomThemeEditor />
 
         <SettingRow label={t('settings.windowOpacity')} description={t('settings.windowOpacityDesc')}>
           <Slider

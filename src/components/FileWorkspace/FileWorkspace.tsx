@@ -30,6 +30,8 @@ import { useNotificationStore } from '../../stores/notificationStore';
 import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
 import { FileIcon, getSyntaxLanguage } from '../SftpPanel/FileIcon';
 import { CodeEditor } from './CodeEditor';
+import { MarkdownPreview } from './MarkdownPreview';
+import { readTextBuffer, writeTextBuffer, subscribeTextBuffer, isTextBufferLocked, isTextBufferSaving, beginTextSave, endTextSave, type TextEditBuffer } from '../../lib/fileEditBuffer';
 
 interface SftpFileContent {
   content: string;
@@ -82,12 +84,31 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
   const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
+  const markdown = /\.(md|markdown|mdx)$/i.test(tab.name);
+  const [documentMode, setDocumentMode] = useState<'source' | 'preview' | 'split'>(markdown ? 'preview' : 'source');
   const textContentRef = useRef('');
+  const recoveryWarningRef = useRef(false);
+  const loadGeneration = useRef(0);
+  const [isTransferring, setIsTransferring] = useState(isTextBufferLocked(tab.id));
 
   const { id, sessionId, path, name, kind } = tab;
+  const local = tab.source === 'local';
   const listableArchive = kind === 'archive' && isArchiveListable(name);
 
-  const loadFile = useCallback(async () => {
+  const loadFile = useCallback(async (reload = false) => {
+    if (reload && isTextBufferLocked(id)) return;
+    const generation = ++loadGeneration.current;
+    const buffer = !reload && kind === 'text' ? readTextBuffer(id) : null;
+    if (buffer) {
+      setContent({ content: buffer.text, isBinary: false, size: buffer.size, truncated: buffer.truncated, mimeType: buffer.mimeType });
+      setTextContent(buffer.text);
+      textContentRef.current = buffer.text;
+      setSavedTextContent(buffer.saved);
+      setDirty(id, buffer.text !== buffer.saved);
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
     setError(null);
     setArchiveError(null);
     setArchiveEntries([]);
@@ -104,7 +125,7 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
 
     setIsLoading(true);
     try {
-      const result = await safeInvoke<SftpFileContent>('sftp_read_file', {
+      const result = await safeInvoke<SftpFileContent>(local ? 'local_file_read' : 'sftp_read_file', {
         request: {
           sessionId,
           path,
@@ -112,12 +133,15 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
           maxSize: viewerLimit(kind),
         },
       });
+      if (generation !== loadGeneration.current) return;
       if (!result.success) throw new Error(result.error.message);
 
       if (kind === 'text') {
         setContent(result.data);
         setTextContent(result.data.content);
         setSavedTextContent(result.data.content);
+        textContentRef.current = result.data.content;
+        writeTextBuffer(id, { text: result.data.content, saved: result.data.content, truncated: result.data.truncated, size: result.data.size, mimeType: result.data.mimeType });
         setDirty(id, false);
       } else if (result.data.isBinary) {
         setContent({ ...result.data, content: '' });
@@ -142,11 +166,27 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [id, kind, name, path, sessionId, setDirty, t]);
+  }, [id, kind, local, name, path, sessionId, setDirty, t]);
 
   useEffect(() => {
     void loadFile();
+    return () => { loadGeneration.current++; };
   }, [loadFile]);
+
+  useEffect(() => {
+    const sync = () => {
+      setIsTransferring(isTextBufferLocked(id));
+      setIsSaving(isTextBufferSaving(id));
+      const buffer = readTextBuffer(id);
+      if (!buffer) return;
+      textContentRef.current = buffer.text;
+      setTextContent(buffer.text);
+      setSavedTextContent(buffer.saved);
+      setDirty(id, buffer.text !== buffer.saved);
+    };
+    sync();
+    return subscribeTextBuffer(id, sync);
+  }, [id, setDirty]);
 
   useEffect(() => {
     textContentRef.current = textContent;
@@ -167,24 +207,27 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
   }, [binaryBytes, content, kind, name]);
 
   const saveFile = useCallback(async () => {
-    if (kind !== 'text' || isSaving || textContent === savedTextContent || content?.truncated) return;
-    const contentToSave = textContent;
+    if (kind !== 'text' || isSaving || textContent === savedTextContent || content?.truncated || !beginTextSave(id)) return;
+    const contentToSave = textContentRef.current;
     setIsSaving(true);
     try {
-      const result = await safeInvoke('sftp_write_file', {
-        request: { sessionId, path, content: contentToSave },
+      const result = await safeInvoke(local ? 'local_file_write' : 'sftp_write_file', {
+        request: { sessionId, path, content: contentToSave, ...(local ? { expectedContent: savedTextContent } : {}) },
       });
       if (!result.success) throw new Error(result.error.message);
       setSavedTextContent(contentToSave);
-      setDirty(id, textContentRef.current !== contentToSave);
+      const latest = readTextBuffer(id);
+      if (latest) writeTextBuffer(id, { ...latest, saved: contentToSave });
+      setDirty(id, (latest?.text ?? textContentRef.current) !== contentToSave);
       notifySuccess(t('fileWorkspace.saved'), t('fileWorkspace.savedMessage', { name }));
     } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : t('fileWorkspace.saveFailed');
       notifyError(t('fileWorkspace.saveFailed'), message);
     } finally {
+      endTextSave(id);
       setIsSaving(false);
     }
-  }, [content?.truncated, id, isSaving, kind, name, notifyError, notifySuccess, path, savedTextContent, sessionId, setDirty, t, textContent]);
+  }, [content?.truncated, id, isSaving, kind, local, name, notifyError, notifySuccess, path, savedTextContent, sessionId, setDirty, t, textContent]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -221,7 +264,7 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
 
   const handleReload = useCallback(() => {
     if (tab.dirty && !window.confirm(t('fileWorkspace.discardChanges'))) return;
-    void loadFile();
+    void loadFile(true);
   }, [loadFile, t, tab.dirty]);
 
   const filteredArchiveEntries = useMemo(() => {
@@ -261,16 +304,26 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
               {t('fileWorkspace.truncated')}
             </div>
           )}
-          <div className="min-h-0 flex-1">
+          <div className={cn('markdown-workspace', documentMode === 'split' && 'is-split')}>
+            {(!markdown || documentMode !== 'preview') && <div className="min-h-0 flex-1">
             <CodeEditor
               value={textContent}
               language={getSyntaxLanguage(name)}
-              readOnly={content?.truncated}
+              readOnly={content?.truncated || isTransferring}
               onChange={(value) => {
+                if (isTextBufferLocked(id)) return;
+                textContentRef.current = value;
                 setTextContent(value);
+                const buffer: TextEditBuffer = { text: value, saved: savedTextContent, truncated: content?.truncated ?? false, size: content?.size ?? tab.size, mimeType: content?.mimeType ?? 'text/plain' };
+                if (!writeTextBuffer(id, buffer) && !recoveryWarningRef.current) {
+                  recoveryWarningRef.current = true;
+                  notifyError(t('fileWorkspace.unsaved'), t('workspaceLayout.recoveryStorageFull'));
+                }
                 setDirty(id, value !== savedTextContent);
               }}
             />
+            </div>}
+            {markdown && documentMode !== 'source' && <MarkdownPreview text={textContent} tab={tab} />}
           </div>
         </div>
       );
@@ -379,7 +432,7 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-tokyo-bg" aria-label={t('fileWorkspace.title')}>
-      <header className="flex h-12 flex-shrink-0 items-center gap-3 border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-3">
+      <header className="flex min-h-12 flex-wrap flex-shrink-0 items-center gap-3 border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-3">
         <FileIcon filename={name} isDirectory={false} size="lg" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -389,6 +442,11 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
           <div className="truncate font-mono text-[10px] text-tokyo-comment" title={path}>{path}</div>
         </div>
         <span className="hidden text-xs text-tokyo-comment sm:inline">{formatFileSize(content?.size ?? tab.size)}</span>
+        {markdown && <div className="flex gap-1" role="group" aria-label={t('markdown.mode')}>
+          {(['source', 'preview', 'split'] as const).map(mode => <button type="button" key={mode}
+            className={cn('workspace-action', documentMode === mode && 'is-active')}
+            aria-pressed={documentMode === mode} onClick={() => setDocumentMode(mode)}>{t(`localFiles.${mode}`)}</button>)}
+        </div>}
         {kind === 'text' && (
           <button
             onClick={() => { void saveFile(); }}
@@ -405,7 +463,7 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
             <RefreshCw className="h-4 w-4" />
           </button>
         )}
-        {pathTransferEnabled && (
+        {pathTransferEnabled && !local && (
           <button className="icon-button" onClick={() => { void downloadFile(); }} aria-label={t('common.download')} title={t('common.download')}>
             <Download className="h-4 w-4" />
           </button>

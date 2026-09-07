@@ -1,9 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { nativeUiBridge } from './scripts/native-ui-bridge';
+import { documentUiSmoke } from './scripts/document-ui-smoke';
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), ...(process.env.VIBESHELL_UI_SMOKE === 'run' ? [nativeUiBridge()] : []),
+    ...(process.env.VIBESHELL_DOCUMENT_SMOKE === 'run' ? [documentUiSmoke()] : [])],
 
   // Use relative paths for Tauri's file:// protocol
   base: './',

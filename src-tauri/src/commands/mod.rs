@@ -25,6 +25,8 @@ pub mod sftp;
 pub mod snippet;
 pub mod ssh_import;
 pub mod tunnel;
+pub mod workspace_window;
+pub mod local_files;
 
 pub use agent::*;
 pub use app::*;
