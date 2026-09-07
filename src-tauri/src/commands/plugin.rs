@@ -110,7 +110,7 @@ pub async fn plugin_export(
 ) -> Result<Option<String>, String> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        let _ = db;
+        let _ = (&db, &request);
         return Err("Plugin manifest export is unavailable on mobile".to_string());
     }
 

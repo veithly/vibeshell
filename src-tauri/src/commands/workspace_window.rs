@@ -45,9 +45,13 @@ fn buttons() -> (Option<bool>, bool) {
     unsafe { (Some(GetAsyncKeyState(0x01) < 0), GetAsyncKeyState(0x1B) < 0) }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(all(
+    not(any(target_os = "android", target_os = "ios")),
+    not(any(target_os = "macos", target_os = "windows"))
+))]
 fn buttons() -> (Option<bool>, bool) { (None, false) }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub fn workspace_pointer_state(window: tauri::Window) -> Result<WorkspacePointerState, String> {
     if window.label() != "main" && !window.label().starts_with("detach-") {
@@ -56,6 +60,12 @@ pub fn workspace_pointer_state(window: tauri::Window) -> Result<WorkspacePointer
     let point = window.cursor_position().map_err(|error| error.to_string())?;
     let (primary_down, escape_down) = buttons();
     Ok(WorkspacePointerState { x: point.x, y: point.y, primary_down, escape_down })
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[tauri::command]
+pub fn workspace_pointer_state(_window: tauri::Window) -> Result<WorkspacePointerState, String> {
+    Err("Workspace window dragging is unavailable on mobile".into())
 }
 
 #[tauri::command]

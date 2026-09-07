@@ -6,7 +6,9 @@ use std::sync::Arc;
 use serde::Deserialize;
 use tauri::State;
 
-use crate::mcp::approval::{ApprovalStatus, AUTO_APPROVE_UNTIL_KEY};
+use crate::mcp::approval::ApprovalStatus;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::mcp::approval::AUTO_APPROVE_UNTIL_KEY;
 use crate::mcp::guard::{GuardConfig, GUARD_CONFIG_KEY};
 use crate::storage::Database;
 

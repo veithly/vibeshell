@@ -510,13 +510,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { ref urls } = event {
                 commands::local_files::queue_open_files(app, urls.iter().filter_map(|url| url.to_file_path().ok()));
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show(); let _ = window.unminimize(); let _ = window.set_focus();
                 }
             }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
                 if commands::workspace_window::save_handler_ready()
                     && app.get_webview_window("main").is_some()
