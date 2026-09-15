@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::database::{Database, Group};
-use super::models::{AuthType, CommandSnippet, PluginInstallation, Server};
+use super::models::{AuthType, CommandSnippet, ConnectionKind, PluginInstallation, Server};
 
 pub const SYNC_CHANGE_SCHEMA_VERSION: u32 = 1;
 
@@ -658,6 +658,8 @@ pub(super) fn record_server_upsert(
         jump_host_id: server.jump_host_id.clone(),
         post_login_command: server.post_login_command.clone(),
         agent_forwarding: server.agent_forwarding,
+        connection_kind: server.connection_kind,
+        teleport_proxy: server.teleport_proxy.clone(),
     };
     record_local_upsert(
         conn,
@@ -1536,8 +1538,9 @@ fn apply_remote_server(conn: &Connection, id: &str, mut server: ServerSyncPayloa
     conn.execute(
         r#"INSERT INTO servers
            (id, name, host, port, username, auth_type, credential_id, group_id, tags,
-            created_at, updated_at, jump_host_id, post_login_command, agent_forwarding)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            created_at, updated_at, jump_host_id, post_login_command, agent_forwarding,
+            connection_kind, teleport_proxy)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
            ON CONFLICT(id) DO UPDATE SET
                name = excluded.name,
                host = excluded.host,
@@ -1550,7 +1553,9 @@ fn apply_remote_server(conn: &Connection, id: &str, mut server: ServerSyncPayloa
                updated_at = excluded.updated_at,
                jump_host_id = excluded.jump_host_id,
                post_login_command = excluded.post_login_command,
-               agent_forwarding = excluded.agent_forwarding"#,
+               agent_forwarding = excluded.agent_forwarding,
+               connection_kind = excluded.connection_kind,
+               teleport_proxy = excluded.teleport_proxy"#,
         params![
             id,
             server.name,
@@ -1565,6 +1570,8 @@ fn apply_remote_server(conn: &Connection, id: &str, mut server: ServerSyncPayloa
             server.jump_host_id,
             server.post_login_command,
             server.agent_forwarding as i32,
+            connection_kind_to_string(&server.connection_kind),
+            server.teleport_proxy,
         ],
     )?;
     Ok(())
@@ -1607,17 +1614,19 @@ fn synced_grant_permissions(installation: &PluginInstallationSyncPayload) -> Res
             .map_err(|error| anyhow!("Synced external plugin manifest is invalid: {error}"))?;
             manifest.permissions
         }
-        _ => crate::plugins::builtin_catalog()
-            .map_err(|error| anyhow!("Built-in plugin catalog is invalid: {error}"))?
-            .into_iter()
-            .find(|manifest| manifest.id == installation.plugin_id)
-            .ok_or_else(|| {
-                anyhow!(
-                    "Synced built-in plugin {} is unknown on this device",
-                    installation.plugin_id
-                )
-            })?
-            .permissions,
+        _ => {
+            crate::plugins::builtin_catalog()
+                .map_err(|error| anyhow!("Built-in plugin catalog is invalid: {error}"))?
+                .into_iter()
+                .find(|manifest| manifest.id == installation.plugin_id)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Synced built-in plugin {} is unknown on this device",
+                        installation.plugin_id
+                    )
+                })?
+                .permissions
+        }
     };
 
     serde_json::to_string(&permissions).map_err(|error| anyhow!("Failed to encode grants: {error}"))
@@ -1683,7 +1692,8 @@ fn reference_is_tombstoned(
     conn: &Connection,
     entity_kind: SyncEntityKind,
     entity_id: Option<&str>,
-) -> Result<bool> {    let Some(entity_id) = entity_id else {
+) -> Result<bool> {
+    let Some(entity_id) = entity_id else {
         return Ok(false);
     };
     Ok(entity_state(conn, entity_kind, entity_id)?
@@ -1807,7 +1817,7 @@ fn current_domain_payload(
                 .query_row(
                     r#"SELECT name, host, port, username, auth_type, group_id, tags,
                               created_at, updated_at, jump_host_id, post_login_command,
-                              agent_forwarding
+                              agent_forwarding, connection_kind, teleport_proxy
                        FROM servers WHERE id = ?1"#,
                     [entity_id],
                     |row| {
@@ -1826,6 +1836,11 @@ fn current_domain_payload(
                             jump_host_id: row.get(9).unwrap_or(None),
                             post_login_command: row.get(10).unwrap_or(None),
                             agent_forwarding: row.get::<_, i32>(11).unwrap_or(0) != 0,
+                            connection_kind: string_to_connection_kind(
+                                &row.get::<_, String>(12)
+                                    .unwrap_or_else(|_| "ssh".to_string()),
+                            ),
+                            teleport_proxy: row.get(13).unwrap_or(None),
                         })
                     },
                 )
@@ -1941,7 +1956,8 @@ fn bootstrap_servers(conn: &Connection) -> Result<()> {
     let servers = {
         let mut stmt = conn.prepare(
             r#"SELECT id, name, host, port, username, auth_type, group_id, tags,
-                      created_at, updated_at, jump_host_id, post_login_command, agent_forwarding
+                      created_at, updated_at, jump_host_id, post_login_command, agent_forwarding,
+                      connection_kind, teleport_proxy
                FROM servers"#,
         )?;
         let rows = stmt.query_map([], |row| {
@@ -1962,6 +1978,11 @@ fn bootstrap_servers(conn: &Connection) -> Result<()> {
                     jump_host_id: row.get(10).unwrap_or(None),
                     post_login_command: row.get(11).unwrap_or(None),
                     agent_forwarding: row.get::<_, i32>(12).unwrap_or(0) != 0,
+                    connection_kind: string_to_connection_kind(
+                        &row.get::<_, String>(13)
+                            .unwrap_or_else(|_| "ssh".to_string()),
+                    ),
+                    teleport_proxy: row.get(14).unwrap_or(None),
                 },
             ))
         })?;
@@ -2069,6 +2090,10 @@ struct ServerSyncPayload {
     jump_host_id: Option<String>,
     post_login_command: Option<String>,
     agent_forwarding: bool,
+    #[serde(default)]
+    connection_kind: ConnectionKind,
+    #[serde(default)]
+    teleport_proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2127,6 +2152,20 @@ fn string_to_auth_type(value: &str) -> AuthType {
     }
 }
 
+fn connection_kind_to_string(kind: &ConnectionKind) -> &'static str {
+    match kind {
+        ConnectionKind::Ssh => "ssh",
+        ConnectionKind::Teleport => "teleport",
+    }
+}
+
+fn string_to_connection_kind(value: &str) -> ConnectionKind {
+    match value {
+        "teleport" => ConnectionKind::Teleport,
+        _ => ConnectionKind::Ssh,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -2161,6 +2200,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: Some("uptime".to_string()),
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         }
     }
 
@@ -2358,7 +2399,9 @@ mod tests {
         );
 
         // Deleting emits a tombstone like every other entity.
-        database.plugin_installation_delete("docker-containers").unwrap();
+        database
+            .plugin_installation_delete("docker-containers")
+            .unwrap();
         pending(&database)
             .into_iter()
             .find(|change| {
@@ -3564,8 +3607,7 @@ mod tests {
         let (_dir, database) = test_database();
         // Leave a real scheduling margin: validation samples `now` after this line,
         // so a +1 ms boundary makes the test race the wall clock on slower CI hosts.
-        let too_far_future =
-            Utc::now().timestamp_millis() + MAX_REMOTE_CLOCK_SKEW_MILLIS + 60_000;
+        let too_far_future = Utc::now().timestamp_millis() + MAX_REMOTE_CLOCK_SKEW_MILLIS + 60_000;
         let future = remote_upsert(
             SyncEntityKind::Group,
             "future-group",

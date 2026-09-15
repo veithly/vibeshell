@@ -24,10 +24,11 @@ Resolve the native executable in this order: `vibeshell` from `PATH`, `$HOME/.lo
 vibeshell servers add root@prod.example.com --name prod-web
 SSH_PASSWORD=... vibeshell servers add root@prod.example.com --name prod-web
 vibeshell servers add ubuntu@10.0.0.8:2222 --identity ~/.ssh/id_ed25519 --jump bastion --agent-forwarding
+vibeshell servers add alice@web-1 --type teleport --proxy teleport.example.com:443
 vibeshell servers delete prod-web
 ```
 
-Display name defaults to the host. Secrets must not appear on the command line.
+Display name defaults to the host. Secrets must not appear on the command line. Teleport nodes use `tsh` from PATH after `tsh login --proxy=...`.
 
 ## Import existing SSH configurations
 
@@ -50,6 +51,7 @@ vibeshell import openssh
 vibeshell import openssh --path ~/.ssh/config
 vibeshell import tabby --path ~/.config/tabby/config.yaml
 vibeshell import putty --path ~/putty-sessions.reg
+vibeshell import teleport
 ```
 
 Use `--json` when structured output is more useful. Never import or expose plaintext passwords from third-party profiles. VibeShell may reference an existing private-key path and reads that local key only when establishing a connection.

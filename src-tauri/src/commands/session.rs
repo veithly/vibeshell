@@ -127,7 +127,14 @@ fn emit_session_output_event(app: &AppHandle, session_id: &str, data: Vec<u8>) {
 
 async fn emit_replay_output(webview: &tauri::WebviewWindow, session: &Arc<Session>) {
     for data in session.replay_output().await {
-        let _ = webview.emit_to(webview.label(), "session-output", SessionOutputEvent { session_id: session.id.clone(), data });
+        let _ = webview.emit_to(
+            webview.label(),
+            "session-output",
+            SessionOutputEvent {
+                session_id: session.id.clone(),
+                data,
+            },
+        );
     }
 }
 
@@ -392,18 +399,22 @@ pub async fn session_connect(
         }
     }
 
-    // Parse credentials based on auth type
-    let ssh_credential = match request.auth_type.as_str() {
-        "password" => SshCredential::Password(request.credential),
-        "key" => SshCredential::PrivateKey {
-            key: request.credential,
-            // Treat an empty passphrase as "no passphrase" so unencrypted
-            // keys authenticate instead of failing to decode with Some("").
-            passphrase: request
-                .passphrase
-                .filter(|passphrase| !passphrase.is_empty()),
-        },
-        _ => return Err(format!("Unknown auth type: {}", request.auth_type)),
+    let ssh_credential = if manager
+        .is_teleport_server(&request.server_name)
+        .map_err(|e| e.to_string())?
+    {
+        SshCredential::Password(String::new())
+    } else {
+        match request.auth_type.as_str() {
+            "password" => SshCredential::Password(request.credential),
+            "key" => SshCredential::PrivateKey {
+                key: request.credential,
+                passphrase: request
+                    .passphrase
+                    .filter(|passphrase| !passphrase.is_empty()),
+            },
+            _ => return Err(format!("Unknown auth type: {}", request.auth_type)),
+        }
     };
 
     // Configure PTY

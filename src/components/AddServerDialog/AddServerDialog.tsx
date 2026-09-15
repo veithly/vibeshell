@@ -16,6 +16,8 @@ const INITIAL_FORM_DATA = {
   host: '',
   port: 22,
   username: 'root',
+  connectionKind: 'ssh' as 'ssh' | 'teleport',
+  teleportProxy: '',
   // Standalone 'key' auth was removed: key-based servers always use
   // 'key_with_passphrase' with an optional (possibly empty) passphrase.
   authType: 'password' as 'password' | 'key_with_passphrase',
@@ -102,17 +104,25 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
       return;
     }
 
-    // Validate auth-specific fields
-    const isKeyAuth = formData.authType === 'key_with_passphrase';
-
-    if (isKeyAuth && !keyContent) {
-      setLocalError(isMobile ? 'Please paste an SSH private key' : 'Please select an SSH private key file');
+    const isTeleport = formData.connectionKind === 'teleport';
+    if (isTeleport && !formData.teleportProxy.trim()) {
+      setLocalError('Teleport proxy is required');
       return;
     }
 
-    if (!isKeyAuth && !formData.password) {
-      setLocalError('Password is required');
-      return;
+    // Validate auth-specific fields
+    const isKeyAuth = formData.authType === 'key_with_passphrase';
+
+    if (!isTeleport) {
+      if (isKeyAuth && !keyContent) {
+        setLocalError(isMobile ? 'Please paste an SSH private key' : 'Please select an SSH private key file');
+        return;
+      }
+
+      if (!isKeyAuth && !formData.password) {
+        setLocalError('Password is required');
+        return;
+      }
     }
 
     try {
@@ -126,14 +136,16 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
         credential_id: undefined,
         group_id: undefined,
         tags: [],
-        jump_host_id: formData.jumpHostId || undefined,
-        agent_forwarding: formData.agentForwarding,
+        jump_host_id: isTeleport ? undefined : (formData.jumpHostId || undefined),
+        agent_forwarding: isTeleport ? false : formData.agentForwarding,
         post_login_command: formData.postLoginCommand.trim() || undefined,
+        connection_kind: formData.connectionKind,
+        teleport_proxy: isTeleport ? formData.teleportProxy.trim() : undefined,
       });
 
       // Credentials entered during server creation are saved automatically on
       // desktop so the next connection does not ask for them again.
-      if (!isMobile) {
+      if (!isMobile && !isTeleport) {
         const credentialResult = await safeInvoke<string>('save_credential', {
           request: {
             serverName: createdServer.name,
@@ -187,6 +199,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
 
   const displayError = localError || error;
   const isKeyAuth = formData.authType === 'key_with_passphrase';
+  const isTeleport = formData.connectionKind === 'teleport';
 
   return (
     <div className="responsive-dialog-layer fixed inset-0 z-50 flex items-center justify-center">
@@ -225,6 +238,38 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
           <div className="space-y-4">
             <h3 className="text-sm font-medium text-tokyo-comment uppercase tracking-wider">Connection</h3>
 
+            <div>
+              <label className="block text-sm font-medium text-tokyo-fg mb-1">
+                Connection Type
+              </label>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => handleChange('connectionKind', 'ssh')}
+                  className={cn(
+                    'flex items-center justify-center gap-2 px-3 py-2 rounded-md border transition-colors cursor-pointer',
+                    formData.connectionKind === 'ssh'
+                      ? 'bg-tokyo-blue/20 border-tokyo-blue text-tokyo-blue'
+                      : 'bg-tokyo-bg border-tokyo-bg-hl text-tokyo-fg hover:border-tokyo-comment'
+                  )}
+                >
+                  SSH
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleChange('connectionKind', 'teleport')}
+                  className={cn(
+                    'flex items-center justify-center gap-2 px-3 py-2 rounded-md border transition-colors cursor-pointer',
+                    formData.connectionKind === 'teleport'
+                      ? 'bg-tokyo-cyan/20 border-tokyo-cyan text-tokyo-cyan'
+                      : 'bg-tokyo-bg border-tokyo-bg-hl text-tokyo-fg hover:border-tokyo-comment'
+                  )}
+                >
+                  Teleport
+                </button>
+              </div>
+            </div>
+
             {/* Name */}
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
@@ -255,7 +300,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                   type="text"
                   value={formData.host}
                   onChange={(e) => handleChange('host', e.target.value)}
-                  placeholder="192.168.1.1 or example.com"
+                  placeholder={isTeleport ? 'node hostname' : '192.168.1.1 or example.com'}
                   className={cn(
                     'w-full px-3 py-2 rounded-md',
                     'bg-tokyo-bg border border-tokyo-bg-hl',
@@ -264,6 +309,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                   )}
                 />
               </div>
+              {!isTeleport && (
               <div>
                 <label className="block text-sm font-medium text-tokyo-fg mb-1">
                   Port
@@ -280,12 +326,36 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                   )}
                 />
               </div>
+              )}
             </div>
+
+            {isTeleport && (
+              <div>
+                <label className="block text-sm font-medium text-tokyo-fg mb-1">
+                  Proxy
+                </label>
+                <input
+                  type="text"
+                  value={formData.teleportProxy}
+                  onChange={(e) => handleChange('teleportProxy', e.target.value)}
+                  placeholder="teleport.example.com:443"
+                  className={cn(
+                    'w-full px-3 py-2 rounded-md',
+                    'bg-tokyo-bg border border-tokyo-bg-hl',
+                    'text-tokyo-fg placeholder-tokyo-comment',
+                    'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue'
+                  )}
+                />
+                <p className="mt-1 text-xs text-tokyo-comment">
+                  Uses `tsh` from PATH. Log in first with `tsh login --proxy=...`.
+                </p>
+              </div>
+            )}
 
             {/* Username */}
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
-                Username
+                {isTeleport ? 'Unix login' : 'Username'}
               </label>
               <input
                 type="text"
@@ -303,6 +373,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
           </div>
 
           {/* Authentication Section */}
+          {!isTeleport && (
           <div className="space-y-4 pt-2 border-t border-tokyo-bg-hl">
             <h3 className="text-sm font-medium text-tokyo-comment uppercase tracking-wider pt-2">Authentication</h3>
 
@@ -480,11 +551,14 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
               </p>
             )}
           </div>
+          )}
 
           {/* Advanced Section */}
           <div className="space-y-4 pt-2 border-t border-tokyo-bg-hl">
             <h3 className="text-sm font-medium text-tokyo-comment uppercase tracking-wider pt-2">Advanced</h3>
 
+            {!isTeleport && (
+            <>
             {/* Jump Host */}
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
@@ -526,6 +600,8 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                 Enable SSH Agent Forwarding
               </label>
             </div>
+            </>
+            )}
 
             {/* Post-login Command */}
             <div>

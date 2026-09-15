@@ -172,8 +172,9 @@ pub struct SftpExtractRequest {
 
 /// Data for an active SFTP session
 pub struct SftpSessionData {
-    /// The real SFTP session (only for SSH sessions, None for local)
+    /// The real SFTP session (only for SSH sessions, None for local/Teleport)
     pub sftp: Option<SftpSession>,
+    pub teleport: Option<crate::teleport::TeleportTarget>,
     /// The user's home directory on the remote server (resolved on init)
     pub home_dir: String,
     /// Current working directory on the remote server
@@ -234,10 +235,23 @@ fn ensure_native_path_transfer_supported() -> Result<(), String> {
 pub struct SftpEntry {
     pub name: String,
     pub path: String,
+    #[serde(alias = "is_directory")]
     pub is_directory: bool,
     pub size: u64,
+    #[serde(alias = "modified_at")]
     pub modified_at: i64,
     pub permissions: String,
+}
+
+async fn teleport_blocking<T, F>(f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("Teleport task failed: {e}"))?
+        .map_err(|e| e.to_string())
 }
 
 // ==================== Helper Functions ====================
@@ -638,6 +652,7 @@ pub async fn sftp_init(
         let initial_path = local_home_dir().to_string_lossy().to_string();
         let data = Arc::new(TokioMutex::new(SftpSessionData {
             sftp: None,
+            teleport: None,
             home_dir: initial_path.clone(),
             current_path: initial_path,
             connected: true,
@@ -666,6 +681,26 @@ pub async fn sftp_init(
         .await
         .ok_or_else(|| format!("Session not found: {}", request.session_id))?;
 
+    if let Some(target) = session.teleport_target().await {
+        let home_target = target.clone();
+        let home_dir =
+            teleport_blocking(move || crate::teleport::teleport_home(&home_target)).await?;
+        let data = Arc::new(TokioMutex::new(SftpSessionData {
+            sftp: None,
+            teleport: Some(target),
+            home_dir: home_dir.clone(),
+            current_path: home_dir,
+            connected: true,
+        }));
+        let mut sessions = sftp_state.sessions.write().await;
+        sessions.insert(request.session_id.clone(), data);
+        info!(
+            "[SFTP] Teleport session initialized: {}",
+            request.session_id
+        );
+        return Ok(true);
+    }
+
     let sftp = session
         .open_sftp_session()
         .await
@@ -684,6 +719,7 @@ pub async fn sftp_init(
 
     let data = Arc::new(TokioMutex::new(SftpSessionData {
         sftp: Some(sftp),
+        teleport: None,
         home_dir: home_dir.clone(),
         current_path: home_dir,
         connected: true,
@@ -787,6 +823,26 @@ pub async fn sftp_list_dir(
 
     // SSH session - use real SFTP protocol
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let path = if request.path.is_empty() {
+                if guard.current_path.is_empty() {
+                    guard.home_dir.clone()
+                } else {
+                    guard.current_path.clone()
+                }
+            } else {
+                resolve_remote_path(&request.path, &guard.home_dir, &guard.current_path)
+            };
+            drop(guard);
+            let list_path = path.clone();
+            let entries =
+                teleport_blocking(move || crate::teleport::list_dir(&target, &list_path)).await?;
+            sftp_data.lock().await.current_path = path;
+            return Ok(entries);
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp
@@ -933,6 +989,27 @@ pub async fn sftp_download_file(
 
     // SSH session - use real SFTP protocol for binary-safe download
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let remote_path =
+                resolve_remote_path(&request.remote_path, &guard.home_dir, &guard.current_path);
+            let local_path = request.local_path.clone();
+            drop(guard);
+            teleport_blocking(move || {
+                crate::teleport::download_file(&target, &remote_path, &local_path)
+            })
+            .await?;
+            let filename = std::path::Path::new(&request.remote_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let mut progress = TransferProgress::new(filename, 0);
+            progress.status = TransferStatus::Completed;
+            return Ok(progress);
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp
@@ -1063,6 +1140,27 @@ pub async fn sftp_upload_file(
 
     // SSH session - use real SFTP protocol for binary-safe upload
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let remote_path =
+                resolve_remote_path(&request.remote_path, &guard.home_dir, &guard.current_path);
+            let local_path = request.local_path.clone();
+            drop(guard);
+            teleport_blocking(move || {
+                crate::teleport::upload_file(&target, &local_path, &remote_path)
+            })
+            .await?;
+            let filename = std::path::Path::new(&request.local_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let mut progress = TransferProgress::new(filename, 0);
+            progress.status = TransferStatus::Completed;
+            return Ok(progress);
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp
@@ -1152,6 +1250,31 @@ pub async fn sftp_upload_directory(
     }
 
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let remote_path =
+                resolve_remote_path(&request.remote_path, &guard.home_dir, &guard.current_path);
+            let local_path = request.local_path.clone();
+            drop(guard);
+            teleport_blocking(move || {
+                crate::teleport::upload_directory(&target, &local_path, &remote_path)
+            })
+            .await?;
+            return Ok(DirectoryTransferSummary {
+                mode: mode.as_str().to_string(),
+                local_root: request.local_path,
+                remote_root: request.remote_path,
+                directories_total: 1,
+                files_total: 1,
+                created_directories: 0,
+                uploaded_files: 1,
+                skipped_files: 0,
+                deleted_entries: 0,
+                transferred_bytes: 0,
+            });
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp
@@ -1218,6 +1341,14 @@ pub async fn sftp_mkdir(
     }
 
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let path = resolve_remote_path(&request.path, &guard.home_dir, &guard.current_path);
+            drop(guard);
+            return teleport_blocking(move || crate::teleport::mkdir(&target, &path)).await;
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp
@@ -1287,6 +1418,18 @@ pub async fn sftp_delete(
     }
 
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let path = resolve_remote_path(&request.path, &guard.home_dir, &guard.current_path);
+            let recursive = request.recursive.unwrap_or(false);
+            drop(guard);
+            return teleport_blocking(move || {
+                crate::teleport::delete_path(&target, &path, recursive)
+            })
+            .await;
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp
@@ -1350,6 +1493,20 @@ pub async fn sftp_rename(
     }
 
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let old_path =
+                resolve_remote_path(&request.old_path, &guard.home_dir, &guard.current_path);
+            let new_path =
+                resolve_remote_path(&request.new_path, &guard.home_dir, &guard.current_path);
+            drop(guard);
+            return teleport_blocking(move || {
+                crate::teleport::rename(&target, &old_path, &new_path)
+            })
+            .await;
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp
@@ -1459,6 +1616,14 @@ pub async fn sftp_stat(
     }
 
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let path = resolve_remote_path(&request.path, &guard.home_dir, &guard.current_path);
+            drop(guard);
+            return teleport_blocking(move || crate::teleport::stat_path(&target, &path)).await;
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp
@@ -1587,6 +1752,24 @@ pub async fn sftp_read_file(
 
     // SSH session - use real SFTP protocol (binary-safe)
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let path = resolve_remote_path(&request.path, &guard.home_dir, &guard.current_path);
+            let limit = Some(max_size);
+            drop(guard);
+            let content =
+                teleport_blocking(move || crate::teleport::read_file(&target, &path, limit))
+                    .await?;
+            return Ok(SftpFileContent {
+                content,
+                is_binary: as_binary,
+                size: 0,
+                truncated: false,
+                mime_type: get_mime_type(&request.path),
+            });
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp
@@ -1678,6 +1861,18 @@ pub async fn sftp_write_file(
     }
 
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
+    {
+        let guard = sftp_data.lock().await;
+        if let Some(target) = guard.teleport.clone() {
+            let path = resolve_remote_path(&request.path, &guard.home_dir, &guard.current_path);
+            let content = request.content.clone();
+            drop(guard);
+            return teleport_blocking(move || {
+                crate::teleport::write_file(&target, &path, &content)
+            })
+            .await;
+        }
+    }
     let guard = sftp_data.lock().await;
     let sftp = guard
         .sftp

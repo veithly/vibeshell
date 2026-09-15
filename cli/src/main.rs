@@ -287,6 +287,14 @@ struct ServerAddCliArgs {
     /// Tags (repeatable)
     #[arg(long = "tag")]
     tags: Vec<String>,
+
+    /// Connection type: ssh (default) or teleport
+    #[arg(long = "type", default_value = "ssh")]
+    connection_type: String,
+
+    /// Teleport proxy, e.g. teleport.example.com:443 (required with --type teleport)
+    #[arg(long)]
+    proxy: Option<String>,
 }
 
 #[derive(Args)]
@@ -465,6 +473,7 @@ enum ImportSourceArg {
     OpenSsh,
     Putty,
     Tabby,
+    Teleport,
 }
 
 impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
@@ -474,13 +483,14 @@ impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
             ImportSourceArg::OpenSsh => Self::OpenSsh,
             ImportSourceArg::Putty => Self::Putty,
             ImportSourceArg::Tabby => Self::Tabby,
+            ImportSourceArg::Teleport => Self::Teleport,
         }
     }
 }
 
 #[derive(Args)]
 struct ImportArgs {
-    /// Source to import: auto, openssh, putty, or tabby
+    /// Source to import: auto, openssh, putty, tabby, or teleport
     #[arg(value_enum, default_value = "auto")]
     source: ImportSourceArg,
 
@@ -618,6 +628,8 @@ fn main() -> Result<()> {
                     post_login: add.post_login,
                     group: add.group,
                     tags: add.tags,
+                    connection_kind: add.connection_type,
+                    teleport_proxy: add.proxy,
                 })
             }
             Some(ServersCommand::Delete(delete)) => commands::server::delete(&delete.name),
@@ -714,6 +726,21 @@ mod tests {
             "web",
         ]);
         assert!(parsed.is_ok(), "vibeshell servers add should parse");
+    }
+
+    #[test]
+    fn parses_servers_add_teleport() {
+        let parsed = Cli::try_parse_from([
+            "vibeshell",
+            "servers",
+            "add",
+            "alice@web-1",
+            "--type",
+            "teleport",
+            "--proxy",
+            "teleport.example.com:443",
+        ]);
+        assert!(parsed.is_ok(), "teleport servers add should parse");
     }
 
     #[test]

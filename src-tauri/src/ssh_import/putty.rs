@@ -166,6 +166,8 @@ pub(super) fn parse(
                 .map(parse_bool)
                 .unwrap_or(false),
             tags: vec!["import:putty".to_string()],
+            connection_kind: crate::storage::ConnectionKind::Ssh,
+            teleport_proxy: None,
         });
     }
 

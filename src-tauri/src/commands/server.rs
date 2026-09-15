@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::storage::database::Group;
-use crate::storage::{AuthType, Database, Server};
+use crate::storage::{AuthType, ConnectionKind, Database, Server};
 
 /// Shared add-server payload used by the GUI command and the CLI IPC path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +26,10 @@ pub struct AddServerSpec {
     pub post_login_command: Option<String>,
     #[serde(default)]
     pub agent_forwarding: bool,
+    #[serde(default)]
+    pub connection_kind: Option<String>,
+    #[serde(default)]
+    pub teleport_proxy: Option<String>,
     #[serde(default)]
     pub credential: Option<String>,
     #[serde(default)]
@@ -93,6 +97,23 @@ pub fn add_server_spec(db: &Database, spec: AddServerSpec) -> Result<Server, Str
         None
     };
 
+    let connection_kind = parse_connection_kind(spec.connection_kind.as_deref());
+    let teleport_proxy = spec
+        .teleport_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    if connection_kind == ConnectionKind::Teleport {
+        if teleport_proxy.is_none() {
+            return Err(
+                "Teleport servers require --proxy (for example teleport.example.com:443)"
+                    .to_string(),
+            );
+        }
+    }
+
     let mut new_server = Server {
         id: String::new(),
         name: name.clone(),
@@ -111,10 +132,16 @@ pub fn add_server_spec(db: &Database, spec: AddServerSpec) -> Result<Server, Str
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
         agent_forwarding: spec.agent_forwarding,
+        connection_kind,
+        teleport_proxy,
     };
 
     db.server_add(&mut new_server)
         .map_err(|e| format!("Failed to add server: {e}"))?;
+
+    if new_server.is_teleport() {
+        return Ok(new_server);
+    }
 
     if let Some(credential) = spec
         .credential
@@ -208,6 +235,12 @@ pub struct ServerInput {
     #[serde(default)]
     #[serde(alias = "agentForwarding")]
     pub agent_forwarding: bool,
+    #[serde(default)]
+    #[serde(alias = "connectionKind")]
+    pub connection_kind: Option<String>,
+    #[serde(default)]
+    #[serde(alias = "teleportProxy")]
+    pub teleport_proxy: Option<String>,
 }
 
 /// Group input from frontend
@@ -225,6 +258,13 @@ fn string_to_auth_type(s: &str) -> AuthType {
         // the key+passphrase flow (an empty passphrase means an unencrypted key).
         "key" | "key_with_passphrase" => AuthType::KeyWithPassphrase,
         _ => AuthType::Password,
+    }
+}
+
+fn parse_connection_kind(value: Option<&str>) -> ConnectionKind {
+    match value.map(str::trim).unwrap_or("ssh") {
+        "teleport" | "tsh" => ConnectionKind::Teleport,
+        _ => ConnectionKind::Ssh,
     }
 }
 
@@ -253,6 +293,8 @@ pub fn add_server(db: State<'_, Arc<Database>>, server: ServerInput) -> Result<S
             jump_host: None,
             post_login_command: server.post_login_command,
             agent_forwarding: server.agent_forwarding,
+            connection_kind: server.connection_kind,
+            teleport_proxy: server.teleport_proxy,
             credential: None,
             passphrase: None,
             key_path: None,
@@ -296,6 +338,15 @@ pub struct ServerUpdateInput {
     pub post_login_command: Option<Option<String>>,
     #[serde(alias = "agentForwarding")]
     pub agent_forwarding: Option<bool>,
+    #[serde(default)]
+    #[serde(alias = "connectionKind")]
+    pub connection_kind: Option<String>,
+    #[serde(
+        default,
+        alias = "teleportProxy",
+        deserialize_with = "deserialize_present_option"
+    )]
+    pub teleport_proxy: Option<Option<String>>,
 }
 
 fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
@@ -348,6 +399,11 @@ pub fn update_server(
         agent_forwarding: updates
             .agent_forwarding
             .unwrap_or(existing.agent_forwarding),
+        connection_kind: updates
+            .connection_kind
+            .map(|kind| parse_connection_kind(Some(&kind)))
+            .unwrap_or(existing.connection_kind),
+        teleport_proxy: updates.teleport_proxy.unwrap_or(existing.teleport_proxy),
     };
 
     db.server_update(&updated_server)
@@ -577,6 +633,8 @@ mod tests {
                 jump_host: None,
                 post_login_command: None,
                 agent_forwarding: false,
+                connection_kind: None,
+                teleport_proxy: None,
                 credential: Some("jump-secret".to_string()),
                 passphrase: None,
                 key_path: None,
@@ -599,6 +657,8 @@ mod tests {
                 jump_host: Some("bastion".to_string()),
                 post_login_command: Some("uptime".to_string()),
                 agent_forwarding: true,
+                connection_kind: None,
+                teleport_proxy: None,
                 credential: Some(
                     "-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----"
                         .to_string(),
@@ -638,6 +698,8 @@ mod tests {
                 jump_host: None,
                 post_login_command: None,
                 agent_forwarding: false,
+                connection_kind: None,
+                teleport_proxy: None,
                 credential: None,
                 passphrase: None,
                 key_path: None,

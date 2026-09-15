@@ -58,7 +58,7 @@ import { WorkspaceToolbar } from './components/WorkspaceToolbar';
 import { FingerprintVerificationDialog, FingerprintManagerDialog } from './components/FingerprintDialog';
 import { SnippetManagerDialog } from './components/SnippetManager/SnippetManagerDialog';
 import { TunnelPanelDialog } from './components/TunnelPanel/TunnelPanelDialog';
-import { useServerStore, type Server } from './stores/serverStore';
+import { useServerStore, type Server, isTeleportServer } from './stores/serverStore';
 import { useRuntimeCapabilitiesStore } from './stores/runtimeCapabilitiesStore';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { usePluginStore } from './stores/pluginStore';
@@ -545,6 +545,22 @@ function App() {
   const handleConnect = useCallback(async (server: Server, options?: { forceNew?: boolean }) => {
     console.log('[App] handleConnect called for server:', server.name);
     const forceNew = options?.forceNew ?? false;
+
+    if (isTeleportServer(server)) {
+      const session = await connectWithCredentials(
+        server.name,
+        'password',
+        '',
+        undefined,
+        80,
+        24,
+        forceNew
+      );
+      if (session) {
+        handleConnected(session.id);
+      }
+      return;
+    }
 
     const credResult = await safeInvoke<{
       id: string;

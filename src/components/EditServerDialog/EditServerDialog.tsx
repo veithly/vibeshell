@@ -25,6 +25,8 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
     host: '',
     port: 22,
     username: 'root',
+    connectionKind: 'ssh' as 'ssh' | 'teleport',
+    teleportProxy: '',
     authType: 'password' as AuthType,
     privateKeyPath: '',
     jumpHostId: '',
@@ -44,6 +46,8 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
         host: server.host,
         port: server.port,
         username: server.username,
+        connectionKind: server.connection_kind === 'teleport' ? 'teleport' : 'ssh',
+        teleportProxy: server.teleport_proxy || '',
         // Standalone 'key' auth was removed; legacy rows fall back to the
         // unified key+passphrase mode (empty passphrase = unencrypted key).
         authType: server.auth_type === 'key' ? 'key_with_passphrase' : server.auth_type,
@@ -82,6 +86,10 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
       setLocalError('Username is required');
       return;
     }
+    if (formData.connectionKind === 'teleport' && !formData.teleportProxy.trim()) {
+      setLocalError('Teleport proxy is required');
+      return;
+    }
 
     try {
       await updateServer(server.id, {
@@ -90,9 +98,11 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
         port: formData.port,
         username: formData.username.trim(),
         auth_type: formData.authType,
-        jump_host_id: formData.jumpHostId || null,
-        agent_forwarding: formData.agentForwarding,
+        jump_host_id: formData.connectionKind === 'teleport' ? null : (formData.jumpHostId || null),
+        agent_forwarding: formData.connectionKind === 'teleport' ? false : formData.agentForwarding,
         post_login_command: formData.postLoginCommand.trim() || null,
+        connection_kind: formData.connectionKind,
+        teleport_proxy: formData.connectionKind === 'teleport' ? formData.teleportProxy.trim() : null,
       });
 
       notifySuccess('Server Updated', `${formData.name} has been updated successfully.`);
@@ -122,6 +132,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
   if (!isOpen || !server) return null;
 
   const displayError = localError || error;
+  const isTeleport = formData.connectionKind === 'teleport';
 
   return (
     <div className="responsive-dialog-layer fixed inset-0 z-50 flex items-center justify-center">
@@ -172,6 +183,25 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
             />
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-tokyo-fg mb-1">
+              Connection Type
+            </label>
+            <select
+              value={formData.connectionKind}
+              onChange={(e) => handleChange('connectionKind', e.target.value)}
+              className={cn(
+                'w-full px-3 py-2 rounded-md',
+                'bg-tokyo-bg border border-tokyo-bg-hl',
+                'text-tokyo-fg',
+                'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue'
+              )}
+            >
+              <option value="ssh">SSH</option>
+              <option value="teleport">Teleport</option>
+            </select>
+          </div>
+
           {/* Host */}
           <div>
             <label className="block text-sm font-medium text-tokyo-fg mb-1">
@@ -191,8 +221,29 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
             />
           </div>
 
+          {isTeleport && (
+            <div>
+              <label className="block text-sm font-medium text-tokyo-fg mb-1">
+                Proxy
+              </label>
+              <input
+                type="text"
+                value={formData.teleportProxy}
+                onChange={(e) => handleChange('teleportProxy', e.target.value)}
+                placeholder="teleport.example.com:443"
+                className={cn(
+                  'w-full px-3 py-2 rounded-md',
+                  'bg-tokyo-bg border border-tokyo-bg-hl',
+                  'text-tokyo-fg placeholder-tokyo-comment',
+                  'focus:outline-none focus:ring-1 focus:ring-tokyo-blue focus:border-tokyo-blue'
+                )}
+              />
+            </div>
+          )}
+
           {/* Port & Username */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {!isTeleport && (
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
                 Port
@@ -209,6 +260,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
                 )}
               />
             </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">
                 Username
@@ -228,6 +280,8 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
             </div>
           </div>
 
+          {!isTeleport && (
+          <>
           {/* Auth Type */}
           <div>
             <label className="block text-sm font-medium text-tokyo-fg mb-1">
@@ -286,11 +340,15 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
               </p>
             </div>
           )}
+          </>
+          )}
 
           {/* Advanced Section */}
           <div className="space-y-3 pt-2 border-t border-tokyo-bg-hl">
             <h3 className="text-sm font-medium text-tokyo-comment uppercase tracking-wider pt-2">Advanced</h3>
 
+            {!isTeleport && (
+            <>
             {/* Jump Host */}
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">Jump Host</label>
@@ -326,6 +384,8 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
                 SSH Agent Forwarding
               </label>
             </div>
+            </>
+            )}
 
             {/* Post-login Command */}
             <div>

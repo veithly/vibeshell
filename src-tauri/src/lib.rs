@@ -19,6 +19,7 @@ pub mod sftp;
 pub mod ssh;
 pub mod ssh_import;
 pub mod storage;
+pub mod teleport;
 pub mod tunnel;
 
 use std::sync::Arc;

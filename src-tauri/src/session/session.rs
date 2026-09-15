@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::replay::OutputReplayBuffer;
 use crate::ssh::{ClientHandler, SshClient};
+use crate::teleport::TeleportTarget;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -55,6 +56,10 @@ pub struct Session {
 
     // Last observed activity (attach/input/output/resize/exec).
     last_activity: Arc<RwLock<Instant>>,
+
+    teleport_target: Arc<Mutex<Option<TeleportTarget>>>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    teleport_pty: Arc<Mutex<Option<crate::teleport::TeleportPty>>>,
 }
 
 impl Session {
@@ -77,6 +82,9 @@ impl Session {
             output_forwarder_started: Arc::new(Mutex::new(false)),
             client_count: Arc::new(RwLock::new(0)),
             last_activity: Arc::new(RwLock::new(Instant::now())),
+            teleport_target: Arc::new(Mutex::new(None)),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            teleport_pty: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -98,6 +106,23 @@ impl Session {
     pub async fn set_ssh_client(&self, client: SshClient) {
         let mut ssh_guard = self.ssh_client.lock().await;
         *ssh_guard = Some(client);
+    }
+
+    pub async fn set_teleport_target(&self, target: TeleportTarget) {
+        *self.teleport_target.lock().await = Some(target);
+    }
+
+    pub async fn teleport_target(&self) -> Option<TeleportTarget> {
+        self.teleport_target.lock().await.clone()
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub async fn set_teleport_pty(&self, pty: crate::teleport::TeleportPty) {
+        *self.teleport_pty.lock().await = Some(pty);
+    }
+
+    pub async fn is_teleport(&self) -> bool {
+        self.teleport_target.lock().await.is_some()
     }
 
     /// Get a reference to the output broadcast sender
@@ -186,6 +211,17 @@ impl Session {
 
     /// Send data to the SSH shell
     pub async fn write_to_ssh(&self, data: &[u8]) -> Result<()> {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let pty_guard = self.teleport_pty.lock().await;
+            if let Some(ref pty) = *pty_guard {
+                pty.write(data)?;
+                drop(pty_guard);
+                self.mark_activity().await;
+                return Ok(());
+            }
+        }
+
         let ssh_guard = self.ssh_client.lock().await;
         if let Some(ref client) = *ssh_guard {
             client.send_data(data).await?;
@@ -199,6 +235,17 @@ impl Session {
 
     /// Resize the PTY
     pub async fn resize_pty(&self, cols: u32, rows: u32) -> Result<()> {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let pty_guard = self.teleport_pty.lock().await;
+            if let Some(ref pty) = *pty_guard {
+                pty.resize(cols, rows)?;
+                drop(pty_guard);
+                self.mark_activity().await;
+                return Ok(());
+            }
+        }
+
         let ssh_guard = self.ssh_client.lock().await;
         if let Some(ref client) = *ssh_guard {
             client.resize_pty(cols, rows).await?;
@@ -212,6 +259,15 @@ impl Session {
 
     /// Disconnect the SSH session
     pub async fn disconnect(&self) -> Result<()> {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let mut pty_guard = self.teleport_pty.lock().await;
+            if let Some(pty) = pty_guard.take() {
+                pty.kill();
+            }
+        }
+        *self.teleport_target.lock().await = None;
+
         let mut ssh_guard = self.ssh_client.lock().await;
         if let Some(ref mut client) = *ssh_guard {
             client.disconnect().await?;
@@ -242,6 +298,18 @@ impl Session {
         command: &str,
         stdin: Option<&str>,
     ) -> Result<String> {
+        if let Some(target) = self.teleport_target().await {
+            let command = command.to_string();
+            let stdin = stdin.map(ToOwned::to_owned);
+            let output = tokio::task::spawn_blocking(move || {
+                crate::teleport::tsh_ssh_exec_with_stdin(&target, &command, stdin.as_deref())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Teleport exec join error: {e}"))??;
+            self.mark_activity().await;
+            return Ok(output);
+        }
+
         let client = {
             let ssh_guard = self.ssh_client.lock().await;
             ssh_guard
@@ -267,6 +335,11 @@ impl Session {
     /// Open an SFTP subsystem session on a new SSH channel.
     /// Returns an SftpSession for performing file operations via the SFTP protocol.
     pub async fn open_sftp_session(&self) -> Result<russh_sftp::client::SftpSession> {
+        if self.is_teleport().await {
+            return Err(anyhow::anyhow!(
+                "Teleport sessions use tsh scp/sftp rather than the SSH SFTP subsystem"
+            ));
+        }
         let client = {
             let ssh_guard = self.ssh_client.lock().await;
             ssh_guard

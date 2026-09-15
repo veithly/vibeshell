@@ -226,7 +226,7 @@ The standalone `vibeshell` binary is a real Rust client and daemon, not a JavaSc
 | --- | --- |
 | Version and diagnostics | `vibeshell version`, `vibeshell daemon start`, `vibeshell daemon status` |
 | Inventory | `vibeshell servers`, `vibeshell servers add user@host`, `vibeshell servers delete <name>` |
-| Import | `vibeshell import auto|openssh|putty|tabby [--path ...] [--dry-run] [--json]` |
+| Import | `vibeshell import auto|openssh|putty|tabby|teleport [--path ...] [--dry-run] [--json]` |
 | Connect | `vibeshell ssh <server> [--new] [--wait]` |
 | Remote command | `vibeshell ssh <server> -- <command>`, `--command-file`, or `--command-stdin` |
 | Sessions | `vibeshell sessions`, `vibeshell attach`, `vibeshell ssh-session`, `vibeshell exec`, `vibeshell send-key`, `vibeshell kill` |

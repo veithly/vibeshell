@@ -20,6 +20,8 @@ pub struct AddServerArgs {
     pub post_login: Option<String>,
     pub group: Option<String>,
     pub tags: Vec<String>,
+    pub connection_kind: String,
+    pub teleport_proxy: Option<String>,
 }
 
 /// List all configured servers known to VibeShell.
@@ -35,10 +37,21 @@ pub fn list() -> Result<()> {
 
             println!("Configured servers:");
             for server in servers {
-                println!(
-                    "  {}  {}@{}:{}  auth={}",
-                    server.name, server.username, server.host, server.port, server.auth_type
-                );
+                let kind = server.connection_kind.as_deref().unwrap_or("ssh");
+                if kind == "teleport" {
+                    println!(
+                        "  {}  {}@{}  teleport proxy={}",
+                        server.name,
+                        server.username,
+                        server.host,
+                        server.teleport_proxy.as_deref().unwrap_or("-")
+                    );
+                } else {
+                    println!(
+                        "  {}  {}@{}:{}  auth={}",
+                        server.name, server.username, server.host, server.port, server.auth_type
+                    );
+                }
             }
             Ok(())
         }
@@ -75,8 +88,25 @@ pub fn add(args: AddServerArgs) -> Result<()> {
         .unwrap_or_else(|| host.clone());
 
     let identity_path = args.identity.as_deref();
-    let (auth_type, credential, passphrase, key_path, saved_credentials) =
-        resolve_credentials(identity_path)?;
+    let is_teleport = args.connection_kind.eq_ignore_ascii_case("teleport")
+        || args.connection_kind.eq_ignore_ascii_case("tsh");
+    if is_teleport {
+        let proxy_ok = args
+            .teleport_proxy
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some();
+        if !proxy_ok {
+            bail!("Teleport servers require --proxy (for example teleport.example.com:443)");
+        }
+    }
+
+    let (auth_type, credential, passphrase, key_path, saved_credentials) = if is_teleport {
+        ("password", None, None, None, true)
+    } else {
+        resolve_credentials(identity_path)?
+    };
 
     let spec = AddServerSpec {
         name: name.clone(),
@@ -91,6 +121,8 @@ pub fn add(args: AddServerArgs) -> Result<()> {
         jump_host: args.jump,
         post_login_command: args.post_login,
         agent_forwarding: args.agent_forwarding,
+        connection_kind: Some(args.connection_kind),
+        teleport_proxy: args.teleport_proxy,
         credential,
         passphrase,
         key_path,

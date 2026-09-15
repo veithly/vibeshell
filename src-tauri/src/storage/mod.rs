@@ -18,6 +18,6 @@ pub use sync_crypto::{
 
 // Re-export new model types
 pub use models::{
-    CommandHistoryEntry, CommandSnippet, Recording, TunnelConfig, TunnelInfo, TunnelStatus,
-    TunnelType,
+    AuthType, CommandHistoryEntry, CommandSnippet, ConnectionKind, DatabaseConnection,
+    PluginInstallation, Recording, Server, TunnelConfig, TunnelInfo, TunnelStatus, TunnelType,
 };

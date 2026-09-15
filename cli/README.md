@@ -32,7 +32,7 @@ vibeshell ssh <server>
 vibeshell sftp <server>
 ```
 
-Add a server without the GUI using `user@host[:port]`. Passwords are read from `SSH_PASSWORD` or `VIBESHELL_PASSWORD` (never argv). Use `--identity` for a private key. Delete with `vibeshell servers delete <name>`.
+Add a server without the GUI using `user@host[:port]`. Passwords are read from `SSH_PASSWORD` or `VIBESHELL_PASSWORD` (never argv). Use `--identity` for a private key. Teleport: `vibeshell servers add user@node --type teleport --proxy teleport.example.com:443`. Delete with `vibeshell servers delete <name>`.
 
 Commands that need an SSH/SFTP session automatically start the native local daemon. The daemon stores its IPC endpoint and state under the current user's VibeShell data directory and can be inspected directly:
 
