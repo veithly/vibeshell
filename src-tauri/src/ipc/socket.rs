@@ -115,6 +115,12 @@ pub enum IpcMessage {
     // Requests from CLI to GUI
     /// List all configured servers
     ListServers,
+    /// Add a server to the shared database (used by `vibeshell servers add`)
+    AddServer {
+        spec: crate::commands::server::AddServerSpec,
+    },
+    /// Delete a server by unique name or ID (used by `vibeshell servers delete`)
+    DeleteServer { name: String },
     /// List all active sessions
     ListSessions,
     /// Create a new session connecting to the specified server
@@ -228,6 +234,8 @@ pub enum IpcMessage {
     // Responses from GUI to CLI
     /// List of configured servers
     ServerList { servers: Vec<IpcServerInfo> },
+    /// A server was added
+    ServerAdded { server: IpcServerInfo },
     /// List of active session IDs
     SessionList { sessions: Vec<IpcSessionInfo> },
     /// A new session was created
@@ -788,6 +796,73 @@ impl IpcServer {
         rt: &tokio::runtime::Handle,
     ) -> IpcMessage {
         match message {
+            IpcMessage::AddServer { spec } => {
+                match crate::commands::server::add_server_spec(&database, spec) {
+                    std::result::Result::Ok(server) => IpcMessage::ServerAdded {
+                        server: IpcServerInfo {
+                            id: server.id,
+                            name: server.name,
+                            host: server.host,
+                            port: server.port,
+                            username: server.username,
+                            auth_type: auth_type_to_string(&server.auth_type).to_string(),
+                            group_id: server.group_id,
+                            jump_host_id: server.jump_host_id,
+                            tags: server.tags,
+                        },
+                    },
+                    Err(message) => IpcMessage::Error { message },
+                }
+            }
+            IpcMessage::DeleteServer { name } => {
+                let server = match database.server_get(&name) {
+                    std::result::Result::Ok(Some(server)) => server,
+                    std::result::Result::Ok(None) => match database.server_get_by_name(&name) {
+                        std::result::Result::Ok(Some(server)) => server,
+                        std::result::Result::Ok(None) => {
+                            return IpcMessage::Error {
+                                message: format!("Server '{name}' not found"),
+                            };
+                        }
+                        Err(e) => {
+                            return IpcMessage::Error {
+                                message: format!("Failed to look up server: {e}"),
+                            };
+                        }
+                    },
+                    Err(e) => {
+                        return IpcMessage::Error {
+                            message: format!("Failed to look up server: {e}"),
+                        };
+                    }
+                };
+
+                let killed =
+                    rt.block_on(async { session_manager.kill_by_server_id(&server.id).await });
+                match killed {
+                    std::result::Result::Ok(session_ids) => {
+                        for session_id in session_ids {
+                            Self::clear_sftp_context(&sftp_contexts, &session_id);
+                        }
+                    }
+                    Err(e) => {
+                        return IpcMessage::Error {
+                            message: format!("Failed to close sessions for server: {e}"),
+                        };
+                    }
+                }
+
+                if let Err(e) = database.credential_delete(&server.name) {
+                    log::warn!("Failed to delete credentials for '{}': {}", server.name, e);
+                }
+
+                match database.server_delete(&server.id) {
+                    std::result::Result::Ok(()) => IpcMessage::Ok,
+                    Err(e) => IpcMessage::Error {
+                        message: format!("Failed to delete server: {e}"),
+                    },
+                }
+            }
             IpcMessage::ListServers => match database.server_list(None, None) {
                 std::result::Result::Ok(servers) => {
                     let servers = servers
@@ -1849,6 +1924,13 @@ mod tests {
         let msg = IpcMessage::ListServers;
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("ListServers"));
+
+        let msg = IpcMessage::DeleteServer {
+            name: "prod-web".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("DeleteServer"));
+        assert!(json.contains("prod-web"));
 
         let msg = IpcMessage::ListSessions;
         let json = serde_json::to_string(&msg).unwrap();
