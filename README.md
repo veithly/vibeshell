@@ -96,6 +96,7 @@ Import the discovered OpenSSH, PuTTY, and Tabby profiles:
 
 ```bash
 vibeshell import auto
+vibeshell servers add root@prod.example.com --name prod-web
 vibeshell servers
 ```
 
@@ -224,7 +225,7 @@ The standalone `vibeshell` binary is a real Rust client and daemon, not a JavaSc
 | Area | Commands |
 | --- | --- |
 | Version and diagnostics | `vibeshell version`, `vibeshell daemon start`, `vibeshell daemon status` |
-| Inventory | `vibeshell servers` |
+| Inventory | `vibeshell servers`, `vibeshell servers add user@host`, `vibeshell servers delete <name>` |
 | Import | `vibeshell import auto|openssh|putty|tabby [--path ...] [--dry-run] [--json]` |
 | Connect | `vibeshell ssh <server> [--new] [--wait]` |
 | Remote command | `vibeshell ssh <server> -- <command>`, `--command-file`, or `--command-stdin` |

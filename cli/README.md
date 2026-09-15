@@ -26,10 +26,13 @@ Both installers verify the native binary and trigger its built-in, idempotent Sk
 vibeshell version
 vibeshell import auto --dry-run
 vibeshell import auto
+vibeshell servers add root@prod.example.com --name prod-web
 vibeshell servers
 vibeshell ssh <server>
 vibeshell sftp <server>
 ```
+
+Add a server without the GUI using `user@host[:port]`. Passwords are read from `SSH_PASSWORD` or `VIBESHELL_PASSWORD` (never argv). Use `--identity` for a private key. Delete with `vibeshell servers delete <name>`.
 
 Commands that need an SSH/SFTP session automatically start the native local daemon. The daemon stores its IPC endpoint and state under the current user's VibeShell data directory and can be inspected directly:
 
