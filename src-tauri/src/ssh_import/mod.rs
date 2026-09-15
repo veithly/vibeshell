@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::storage::{AuthType, Database, Server};
+use crate::storage::{AuthType, ConnectionKind, Database, Server};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ImportSourceKind {
@@ -27,6 +27,8 @@ pub enum ImportSourceKind {
     Putty,
     #[serde(rename = "tabby")]
     Tabby,
+    #[serde(rename = "teleport")]
+    Teleport,
 }
 
 impl ImportSourceKind {
@@ -36,6 +38,7 @@ impl ImportSourceKind {
             Self::OpenSsh => "OpenSSH",
             Self::Putty => "PuTTY",
             Self::Tabby => "Tabby",
+            Self::Teleport => "Teleport",
         }
     }
 }
@@ -71,6 +74,10 @@ pub struct ImportCandidate {
     pub post_login_command: Option<String>,
     pub agent_forwarding: bool,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub connection_kind: ConnectionKind,
+    #[serde(default)]
+    pub teleport_proxy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +148,22 @@ pub fn detect_import_sources() -> Vec<DetectedImportSource> {
             path: tabby_path.as_ref().map(|path| display_path(path)),
             detail: "Tabby config.yaml SSH profiles".to_string(),
         },
+        DetectedImportSource {
+            kind: ImportSourceKind::Teleport,
+            label: "Teleport (tsh)".to_string(),
+            available: crate::teleport::tsh_output(["status"])
+                .ok()
+                .map(|output| {
+                    crate::teleport::logged_in_from_status(&format!(
+                        "{}\n{}",
+                        output.stdout, output.stderr
+                    ))
+                })
+                .unwrap_or(false),
+            path: None,
+            detail: "SSH nodes from `tsh status` and `tsh ls`. Run `tsh login --proxy=...` first."
+                .to_string(),
+        },
     ]
 }
 
@@ -149,7 +172,7 @@ pub fn preview_import(
     explicit_path: Option<PathBuf>,
 ) -> Result<ImportPreview> {
     if source == ImportSourceKind::Auto && explicit_path.is_some() {
-        bail!("--path must be used with openssh, putty, or tabby, not auto");
+        bail!("--path must be used with openssh, putty, tabby, or teleport, not auto");
     }
 
     let sources = detect_import_sources();
@@ -168,7 +191,10 @@ pub fn preview_import(
         }
         kind => {
             let path = explicit_path.or_else(|| default_path_for(kind));
-            if path.is_none() && kind != ImportSourceKind::Putty {
+            if path.is_none()
+                && kind != ImportSourceKind::Putty
+                && kind != ImportSourceKind::Teleport
+            {
                 bail!(
                     "Could not determine the default {} configuration path",
                     kind
@@ -272,6 +298,8 @@ pub fn import_preview(database: &Database, preview: &ImportPreview) -> Result<Im
             jump_host_id: None,
             post_login_command: candidate.post_login_command.clone(),
             agent_forwarding: candidate.agent_forwarding,
+            connection_kind: candidate.connection_kind,
+            teleport_proxy: candidate.teleport_proxy.clone(),
         };
         database.server_add(&mut server).with_context(|| {
             format!(
@@ -280,22 +308,24 @@ pub fn import_preview(database: &Database, preview: &ImportPreview) -> Result<Im
             )
         })?;
 
-        if let Some(key_path) = candidate.key_path.as_deref() {
-            match database.credential_save(
-                &server.name,
-                "key_with_passphrase",
-                "",
-                None,
-                Some(key_path),
-            ) {
-                Ok(credential_id) => {
-                    server.credential_id = Some(credential_id);
-                    database.server_update(&server)?;
+        if candidate.connection_kind != ConnectionKind::Teleport {
+            if let Some(key_path) = candidate.key_path.as_deref() {
+                match database.credential_save(
+                    &server.name,
+                    "key_with_passphrase",
+                    "",
+                    None,
+                    Some(key_path),
+                ) {
+                    Ok(credential_id) => {
+                        server.credential_id = Some(credential_id);
+                        database.server_update(&server)?;
+                    }
+                    Err(error) => report.warnings.push(format!(
+                        "Imported '{}' but could not save its private-key path: {}",
+                        server.name, error
+                    )),
                 }
-                Err(error) => report.warnings.push(format!(
-                    "Imported '{}' but could not save its private-key path: {}",
-                    server.name, error
-                )),
             }
         }
 
@@ -368,6 +398,7 @@ fn append_source(
         ImportSourceKind::Tabby => {
             tabby::parse(path.context("Tabby config path is unavailable")?, warnings)?
         }
+        ImportSourceKind::Teleport => teleport_candidates(path, warnings)?,
     };
     servers.append(&mut imported);
     Ok(())
@@ -379,7 +410,48 @@ fn default_path_for(kind: ImportSourceKind) -> Option<PathBuf> {
         ImportSourceKind::OpenSsh => openssh::default_path(),
         ImportSourceKind::Putty => putty::default_path(),
         ImportSourceKind::Tabby => tabby::default_path(),
+        ImportSourceKind::Teleport => None,
     }
+}
+
+fn teleport_candidates(
+    path: Option<&Path>,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<ImportCandidate>> {
+    let proxy = path
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let preview = crate::teleport::preview_import(proxy)?;
+    warnings.extend(preview.warnings);
+    let username = preview
+        .login
+        .as_deref()
+        .map(|value| value.split('@').next().unwrap_or(value).trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(local_username);
+
+    Ok(preview
+        .nodes
+        .into_iter()
+        .map(|node| ImportCandidate {
+            source: ImportSourceKind::Teleport,
+            source_name: node.clone(),
+            name: node.clone(),
+            host: node,
+            port: 22,
+            username: username.clone(),
+            auth_type: AuthType::Password,
+            key_path: None,
+            jump_host: None,
+            post_login_command: None,
+            agent_forwarding: false,
+            tags: vec!["import:teleport".to_string()],
+            connection_kind: ConnectionKind::Teleport,
+            teleport_proxy: Some(preview.proxy.clone()),
+        })
+        .collect())
 }
 
 fn remember_aliases(
@@ -401,6 +473,8 @@ fn same_endpoint(server: &Server, candidate: &ImportCandidate) -> bool {
     server.host.eq_ignore_ascii_case(&candidate.host)
         && server.port == candidate.port
         && server.username.eq_ignore_ascii_case(&candidate.username)
+        && server.connection_kind == candidate.connection_kind
+        && server.teleport_proxy.as_deref() == candidate.teleport_proxy.as_deref()
 }
 
 fn unique_server_name(
@@ -500,6 +574,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
         database.server_add(&mut existing).unwrap();
 
@@ -520,6 +596,8 @@ mod tests {
                     post_login_command: None,
                     agent_forwarding: false,
                     tags: vec!["import:openssh".to_string()],
+                    connection_kind: ConnectionKind::Ssh,
+                    teleport_proxy: None,
                 },
                 ImportCandidate {
                     source: ImportSourceKind::OpenSsh,
@@ -534,6 +612,8 @@ mod tests {
                     post_login_command: None,
                     agent_forwarding: false,
                     tags: vec!["import:openssh".to_string()],
+                    connection_kind: ConnectionKind::Ssh,
+                    teleport_proxy: None,
                 },
             ],
         };

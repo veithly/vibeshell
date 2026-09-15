@@ -9,6 +9,7 @@ mod commands;
 mod daemon;
 mod ipc_support;
 mod session_alias;
+mod ssh_target;
 mod terminal;
 
 use std::path::PathBuf;
@@ -42,7 +43,9 @@ use commands::file_tools::ContentInputArgs;
       vibeshell sftp prod-web ls /var/www\n\
       vibeshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
       vibeshell sftp prod-web\n\
-      vibeshell sessions\n\
+      vibeshell servers\n\
+      vibeshell servers add root@prod.example.com:22 --name prod-web --identity ~/.ssh/id_ed25519\n\
+      vibeshell servers delete prod-web\n\
       vibeshell daemon status"
 )]
 struct Cli {
@@ -64,7 +67,8 @@ enum Commands {
         Pass `--new` to force creation of a fresh session.\n\
         For heavily quoted commands, use `--command-file <path>` or pipe the command into\n\
         `--command-stdin` to bypass local shell parsing.\n\
-        The target server must already exist in the VibeShell database.\n\n\
+        The target server must already exist in the VibeShell database.\n\
+        Add one with `vibeshell servers add user@host` if it is not listed by `vibeshell servers`.\n\n\
         Examples:\n\
           vibeshell ssh prod-web\n\
           vibeshell ssh prod-web --new\n\
@@ -161,9 +165,9 @@ enum Commands {
     )]
     EditFile(EditFileArgs),
 
-    /// List all configured servers
+    /// List, add, or delete configured servers
     #[command(alias = "server-list")]
-    Servers,
+    Servers(ServersArgs),
 
     /// Import OpenSSH, PuTTY, and Tabby connection profiles
     #[command(
@@ -213,6 +217,90 @@ enum Commands {
 
     /// Uninstall VibeShell skill from an AI tool
     Uninstall(UninstallArgs),
+}
+
+#[derive(Args)]
+struct ServersArgs {
+    #[command(subcommand)]
+    command: Option<ServersCommand>,
+}
+
+#[derive(Subcommand)]
+enum ServersCommand {
+    /// Add a server from user@host[:port] shorthand
+    #[command(
+        long_about = "Add a saved SSH server without using the desktop UI.\n\n\
+        The first argument is `user@host` or `user@host:port`. Optional flags match the Add Server dialog.\n\
+        Passwords are read from SSH_PASSWORD or VIBESHELL_PASSWORD (never from argv).\n\
+        Key files are passed with --identity; encrypted-key passphrases use VIBESHELL_KEY_PASSPHRASE.\n\
+        If no password env var and no --identity are provided, the server is stored without credentials.\n\n\
+        Examples:\n\
+          vibeshell servers add root@prod.example.com\n\
+          SSH_PASSWORD=... vibeshell servers add root@prod.example.com --name prod-web\n\
+          vibeshell servers add ubuntu@10.0.0.8:2222 --identity ~/.ssh/id_ed25519 --jump bastion"
+    )]
+    Add(ServerAddCliArgs),
+    /// Delete a saved server by name or ID
+    #[command(alias = "rm", alias = "remove")]
+    Delete(ServerDeleteCliArgs),
+    /// List configured servers
+    List,
+}
+
+#[derive(Args)]
+struct ServerAddCliArgs {
+    /// Connection target: user@host, user@host:port, or host (with --user)
+    target: String,
+
+    /// Display name (defaults to the host)
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Username (overrides the user@ portion of the target)
+    #[arg(long, short = 'u')]
+    user: Option<String>,
+
+    /// SSH port (overrides :port in the target; default 22)
+    #[arg(long, short = 'p')]
+    port: Option<u16>,
+
+    /// Path to an OpenSSH private key (enables key auth)
+    #[arg(long, short = 'i', value_name = "KEYFILE")]
+    identity: Option<PathBuf>,
+
+    /// Jump host display name or ID
+    #[arg(long)]
+    jump: Option<String>,
+
+    /// Enable SSH agent forwarding
+    #[arg(long)]
+    agent_forwarding: bool,
+
+    /// Command to run after login
+    #[arg(long = "post-login")]
+    post_login: Option<String>,
+
+    /// Group name (created if missing)
+    #[arg(long)]
+    group: Option<String>,
+
+    /// Tags (repeatable)
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+
+    /// Connection type: ssh (default) or teleport
+    #[arg(long = "type", default_value = "ssh")]
+    connection_type: String,
+
+    /// Teleport proxy, e.g. teleport.example.com:443 (required with --type teleport)
+    #[arg(long)]
+    proxy: Option<String>,
+}
+
+#[derive(Args)]
+struct ServerDeleteCliArgs {
+    /// Server display name or ID
+    name: String,
 }
 
 #[derive(Args)]
@@ -385,6 +473,7 @@ enum ImportSourceArg {
     OpenSsh,
     Putty,
     Tabby,
+    Teleport,
 }
 
 impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
@@ -394,13 +483,14 @@ impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
             ImportSourceArg::OpenSsh => Self::OpenSsh,
             ImportSourceArg::Putty => Self::Putty,
             ImportSourceArg::Tabby => Self::Tabby,
+            ImportSourceArg::Teleport => Self::Teleport,
         }
     }
 }
 
 #[derive(Args)]
 struct ImportArgs {
-    /// Source to import: auto, openssh, putty, or tabby
+    /// Source to import: auto, openssh, putty, tabby, or teleport
     #[arg(value_enum, default_value = "auto")]
     source: ImportSourceArg,
 
@@ -524,7 +614,26 @@ fn main() -> Result<()> {
             args.with_text.as_deref(),
             args.all,
         ),
-        Some(Commands::Servers) => commands::server::list(),
+        Some(Commands::Servers(args)) => match args.command {
+            None | Some(ServersCommand::List) => commands::server::list(),
+            Some(ServersCommand::Add(add)) => {
+                commands::server::add(commands::server::AddServerArgs {
+                    target: add.target,
+                    name: add.name,
+                    user: add.user,
+                    port: add.port,
+                    identity: add.identity,
+                    jump: add.jump,
+                    agent_forwarding: add.agent_forwarding,
+                    post_login: add.post_login,
+                    group: add.group,
+                    tags: add.tags,
+                    connection_kind: add.connection_type,
+                    teleport_proxy: add.proxy,
+                })
+            }
+            Some(ServersCommand::Delete(delete)) => commands::server::delete(&delete.name),
+        },
         Some(Commands::Import(args)) => {
             commands::import::run(args.source.into(), args.path, args.dry_run, args.json)
         }
@@ -593,6 +702,53 @@ mod tests {
     fn parses_servers_command() {
         let parsed = Cli::try_parse_from(["vibeshell", "servers"]);
         assert!(parsed.is_ok(), "vibeshell servers should parse");
+    }
+
+    #[test]
+    fn parses_servers_add_shorthand() {
+        let parsed = Cli::try_parse_from([
+            "vibeshell",
+            "servers",
+            "add",
+            "root@prod.example.com:2222",
+            "--name",
+            "prod-web",
+            "--identity",
+            "/tmp/id_ed25519",
+            "--jump",
+            "bastion",
+            "--agent-forwarding",
+            "--post-login",
+            "uptime",
+            "--group",
+            "production",
+            "--tag",
+            "web",
+        ]);
+        assert!(parsed.is_ok(), "vibeshell servers add should parse");
+    }
+
+    #[test]
+    fn parses_servers_add_teleport() {
+        let parsed = Cli::try_parse_from([
+            "vibeshell",
+            "servers",
+            "add",
+            "alice@web-1",
+            "--type",
+            "teleport",
+            "--proxy",
+            "teleport.example.com:443",
+        ]);
+        assert!(parsed.is_ok(), "teleport servers add should parse");
+    }
+
+    #[test]
+    fn parses_servers_delete() {
+        let parsed = Cli::try_parse_from(["vibeshell", "servers", "delete", "prod-web"]);
+        assert!(parsed.is_ok(), "vibeshell servers delete should parse");
+        let parsed = Cli::try_parse_from(["vibeshell", "servers", "rm", "prod-web"]);
+        assert!(parsed.is_ok(), "vibeshell servers rm should parse");
     }
 
     #[test]

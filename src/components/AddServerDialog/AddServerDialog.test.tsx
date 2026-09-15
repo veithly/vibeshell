@@ -115,4 +115,27 @@ describe('AddServerDialog credential storage', () => {
       }),
     });
   });
+
+  it('creates a Teleport server without saving SSH credentials', async () => {
+    render(<AddServerDialog isOpen onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Teleport' }));
+    fireEvent.change(screen.getByPlaceholderText('My Server'), {
+      target: { value: 'web-1' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('node hostname'), {
+      target: { value: 'web-1' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('teleport.example.com:443'), {
+      target: { value: 'teleport.example.com:443' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Server' }));
+
+    await waitFor(() => expect(addServer).toHaveBeenCalled());
+    expect(addServer).toHaveBeenCalledWith(expect.objectContaining({
+      connection_kind: 'teleport',
+      teleport_proxy: 'teleport.example.com:443',
+      host: 'web-1',
+    }));
+    expect(safeInvokeMock).not.toHaveBeenCalledWith('save_credential', expect.anything());
+  });
 });

@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use super::sync::{self, SyncEntityKind};
 use crate::storage::models::{
-    AuthType, CommandHistoryEntry, CommandSnippet, DatabaseConnection, PluginInstallation,
-    Recording, Server, TunnelConfig, TunnelType,
+    AuthType, CommandHistoryEntry, CommandSnippet, ConnectionKind, DatabaseConnection,
+    PluginInstallation, Recording, Server, TunnelConfig, TunnelType,
 };
 
 pub struct Database {
@@ -195,6 +195,8 @@ impl Database {
             "ALTER TABLE servers ADD COLUMN jump_host_id TEXT",
             "ALTER TABLE servers ADD COLUMN post_login_command TEXT",
             "ALTER TABLE servers ADD COLUMN agent_forwarding INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE servers ADD COLUMN connection_kind TEXT NOT NULL DEFAULT 'ssh'",
+            "ALTER TABLE servers ADD COLUMN teleport_proxy TEXT",
         ];
         for sql in &migrations {
             let _ = conn.execute(sql, []);
@@ -293,8 +295,8 @@ impl Database {
         tx.execute(
             r#"INSERT INTO servers
                (id, name, host, port, username, auth_type, credential_id, group_id, tags, created_at, updated_at,
-                jump_host_id, post_login_command, agent_forwarding)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"#,
+                jump_host_id, post_login_command, agent_forwarding, connection_kind, teleport_proxy)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"#,
             rusqlite::params![
                 server.id,
                 server.name,
@@ -310,6 +312,8 @@ impl Database {
                 server.jump_host_id,
                 server.post_login_command,
                 server.agent_forwarding as i32,
+                connection_kind_to_string(&server.connection_kind),
+                server.teleport_proxy,
             ],
         )?;
 
@@ -332,7 +336,8 @@ impl Database {
             r#"UPDATE servers SET
                name = ?2, host = ?3, port = ?4, username = ?5, auth_type = ?6,
                credential_id = ?7, group_id = ?8, tags = ?9, updated_at = ?10,
-               jump_host_id = ?11, post_login_command = ?12, agent_forwarding = ?13
+               jump_host_id = ?11, post_login_command = ?12, agent_forwarding = ?13,
+               connection_kind = ?14, teleport_proxy = ?15
                WHERE id = ?1"#,
             rusqlite::params![
                 server.id,
@@ -348,6 +353,8 @@ impl Database {
                 server.jump_host_id,
                 server.post_login_command,
                 server.agent_forwarding as i32,
+                connection_kind_to_string(&server.connection_kind),
+                server.teleport_proxy,
             ],
         )?;
 
@@ -396,6 +403,11 @@ impl Database {
             jump_host_id: row.get(11).unwrap_or(None),
             post_login_command: row.get(12).unwrap_or(None),
             agent_forwarding: agent_forwarding_int != 0,
+            connection_kind: string_to_connection_kind(
+                &row.get::<_, String>(14)
+                    .unwrap_or_else(|_| "ssh".to_string()),
+            ),
+            teleport_proxy: row.get(15).unwrap_or(None),
         })
     }
 }
@@ -417,6 +429,20 @@ fn string_to_auth_type(s: &str) -> AuthType {
         // (an empty passphrase means an unencrypted key).
         "key" | "key_with_passphrase" => AuthType::KeyWithPassphrase,
         _ => AuthType::Password, // Default fallback
+    }
+}
+
+fn connection_kind_to_string(kind: &ConnectionKind) -> &'static str {
+    match kind {
+        ConnectionKind::Ssh => "ssh",
+        ConnectionKind::Teleport => "teleport",
+    }
+}
+
+fn string_to_connection_kind(value: &str) -> ConnectionKind {
+    match value {
+        "teleport" => ConnectionKind::Teleport,
+        _ => ConnectionKind::Ssh,
     }
 }
 
@@ -1169,7 +1195,6 @@ impl Database {
 
     // === Plugin Operations ===
 
-
     // -----------------------------------------------------------------------
     // Database connections
     // -----------------------------------------------------------------------
@@ -1410,6 +1435,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
 
         db.server_add(&mut server).unwrap();
@@ -1481,6 +1508,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
         let mut server_b = Server {
             name: "history-b".to_string(),
@@ -1549,6 +1578,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
 
         let mut server2 = Server {
@@ -1566,6 +1597,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
 
         db.server_add(&mut server1).unwrap();

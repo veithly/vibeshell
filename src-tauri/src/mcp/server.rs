@@ -28,7 +28,7 @@ use crate::sftp::helpers::{
 use crate::sftp::{
     effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
 };
-use crate::storage::models::{AuthType, Server};
+use crate::storage::models::{AuthType, ConnectionKind, Server};
 use crate::storage::Database;
 
 use super::approval::{AgentApprovalManager, ApprovalOutcome, ApprovalRequest};
@@ -733,6 +733,8 @@ async fn tool_server_add(state: &McpState, args: &Value) -> Result<String, Strin
         jump_host_id: None,
         post_login_command: None,
         agent_forwarding: false,
+        connection_kind: ConnectionKind::Ssh,
+        teleport_proxy: None,
     };
 
     state

@@ -34,6 +34,10 @@ export function isKeyAuthType(authType: AuthType): boolean {
   return authType === 'key' || authType === 'key_with_passphrase';
 }
 
+export function isTeleportServer(server: Pick<Server, 'connection_kind'>): boolean {
+  return server.connection_kind === 'teleport';
+}
+
 /**
  * Server configuration for SSH connections
  * Matches backend Server model
@@ -56,6 +60,10 @@ export interface Server {
   post_login_command?: string | null;
   /** Whether to enable SSH agent forwarding */
   agent_forwarding?: boolean;
+  /** Direct SSH versus Teleport (`tsh`) */
+  connection_kind?: 'ssh' | 'teleport';
+  /** Teleport proxy, e.g. teleport.example.com:443 */
+  teleport_proxy?: string | null;
 }
 
 /**
