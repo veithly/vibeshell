@@ -188,7 +188,10 @@ pub fn list_dir(target: &TeleportTarget, path: &str) -> Result<Vec<SftpEntry>> {
         Err(error) => warn!("[Teleport] python listdir failed: {error}"),
     }
 
-    let listing = tsh_ssh_exec(target, &format!("ls -1A {escaped}"))?;
+    let listing = tsh_ssh_exec(
+        target,
+        &format!("ls -1A {}", shell_single_quote(path)),
+    )?;
     Ok(listing
         .lines()
         .map(|name| name.trim())
@@ -262,7 +265,7 @@ pub fn rename(target: &TeleportTarget, old_path: &str, new_path: &str) -> Result
 pub fn download_file(target: &TeleportTarget, remote_path: &str, local_path: &str) -> Result<()> {
     ensure_logged_in(&target.proxy)?;
     let source = format!("{}:{}", target.ssh_destination(), remote_path);
-    let output = tsh_output_slice(["--proxy", &target.proxy, "scp", &source, local_path])?;
+    let output = tsh_output_slice(&["--proxy", &target.proxy, "scp", &source, local_path])?;
     if !output.status.success() {
         bail!("tsh scp download failed: {}", output.stderr.trim());
     }
@@ -272,7 +275,7 @@ pub fn download_file(target: &TeleportTarget, remote_path: &str, local_path: &st
 pub fn upload_file(target: &TeleportTarget, local_path: &str, remote_path: &str) -> Result<()> {
     ensure_logged_in(&target.proxy)?;
     let dest = format!("{}:{}", target.ssh_destination(), remote_path);
-    let output = tsh_output_slice(["--proxy", &target.proxy, "scp", local_path, &dest])?;
+    let output = tsh_output_slice(&["--proxy", &target.proxy, "scp", local_path, &dest])?;
     if !output.status.success() {
         bail!("tsh scp upload failed: {}", output.stderr.trim());
     }
@@ -286,7 +289,7 @@ pub fn upload_directory(
 ) -> Result<()> {
     ensure_logged_in(&target.proxy)?;
     let dest = format!("{}:{}", target.ssh_destination(), remote_path);
-    let output = tsh_output_slice(["--proxy", &target.proxy, "scp", "-r", local_path, &dest])?;
+    let output = tsh_output_slice(&["--proxy", &target.proxy, "scp", "-r", local_path, &dest])?;
     if !output.status.success() {
         bail!("tsh scp directory upload failed: {}", output.stderr.trim());
     }
@@ -400,7 +403,7 @@ pub fn preview_import(explicit_proxy: Option<&str>) -> Result<TeleportImportPrev
             .filter(|value| !value.is_empty())
     });
 
-    let ls = tsh_output_slice(["--proxy", &proxy, "ls", "--format=json"])?;
+    let ls = tsh_output_slice(&["--proxy", &proxy, "ls", "--format=json"])?;
     let mut warnings = Vec::new();
     if !ls.status.success() {
         warnings.push(format!("tsh ls failed: {}", ls.stderr.trim()));
