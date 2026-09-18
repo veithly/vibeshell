@@ -3,9 +3,10 @@ members = ["src-tauri", "cli", "plugins"]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.15"
+version = "1.1.0"
 authors = ["veithly"]
 edition = "2021"
+license = "GPL-3.0-only"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

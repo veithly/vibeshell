@@ -42,6 +42,18 @@ fn default_history_limit() -> u32 {
     200
 }
 
+/// Shared by the desktop and native daemon, including activity while UI was closed.
+#[tauri::command]
+pub fn agent_activity_list(
+    db: State<'_, Arc<Database>>,
+    after: Option<i64>,
+    before: Option<i64>,
+    limit: Option<u32>,
+) -> Result<Vec<crate::storage::database::StoredAgentActivity>, String> {
+    db.agent_activity_list(after, before, limit.unwrap_or(200))
+        .map_err(|error| format!("Failed to read agent activity: {error}"))
+}
+
 #[tauri::command]
 pub fn history_list(
     db: State<'_, Arc<Database>>,

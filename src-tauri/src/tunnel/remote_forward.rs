@@ -1,102 +1,121 @@
-use anyhow::Result;
-use log::{debug, info, warn};
-use russh::*;
-use std::sync::atomic::{AtomicU32, AtomicU64};
-use std::sync::Arc;
-use tokio::sync::watch;
-
+use super::bridge::{bridge, ActiveConnection};
 use crate::ssh::ClientHandler;
+use anyhow::{Context, Result};
+use log::debug;
+use russh::{client, Channel};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::{mpsc, oneshot, watch};
+use tokio::task::JoinSet;
 
-/// Stats tracking for a remote forward tunnel
+/// Only explicitly registered forwards may receive server-initiated channels.
+pub(crate) type RemoteForwardRegistry =
+    Arc<Mutex<HashMap<(String, u32), mpsc::Sender<Channel<client::Msg>>>>>;
+
+#[derive(Default)]
 pub struct RemoteForwardStats {
     pub bytes_in: AtomicU64,
     pub bytes_out: AtomicU64,
     pub active_connections: AtomicU32,
 }
-
-impl Default for RemoteForwardStats {
-    fn default() -> Self {
-        Self::new()
+impl RemoteForwardStats {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
-impl RemoteForwardStats {
-    pub fn new() -> Self {
-        Self {
-            bytes_in: AtomicU64::new(0),
-            bytes_out: AtomicU64::new(0),
-            active_connections: AtomicU32::new(0),
+struct Registration(RemoteForwardRegistry, (String, u32));
+impl Drop for Registration {
+    fn drop(&mut self) {
+        if let Ok(mut routes) = self.0.lock() {
+            routes.remove(&self.1);
         }
     }
 }
 
-/// Run a remote port forwarding tunnel
-/// Requests the SSH server to listen on remote_host:remote_port and forwards to local_host:local_port
-pub async fn run_remote_forward(
+pub(crate) async fn run_remote_forward(
     ssh_handle: Arc<tokio::sync::Mutex<Option<client::Handle<ClientHandler>>>>,
-    local_host: String,
-    local_port: u16,
-    remote_host: String,
-    remote_port: u16,
-    _stats: Arc<RemoteForwardStats>,
+    (local_host, local_port): (String, u16),
+    (remote_host, remote_port): (String, u16),
+    stats: Arc<RemoteForwardStats>,
     mut shutdown_rx: watch::Receiver<bool>,
+    registry: RemoteForwardRegistry,
+    ready: oneshot::Sender<Result<u16, String>>,
 ) -> Result<()> {
-    info!(
-        "[Tunnel:Remote] Requesting remote forward {}:{} -> {}:{}",
-        remote_host, remote_port, local_host, local_port
-    );
-
-    // Request the server to start listening on the remote side
-    // tcpip_forward returns the actual port (useful when remote_port is 0)
-    let actual_port = {
-        let mut handle_guard = ssh_handle.lock().await;
-        let handle = handle_guard
+    let opened = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut guard = ssh_handle.lock().await;
+        let handle = guard
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("SSH session not available"))?;
+            .ok_or_else(|| anyhow::anyhow!("SSH session unavailable"))?;
         handle
             .tcpip_forward(&remote_host, remote_port as u32)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to request remote forward: {}", e))?
+            .map_err(anyhow::Error::from)
+    })
+    .await
+    .context("Remote forward request timed out")?;
+    let actual_port = match opened {
+        Ok(port) => {
+            if remote_port == 0 {
+                u16::try_from(port)?
+            } else {
+                remote_port
+            }
+        }
+        Err(error) => {
+            let _ = ready.send(Err(error.to_string()));
+            return Err(error);
+        }
     };
-
-    info!(
-        "[Tunnel:Remote] Server listening on {}:{} (requested: {})",
-        remote_host, actual_port, remote_port
-    );
-
-    // Wait for shutdown signal
-    // Note: The actual forwarded connection handling happens through the SSH client handler's
-    // `server_channel_open_forwarded_tcpip` callback. For now we keep this tunnel alive
-    // and the connection bridging would need to be handled via the ClientHandler.
-    //
-    // TODO: Full remote forward requires implementing forwarded-tcpip channel handling
-    // in the ClientHandler. For now, this sets up the server-side listener.
-
+    let (sender, mut incoming) = mpsc::channel(64);
+    let key = (remote_host.clone(), actual_port as u32);
+    registry
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Remote forward registry unavailable"))?
+        .insert(key.clone(), sender);
+    let registration = Registration(registry, key);
+    let _ = ready.send(Ok(actual_port));
+    let mut connections = JoinSet::new();
     loop {
         tokio::select! {
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
-                    info!("[Tunnel:Remote] Shutdown signal received");
-                    break;
-                }
+            biased;
+            changed = shutdown_rx.changed() => {
+                if changed.is_err() || *shutdown_rx.borrow() { break; }
             }
-            _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-                // Periodic check - tunnel is alive as long as SSH session is alive
-                debug!("[Tunnel:Remote] Still active: {}:{}", remote_host, actual_port);
+            _ = connections.join_next(), if !connections.is_empty() => {}
+            channel = incoming.recv(), if connections.len() < 256 => {
+                let Some(channel) = channel else { break };
+                let host = local_host.clone();
+                let stats = stats.clone();
+                connections.spawn(async move {
+                    let _active = ActiveConnection::new(&stats.active_connections);
+                    let result = async {
+                        let tcp = tokio::time::timeout(Duration::from_secs(10),
+                            tokio::net::TcpStream::connect((host.as_str(), local_port)))
+                            .await.context("Local forward destination timed out")??;
+                        bridge(channel.into_stream(), tcp, &stats.bytes_in, &stats.bytes_out).await?;
+                        Ok::<(), anyhow::Error>(())
+                    }.await;
+                    if let Err(error) = result { debug!("[Tunnel:Remote] Connection failed: {error}"); }
+                });
             }
         }
     }
-
-    // Cancel the remote forward
-    {
-        let handle_guard = ssh_handle.lock().await;
-        if let Some(handle) = handle_guard.as_ref() {
-            if let Err(e) = handle.cancel_tcpip_forward(&remote_host, actual_port).await {
-                warn!("[Tunnel:Remote] Failed to cancel remote forward: {}", e);
-            }
+    drop(registration);
+    connections.abort_all();
+    while connections.join_next().await.is_some() {}
+    tokio::time::timeout(Duration::from_secs(3), async {
+        let guard = ssh_handle.lock().await;
+        if let Some(handle) = guard.as_ref() {
+            handle
+                .cancel_tcpip_forward(&remote_host, actual_port as u32)
+                .await?;
         }
-    }
-
-    info!("[Tunnel:Remote] Remote forward stopped");
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .context("Remote forward cancellation timed out")??;
     Ok(())
 }

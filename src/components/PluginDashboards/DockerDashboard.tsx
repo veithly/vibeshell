@@ -163,7 +163,7 @@ export function DockerDashboard({ plugin, sessionId }: { plugin: PluginRecord; s
     if (action && !window.confirm(t('plugins.actionConfirm', { name: `${action.name}: ${name}` }))) {
       return;
     }
-    await run(actionId, { container: name });
+    await run(actionId, { container: name }, true);
     await loadContainers();
   };
 

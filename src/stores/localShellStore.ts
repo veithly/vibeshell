@@ -13,6 +13,26 @@ function showError(title: string, error: TauriError): void {
 }
 
 /**
+ * Detect backend errors that mean the session no longer exists server-side
+ * (e.g. "Session not found: <id>" from the session manager / IPC relay).
+ */
+export function isSessionMissingError(message: string): boolean {
+  return /session not found/i.test(message);
+}
+
+/**
+ * Read the last selected shell preference. localStorage can be unavailable
+ * in restricted browser modes and non-DOM test environments.
+ */
+function loadLastSelectedShellId(): string | null {
+  try {
+    return localStorage.getItem('lastSelectedShellId');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Shell type categories
  */
 export type ShellType = 'power_shell' | 'cmd' | 'bash' | 'zsh' | 'fish' | 'sh' | 'other';
@@ -92,7 +112,7 @@ interface LocalShellStore {
   sendBytes: (sessionId: string, data: Uint8Array) => Promise<boolean>;
   /** Resize a session */
   resizeSession: (sessionId: string, cols: number, rows: number) => Promise<boolean>;
-  /** Kill a session */
+  /** Kill a session ("session not found" counts as closed and returns true) */
   killSession: (sessionId: string) => Promise<boolean>;
   /** Kill all sessions */
   killAllSessions: () => Promise<boolean>;
@@ -111,7 +131,7 @@ export const useLocalShellStore = create<LocalShellStore>((set) => ({
   sessions: [],
   loading: false,
   error: null,
-  lastSelectedShellId: localStorage.getItem('lastSelectedShellId'),
+  lastSelectedShellId: loadLastSelectedShellId(),
 
   fetchAvailableShells: async () => {
     const result = await safeInvoke<ShellInfo[]>('local_shell_list_shells');
@@ -225,6 +245,18 @@ export const useLocalShellStore = create<LocalShellStore>((set) => ({
       }));
       return true;
     }
+
+    if (isSessionMissingError(result.error.message)) {
+      // Already dead backend-side: dropping the local entry is safe because
+      // the sync poll cannot resurrect it.
+      console.warn('Local shell session already gone on backend, removing local entry:', sessionId);
+      set((state) => ({
+        sessions: state.sessions.filter((s) => s.id !== sessionId),
+      }));
+      return true;
+    }
+
+    // May still be alive: keep the entry and let the sync poll reconcile.
     showError('Failed to Close Local Shell', result.error);
     return false;
   },

@@ -34,31 +34,6 @@ pub async fn pick_ssh_key_file() -> Result<Option<String>, String> {
     }
 }
 
-/// Opens a file dialog to pick any file for upload.
-///
-/// # Arguments
-///
-/// * `app` - The Tauri application handle
-///
-/// # Returns
-///
-/// Returns `Ok(Some(path))` if a file was selected, `Ok(None)` if cancelled.
-#[tauri::command]
-pub async fn pick_file_for_upload() -> Result<Option<String>, String> {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    return Err("Upload file selection is unavailable on mobile".to_string());
-
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let file = FileDialog::new()
-            .add_filter("All Files", &["*"])
-            .set_title("Select File to Upload")
-            .pick_file();
-
-        Ok(file.map(|f| f.to_string_lossy().to_string()))
-    }
-}
-
 /// Opens a file dialog that accepts one or more files for batch upload.
 #[tauri::command]
 pub async fn pick_files_for_upload() -> Result<Vec<String>, String> {

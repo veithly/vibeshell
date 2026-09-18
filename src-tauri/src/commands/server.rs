@@ -84,8 +84,10 @@ pub fn add_server(db: State<'_, Arc<Database>>, server: ServerInput) -> Result<S
 }
 
 /// Partial server update input — all fields optional except name/host/port/username
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct ServerUpdateInput {
+    /// Omitted means preserve credentials; never deserialize into Server itself.
+    pub credentials: Option<crate::storage::database::CredentialUpdate>,
     pub name: Option<String>,
     pub host: Option<String>,
     pub port: Option<u16>,
@@ -133,8 +135,8 @@ where
 ///
 /// Also keeps device-local credentials coherent with the new config:
 /// - Renaming a server re-keys its saved credentials (they are name-keyed).
-/// - Switching auth method drops the saved credentials so stale secrets are
-///   never silently reused for the new auth type.
+/// - Auth method changes require replacement credentials in the same transaction.
+/// - Legacy key/key_with_passphrase normalization preserves saved key material.
 #[tauri::command]
 pub fn update_server(
     db: State<'_, Arc<Database>>,
@@ -146,8 +148,17 @@ pub fn update_server(
         .map_err(|e| format!("Failed to get server: {}", e))?
         .ok_or_else(|| "Server not found".to_string())?;
 
-    let previous_name = existing.name.clone();
-    let previous_auth_type = existing.auth_type.clone();
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    if updates.credentials.is_some() {
+        return Err("Saving credentials on mobile requires Keychain or Keystore support".into());
+    }
+    if updates
+        .auth_type
+        .as_deref()
+        .is_some_and(|auth| !matches!(auth, "password" | "key" | "key_with_passphrase"))
+    {
+        return Err("Unknown authentication type".into());
+    }
 
     let updated_server = Server {
         id: existing.id,
@@ -173,34 +184,15 @@ pub fn update_server(
             .unwrap_or(existing.agent_forwarding),
     };
 
-    db.server_update(&updated_server)
-        .map_err(|e| format!("Failed to update server: {}", e))?;
-
-    // Keep name-keyed credentials attached to the renamed server.
-    if updated_server.name != previous_name {
-        if let Err(e) = db.credential_rename_server(&previous_name, &updated_server.name) {
-            log::warn!(
-                "Failed to migrate credentials from '{}' to '{}': {}",
-                previous_name,
-                updated_server.name,
-                e
-            );
-        }
+    if updated_server.name.trim().is_empty()
+        || updated_server.host.trim().is_empty()
+        || updated_server.username.trim().is_empty()
+        || updated_server.port == 0
+    {
+        return Err("Name, host, username and a valid port are required".into());
     }
-
-    // Auth method changed: stored secret no longer matches, drop it so the
-    // next connect prompts for fresh credentials instead of failing silently.
-    if updated_server.auth_type != previous_auth_type {
-        if let Err(e) = db.credential_delete(&updated_server.name) {
-            log::warn!(
-                "Failed to clear stale credentials for '{}': {}",
-                updated_server.name,
-                e
-            );
-        }
-    }
-
-    Ok(())
+    db.server_update_with_credentials(&updated_server, updates.credentials.as_ref())
+        .map_err(|e| format!("Failed to update server: {}", e))
 }
 
 /// Delete a server and clean up everything attached to it:
@@ -317,16 +309,6 @@ pub fn get_credential(
 ) -> Result<Option<crate::storage::database::Credential>, String> {
     db.credential_get(&request.server_name)
         .map_err(|e| format!("Failed to get credentials: {}", e))
-}
-
-/// Delete credentials for a server
-#[tauri::command]
-pub fn delete_credential(
-    db: State<'_, Arc<Database>>,
-    request: CredentialServerInput,
-) -> Result<(), String> {
-    db.credential_delete(&request.server_name)
-        .map_err(|e| format!("Failed to delete credentials: {}", e))
 }
 
 #[cfg(test)]

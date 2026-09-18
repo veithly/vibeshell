@@ -288,9 +288,7 @@ async fn pg_query(
         .map_err(|_| anyhow!("PostgreSQL query timed out after 15s"))?
 }
 
-async fn mysql_connect(
-    endpoint: &DbEndpoint,
-) -> Result<mysql_async::Conn> {
+async fn mysql_connect(endpoint: &DbEndpoint) -> Result<mysql_async::Conn> {
     let builder = mysql_async::OptsBuilder::default()
         .ip_or_hostname(endpoint.host.as_str())
         .tcp_port(endpoint.port)
@@ -315,12 +313,14 @@ fn mysql_value_to_json(value: mysql_async::Value) -> Value {
         V::Float(number) => Value::from(number),
         V::Double(number) => Value::from(number),
         V::Bytes(bytes) => Value::String(String::from_utf8_lossy(&bytes).into_owned()),
-        V::Date(year, month, day, hour, minute, second, micro) => {
-            Value::String(format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}.{micro:06}"))
-        }
+        V::Date(year, month, day, hour, minute, second, micro) => Value::String(format!(
+            "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}.{micro:06}"
+        )),
         V::Time(negative, days, hours, minutes, seconds, micros) => {
             let sign = if negative { "-" } else { "" };
-            Value::String(format!("{sign}{days}d {hours:02}:{minutes:02}:{seconds:02}.{micros:06}"))
+            Value::String(format!(
+                "{sign}{days}d {hours:02}:{minutes:02}:{seconds:02}.{micros:06}"
+            ))
         }
     }
 }
@@ -328,7 +328,10 @@ fn mysql_value_to_json(value: mysql_async::Value) -> Value {
 /// The raw query path uses MySQL's text protocol, where every value arrives
 /// as bytes. Column metadata tells us the real type so numeric cells surface
 /// as JSON numbers in the data grid.
-fn mysql_typed_value(value: mysql_async::Value, column_type: Option<mysql_async::consts::ColumnType>) -> Value {
+fn mysql_typed_value(
+    value: mysql_async::Value,
+    column_type: Option<mysql_async::consts::ColumnType>,
+) -> Value {
     use mysql_async::Value as V;
     if let (V::Bytes(bytes), Some(kind)) = (&value, column_type) {
         let text = String::from_utf8_lossy(bytes);
@@ -338,21 +341,17 @@ fn mysql_typed_value(value: mysql_async::Value, column_type: Option<mysql_async:
             | mysql_async::consts::ColumnType::MYSQL_TYPE_LONG
             | mysql_async::consts::ColumnType::MYSQL_TYPE_LONGLONG
             | mysql_async::consts::ColumnType::MYSQL_TYPE_INT24
-            | mysql_async::consts::ColumnType::MYSQL_TYPE_YEAR => {
-                match text.parse::<i64>() {
-                    Ok(number) => Value::from(number),
-                    Err(_) => Value::String(text.into_owned()),
-                }
-            }
+            | mysql_async::consts::ColumnType::MYSQL_TYPE_YEAR => match text.parse::<i64>() {
+                Ok(number) => Value::from(number),
+                Err(_) => Value::String(text.into_owned()),
+            },
             mysql_async::consts::ColumnType::MYSQL_TYPE_FLOAT
-            | mysql_async::consts::ColumnType::MYSQL_TYPE_DOUBLE => {
-                match text.parse::<f64>() {
-                    Ok(number) => serde_json::Number::from_f64(number)
-                        .map(Value::Number)
-                        .unwrap_or_else(|| Value::String(text.into_owned())),
-                    Err(_) => Value::String(text.into_owned()),
-                }
-            }
+            | mysql_async::consts::ColumnType::MYSQL_TYPE_DOUBLE => match text.parse::<f64>() {
+                Ok(number) => serde_json::Number::from_f64(number)
+                    .map(Value::Number)
+                    .unwrap_or_else(|| Value::String(text.into_owned())),
+                Err(_) => Value::String(text.into_owned()),
+            },
             _ => Value::String(text.into_owned()),
         };
     }
@@ -375,7 +374,11 @@ async fn mysql_query(
         let columns: Vec<String> = result
             .columns()
             .as_ref()
-            .map(|cols| cols.iter().map(|column| column.name_str().to_string()).collect())
+            .map(|cols| {
+                cols.iter()
+                    .map(|column| column.name_str().to_string())
+                    .collect()
+            })
             .unwrap_or_default();
         let column_types: Vec<mysql_async::consts::ColumnType> = result
             .columns()
@@ -398,7 +401,11 @@ async fn mysql_query(
             })
             .collect();
         conn.disconnect().await.ok();
-        let affected_note = if columns.is_empty() { Some(affected) } else { None };
+        let affected_note = if columns.is_empty() {
+            Some(affected)
+        } else {
+            None
+        };
         Ok::<_, anyhow::Error>((columns, rows, affected_note))
     };
     tokio::time::timeout(OP_TIMEOUT, run)
@@ -427,7 +434,10 @@ async fn mysql_scalar(endpoint: &DbEndpoint, sql: &str) -> Result<String> {
 }
 
 fn value_str(row: &[Value], index: usize) -> String {
-    row.get(index).and_then(Value::as_str).unwrap_or("").to_string()
+    row.get(index)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }
 
 fn value_opt_str(value: &Value) -> Option<String> {
@@ -464,55 +474,12 @@ fn device_crypto() -> Result<&'static crate::storage::crypto::Crypto> {
     if let Some(crypto) = CRYPTO.get() {
         return Ok(crypto);
     }
-    let init = (|| {
-        let app_dir = directories::ProjectDirs::from("com", "vibeshell", "VibeShell")
-            .map(|dirs| dirs.data_dir().to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("."));
-        std::fs::create_dir_all(&app_dir)?;
-        let key_path = app_dir.join("dbconn.key");
-        let salt_path = app_dir.join("dbconn.salt");
-        let key_hex = match std::fs::read_to_string(&key_path) {
-            Ok(existing) if existing.trim().len() == 64 => existing.trim().to_string(),
-            _ => {
-                use ring::rand::{SecureRandom, SystemRandom};
-                let mut bytes = [0u8; 32];
-                SystemRandom::new()
-                    .fill(&mut bytes)
-                    .map_err(|_| anyhow!("Failed to generate device key"))?;
-                let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-                std::fs::write(&key_path, &hex)?;
-                set_private(&key_path);
-                hex
-            }
-        };
-        let salt = match std::fs::read(&salt_path) {
-            Ok(existing) if !existing.is_empty() => existing,
-            _ => {
-                let salt = crate::storage::crypto::Crypto::generate_salt();
-                std::fs::write(&salt_path, &salt)?;
-                set_private(&salt_path);
-                salt
-            }
-        };
-        crate::storage::crypto::Crypto::from_password(&key_hex, &salt)
-    })();
-    let crypto = init?;
+    let crypto = crate::storage::crypto::Crypto::from_device_key_files("dbconn")?;
     let _ = CRYPTO.set(crypto);
-    CRYPTO.get().ok_or_else(|| anyhow!("Device crypto failed to initialize"))
+    CRYPTO
+        .get()
+        .ok_or_else(|| anyhow!("Device crypto failed to initialize"))
 }
-
-#[cfg(unix)]
-fn set_private(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    if let Ok(metadata) = std::fs::metadata(path) {
-        let mut permissions = metadata.permissions();
-        permissions.set_mode(0o600);
-        let _ = std::fs::set_permissions(path, permissions);
-    }
-}
-
-#[cfg(not(unix))]
-fn set_private(_path: &std::path::Path) {}
 
 #[cfg(test)]
 mod engine_tests {
@@ -555,16 +522,16 @@ mod engine_tests {
         let test = test_connection(&endpoint).await;
         assert!(test.ok, "connection failed: {:?}", test.error);
 
-        run_query(&endpoint, "DROP DATABASE IF EXISTS vibeshell_engine_e2e", 10)
-            .await
-            .ok();
         run_query(
             &endpoint,
-            "CREATE DATABASE vibeshell_engine_e2e",
+            "DROP DATABASE IF EXISTS vibeshell_engine_e2e",
             10,
         )
         .await
-        .unwrap();
+        .ok();
+        run_query(&endpoint, "CREATE DATABASE vibeshell_engine_e2e", 10)
+            .await
+            .unwrap();
         run_query(
             &endpoint,
             "CREATE TABLE vibeshell_engine_e2e.items (id INT PRIMARY KEY, label TEXT)",
@@ -580,7 +547,9 @@ mod engine_tests {
         .await
         .unwrap();
 
-        let tables = list_tables(&endpoint, "vibeshell_engine_e2e").await.unwrap();
+        let tables = list_tables(&endpoint, "vibeshell_engine_e2e")
+            .await
+            .unwrap();
         assert!(tables.iter().any(|table| table.contains("items")));
 
         let columns = list_columns(&endpoint, "vibeshell_engine_e2e", "items")
@@ -591,13 +560,9 @@ mod engine_tests {
 
         let mut ep = endpoint.clone();
         ep.database = Some("vibeshell_engine_e2e".into());
-        let (cols, rows, _) = run_query(
-            &ep,
-            "SELECT id, label FROM items ORDER BY id",
-            10,
-        )
-        .await
-        .unwrap();
+        let (cols, rows, _) = run_query(&ep, "SELECT id, label FROM items ORDER BY id", 10)
+            .await
+            .unwrap();
         assert_eq!(cols, vec!["id", "label"]);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0][0], serde_json::Value::from(1));
@@ -614,7 +579,11 @@ mod engine_tests {
         let endpoint = pg_endpoint().expect("VIBESHELL_TEST_PG_HOST not set");
         let test = test_connection(&endpoint).await;
         assert!(test.ok, "connection failed: {:?}", test.error);
-        assert!(test.server_version.as_deref().unwrap_or("").contains("PostgreSQL"));
+        assert!(test
+            .server_version
+            .as_deref()
+            .unwrap_or("")
+            .contains("PostgreSQL"));
 
         let databases = list_databases(&endpoint).await.unwrap();
         assert!(databases.iter().any(|name| name == "postgres"));
@@ -627,7 +596,9 @@ mod engine_tests {
         .await
         .unwrap();
         let tables = list_tables(&endpoint, "postgres").await.unwrap();
-        assert!(tables.iter().any(|table| table.contains("vibeshell_engine_e2e")));
+        assert!(tables
+            .iter()
+            .any(|table| table.contains("vibeshell_engine_e2e")));
         let columns = list_columns(&endpoint, "postgres", "vibeshell_engine_e2e")
             .await
             .unwrap();

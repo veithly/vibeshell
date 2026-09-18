@@ -7,3 +7,4 @@
 //! existing `crate::plugins::*` call sites stable.
 
 pub use vibeshell_plugins::*;
+pub mod agent;

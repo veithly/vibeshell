@@ -24,7 +24,7 @@ export function usePluginAction(pluginId: string, sessionId: string) {
   const sequenceRef = useRef(0);
 
   const run = useCallback(
-    async (actionId: string, inputs?: PluginInputValues): Promise<DashboardActionOutcome | null> => {
+    async (actionId: string, inputs?: PluginInputValues, confirmed = false): Promise<DashboardActionOutcome | null> => {
       const sequence = ++sequenceRef.current;
       setError(null);
       setRunningAction(actionId);
@@ -36,6 +36,7 @@ export function usePluginAction(pluginId: string, sessionId: string) {
             sessionId,
             inputs: inputs ?? {},
             trySudo: false,
+            confirmed,
           },
         });
         if (sequence !== sequenceRef.current) return null;

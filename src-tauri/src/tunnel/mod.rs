@@ -1,3 +1,4 @@
+pub(crate) mod bridge;
 pub mod dynamic_forward;
 pub mod local_forward;
 pub mod manager;

@@ -17,7 +17,9 @@ use crate::storage::Database;
 struct LoggerHandle {
     recording_id: String,
     session_id: String,
-    abort_handle: tokio::task::AbortHandle,
+    /// Signaling this sender tells the writer task to flush and exit cleanly
+    /// instead of being aborted mid-write.
+    shutdown: tokio::sync::oneshot::Sender<()>,
 }
 
 pub struct SessionLogger {
@@ -59,6 +61,11 @@ impl SessionLogger {
         // Create directory for this session's recordings
         let session_dir = self.log_dir.join(&session_id);
         tokio::fs::create_dir_all(&session_dir).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&session_dir, std::fs::Permissions::from_mode(0o700));
+        }
 
         // Generate file path
         let now = Utc::now();
@@ -86,7 +93,10 @@ impl SessionLogger {
         // Spawn the logging task
         let rec_id = recording_id.clone();
         let fp = file_path.clone();
-        let task = tokio::spawn(async move {
+        // Shutdown signal: stop_recording sends on this so the writer can
+        // flush its BufWriter before exiting instead of being aborted.
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
             let file = match tokio::fs::File::create(&fp).await {
                 Ok(f) => f,
                 Err(e) => {
@@ -94,6 +104,13 @@ impl SessionLogger {
                     return;
                 }
             };
+            // Recording files may contain sensitive terminal output; keep
+            // them private to the user.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&fp, std::fs::Permissions::from_mode(0o600));
+            }
 
             let mut writer = tokio::io::BufWriter::new(file);
             let mut flush_interval = tokio::time::interval(std::time::Duration::from_secs(5));
@@ -102,6 +119,10 @@ impl SessionLogger {
 
             loop {
                 tokio::select! {
+                    biased;
+                    _ = &mut shutdown_rx => {
+                        break;
+                    }
                     result = receiver.recv() => {
                         match result {
                             Ok(data) => {
@@ -132,8 +153,6 @@ impl SessionLogger {
             info!("[SessionLogger] Finished recording {}", rec_id);
         });
 
-        let abort_handle = task.abort_handle();
-
         // Store the handle
         let mut loggers = self.active_loggers.write().await;
         loggers.insert(
@@ -141,7 +160,7 @@ impl SessionLogger {
             LoggerHandle {
                 recording_id: recording_id.clone(),
                 session_id,
-                abort_handle,
+                shutdown: shutdown_tx,
             },
         );
 
@@ -157,7 +176,9 @@ impl SessionLogger {
         let mut loggers = self.active_loggers.write().await;
 
         if let Some(handle) = loggers.remove(recording_id) {
-            handle.abort_handle.abort();
+            // Signal the writer to flush and exit instead of aborting it,
+            // which would discard up to 5s of unflushed output.
+            let _ = handle.shutdown.send(());
             // Update ended_at in database
             let now = Utc::now().timestamp();
             self.database.recording_update_ended(recording_id, now)?;
@@ -189,7 +210,7 @@ impl SessionLogger {
         let now = Utc::now().timestamp();
 
         for (id, handle) in loggers.drain() {
-            handle.abort_handle.abort();
+            let _ = handle.shutdown.send(());
             let _ = self.database.recording_update_ended(&id, now);
             info!("[SessionLogger] Stopped recording {}", id);
         }
@@ -208,7 +229,7 @@ impl SessionLogger {
 
         for id in to_remove {
             if let Some(handle) = loggers.remove(&id) {
-                handle.abort_handle.abort();
+                let _ = handle.shutdown.send(());
                 let _ = self.database.recording_update_ended(&id, now);
             }
         }

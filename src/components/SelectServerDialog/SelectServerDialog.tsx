@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useGSAP } from '@gsap/react';
-import gsap from 'gsap';
 import {
   Bot,
   Grid2X2,
@@ -24,8 +22,6 @@ import { useNotificationStore } from '../../stores/notificationStore';
 import { CodingAgentLauncher } from '../CodingAgentLauncher';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
-
-gsap.registerPlugin(useGSAP);
 
 type ConnectionTab = 'agent' | 'local' | 'ssh';
 type LauncherView = 'list' | 'icons';
@@ -310,18 +306,25 @@ export function SelectServerDialog({
     };
   }, [activeTab, initialTab, isOpen, serverToDelete]);
 
-  useGSAP(() => {
-    if (!isOpen) return;
-    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (!reduceMotion) {
-      gsap.fromTo(
-        '.connection-card',
-        { autoAlpha: 0, y: 26, scale: 0.98 },
-        { autoAlpha: 1, y: 0, scale: 1, duration: 0.48, stagger: 0.035, ease: 'power3.out' }
-      );
-    }
-
-  }, { scope: rootRef, dependencies: [isOpen, activeTab, view, query] });
+  useEffect(() => {
+    if (!isOpen || typeof window.matchMedia !== 'function'
+      || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const cards = rootRef.current?.querySelectorAll<HTMLElement>('.connection-card');
+    const animations = Array.from(cards ?? []).flatMap((card, index) => {
+      // Older WebViews and test environments can simply render without motion.
+      if (typeof card.animate !== 'function') return [];
+      return [card.animate([
+        { opacity: 0, transform: 'translateY(26px) scale(0.98)' },
+        { opacity: 1, transform: 'translateY(0) scale(1)' },
+      ], {
+        duration: 480,
+        delay: Math.min(index, 12) * 35,
+        easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+        fill: 'backwards',
+      })];
+    });
+    return () => animations.forEach((animation) => animation.cancel());
+  }, [isOpen, activeTab, view, query]);
 
   const changeTab = useCallback((tab: ConnectionTab) => {
     setActiveTab(tab);

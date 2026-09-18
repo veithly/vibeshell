@@ -13,10 +13,11 @@ mod terminal;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use command_input::CommandInputArgs;
 use commands::file_tools::ContentInputArgs;
+use vibeshell_core::ipc::IpcMessage;
 
 #[derive(Parser)]
 #[command(name = "vibeshell")]
@@ -54,6 +55,23 @@ struct Cli {
 enum Commands {
     /// Show version information
     Version,
+
+    /// Show GPLv3 terms, copyright notices and source information
+    License,
+
+    /// Send sensitive prompt input from stdin, never from command-line arguments.
+    SendSecret {
+        session_id: String,
+        /// Append Enter unless the input already ends in a newline.
+        #[arg(long)]
+        enter: bool,
+    },
+
+    /// Discover installed plugins, read references, and run reviewed actions.
+    Plugins {
+        #[command(subcommand)]
+        command: commands::plugins::PluginCommand,
+    },
 
     /// Connect to a configured SSH server in the terminal
     #[command(
@@ -467,6 +485,35 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
+        Some(Commands::Plugins { command }) => commands::plugins::run(command),
+        Some(Commands::SendSecret { session_id, enter }) => {
+            use std::io::{IsTerminal, Read};
+            if std::io::stdin().is_terminal() {
+                bail!("Use protected piped stdin or the application's password input; interactive stdin could echo a secret");
+            }
+            let mut data = Vec::new();
+            std::io::stdin().take(65_537).read_to_end(&mut data)?;
+            if data.is_empty() || data.len() > 65_536 {
+                bail!("Sensitive input must contain 1–65536 bytes");
+            }
+            if enter && !matches!(data.last(), Some(b'\r' | b'\n')) {
+                data.push(b'\r');
+            }
+            let session_id = session_alias::resolve(&session_id).unwrap_or(session_id);
+            match ipc_support::send(&IpcMessage::SendSensitiveInput { session_id, data })? {
+                IpcMessage::Ok => Ok(()),
+                IpcMessage::Error { message } => bail!("{message}"),
+                _ => bail!("Unexpected sensitive input response"),
+            }
+        }
+        Some(Commands::License) => {
+            println!(
+                "{}\n{}",
+                include_str!("../../NOTICE"),
+                include_str!("../../LICENSE")
+            );
+            Ok(())
+        }
         Some(Commands::Version) => {
             println!("vibeshell {}", vibeshell_core::version());
             Ok(())
@@ -579,6 +626,7 @@ fn main() -> Result<()> {
             println!("VibeShell - High-performance SSH/SFTP terminal");
             println!();
             println!("Run 'vibeshell --help' for usage information.");
+            println!("GPL-3.0-only; no warranty. Run 'vibeshell license' for terms and source.");
             Ok(())
         }
     }
@@ -586,8 +634,15 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{commands, Cli, Commands};
     use clap::Parser;
+
+    #[test]
+    fn exposes_license_without_connecting_to_a_server() {
+        let parsed = Cli::try_parse_from(["vibeshell", "license"]).unwrap();
+        assert!(matches!(parsed.command, Some(Commands::License)));
+        assert!(include_str!("../../LICENSE").contains("Version 3, 29 June 2007"));
+    }
 
     #[test]
     fn parses_servers_command() {
@@ -806,6 +861,73 @@ mod tests {
         assert!(
             parsed.is_ok(),
             "vibeshell ss <alias> should parse (alias for ssh-session)"
+        );
+    }
+
+    #[test]
+    fn parses_plugin_discovery_and_typed_execution_contract() {
+        for args in [
+            vec!["vibeshell", "plugins", "list", "--installed", "--json"],
+            vec!["vibeshell", "plugins", "describe", "server-performance"],
+            vec!["vibeshell", "plugins", "docs", "docker-containers"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        let cli = Cli::try_parse_from([
+            "vibeshell",
+            "plugins",
+            "run",
+            "example.ai",
+            "show",
+            "--session",
+            "001",
+            "--inputs",
+            r#"{"count":2,"text":"quoted value"}"#,
+            "--confirm",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Commands::Plugins {
+                command:
+                    commands::plugins::PluginCommand::Run {
+                        inputs,
+                        confirm,
+                        session,
+                        ..
+                    },
+            } => {
+                assert_eq!(inputs["count"], 2);
+                assert!(confirm);
+                assert_eq!(session, "001");
+            }
+            _ => panic!("wrong plugin command"),
+        }
+        assert!(Cli::try_parse_from([
+            "vibeshell",
+            "plugins",
+            "run",
+            "x",
+            "y",
+            "--session",
+            "001",
+            "--sudo"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "vibeshell",
+            "plugins",
+            "run",
+            "x",
+            "y",
+            "--session",
+            "001",
+            "--inputs",
+            "[]"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["vibeshell", "send-secret", "001", "--enter"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["vibeshell", "send-secret", "001", "secret-in-argv"]).is_err()
         );
     }
 

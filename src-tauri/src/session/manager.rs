@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::session::{Session, SessionInfo, SessionState};
-use crate::ssh::{PtyConfig, SshClient};
+use crate::ssh::{FingerprintStore, HostKeyCheck, PtyConfig, SshClient};
 use crate::storage::{Database, Server};
 
 /// Credentials for SSH authentication
@@ -57,16 +57,123 @@ impl SshCredential {
     }
 }
 
+/// Holds the spawned jump-host bridge task until the target session is fully
+/// connected. If session setup fails, dropping the guard aborts the bridge
+/// task (closing its listener); without this the task blocks in
+/// `accept().await` forever and leaks the whole jump-host SSH connection
+/// until process exit. On success, `keep_alive` disarms the guard: the live
+/// session owns the bridge and the task ends by itself once the session's
+/// TCP stream closes.
+struct JumpBridgeGuard {
+    handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl JumpBridgeGuard {
+    fn new(handle: tokio::task::JoinHandle<()>) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+
+    fn keep_alive(mut self) {
+        self.handle = None;
+    }
+}
+
+impl Drop for JumpBridgeGuard {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
 pub struct SessionManager {
+    pub agent_input_tracker: Arc<crate::mcp::SharedAgentInputTracker>,
+    pub(crate) local_shell_manager: std::sync::OnceLock<Arc<crate::local_shell::LocalShellManager>>,
     sessions: Arc<RwLock<HashMap<String, Arc<Session>>>>,
     database: Arc<Database>,
+    /// Optional collaborators for backend lifecycle closure: every session
+    /// teardown path (session_kill, session_kill_all, delete_server, idle
+    /// reaper) routes through kill()/kill_all(), so tunnels and recordings
+    /// are stopped there too. Injected once from lib.rs setup.
+    tunnel_manager: std::sync::OnceLock<Arc<crate::tunnel::TunnelManager>>,
+    session_logger: std::sync::OnceLock<Arc<crate::logging::SessionLogger>>,
+    /// SSH host-key (TOFU) verification store. Injected from lib.rs so the
+    /// manager shares one instance with the fingerprint UI commands; headless
+    /// entry points (CLI daemon) fall back to a lazily-created default store.
+    fingerprint_store: std::sync::OnceLock<Arc<FingerprintStore>>,
 }
 
 impl SessionManager {
     pub fn new(database: Arc<Database>) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            agent_input_tracker: Arc::new(crate::mcp::SharedAgentInputTracker::default()),
+            local_shell_manager: std::sync::OnceLock::new(),
             database,
+            tunnel_manager: std::sync::OnceLock::new(),
+            session_logger: std::sync::OnceLock::new(),
+            fingerprint_store: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Register the fingerprint store so every connect path verifies the
+    /// server's host key (TOFU) against the same store the fingerprint UI
+    /// commands use.
+    pub fn set_fingerprint_store(&self, store: Arc<FingerprintStore>) {
+        let _ = self.fingerprint_store.set(store);
+    }
+
+    /// Resolve the fingerprint store: the injected instance when running
+    /// inside the GUI, or a lazily-created store at the default location for
+    /// headless entry points (CLI daemon). Connection must fail closed when
+    /// the store cannot be opened.
+    fn fingerprint_store(&self) -> Result<Arc<FingerprintStore>> {
+        if let Some(store) = self.fingerprint_store.get() {
+            return Ok(store.clone());
+        }
+        let store = Arc::new(FingerprintStore::new()?);
+        let _ = self.fingerprint_store.set(store.clone());
+        Ok(self.fingerprint_store.get().cloned().unwrap_or(store))
+    }
+
+    /// Build the host-key verification context for a (host, port) target.
+    fn host_key_check(&self, host: &str, port: u16) -> Result<HostKeyCheck> {
+        Ok(HostKeyCheck::new(
+            self.fingerprint_store()?,
+            host.to_string(),
+            port,
+        ))
+    }
+
+    /// Register the tunnel manager so killing a session also stops its tunnels.
+    pub fn set_tunnel_manager(&self, tunnel_manager: Arc<crate::tunnel::TunnelManager>) {
+        let _ = self.tunnel_manager.set(tunnel_manager);
+    }
+
+    /// Register the session logger so killing a session also stops (and
+    /// flushes) its recording.
+    pub fn set_session_logger(&self, session_logger: Arc<crate::logging::SessionLogger>) {
+        let _ = self.session_logger.set(session_logger);
+    }
+
+    pub(crate) fn tunnel_service(&self) -> Option<Arc<crate::tunnel::TunnelManager>> {
+        self.tunnel_manager.get().cloned()
+    }
+
+    pub(crate) fn recording_service(&self) -> Option<Arc<crate::logging::SessionLogger>> {
+        self.session_logger.get().cloned()
+    }
+
+    /// Stop tunnels and recording for a dying session, if collaborators were
+    /// injected. Best-effort: session teardown must not fail because of them.
+    async fn run_lifecycle_cleanup(&self, session_id: &str) {
+        if let Some(tunnel_manager) = self.tunnel_manager.get() {
+            tunnel_manager.stop_all_for_session(session_id).await;
+        }
+        if let Some(session_logger) = self.session_logger.get() {
+            session_logger.stop_for_session(session_id).await;
         }
     }
 
@@ -275,9 +382,7 @@ impl SessionManager {
 
         // === Jump Host Support ===
         // If server has a jump_host_id, we connect through the jump host first
-        let _jump_bridge_handle: Option<tokio::task::JoinHandle<()>> = if let Some(ref jump_id) =
-            server.jump_host_id
-        {
+        if let Some(ref jump_id) = server.jump_host_id {
             info!(
                 "[SessionManager] Server has jump host configured: {}",
                 jump_id
@@ -311,6 +416,10 @@ impl SessionManager {
             // Create a separate SSH client for the jump host (with a dummy output channel)
             let (jump_output_tx, _jump_output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
             let mut jump_ssh = SshClient::new(jump_output_tx);
+            // TOFU: the jump host's key must be verified too — its credentials
+            // are sent during this handshake, so an untrusted/changed key must
+            // abort before authentication.
+            jump_ssh.set_host_key_check(self.host_key_check(&jump_server.host, jump_server.port)?);
 
             // Connect to jump host. Imported profiles may reference a local
             // key path instead of duplicating private-key contents in SQLite.
@@ -370,56 +479,11 @@ impl SessionManager {
             let bridge_handle = tokio::spawn(async move {
                 match bridge_listener.accept().await {
                     Ok((tcp_stream, _)) => {
-                        // Use into_stream() for bidirectional channel I/O
-                        let channel_stream = forward_channel.into_stream();
-                        let (mut ch_reader, mut ch_writer) = tokio::io::split(channel_stream);
-                        let (mut tcp_reader, mut tcp_writer) = tokio::io::split(tcp_stream);
-
-                        let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(2);
-
-                        // TCP -> SSH channel (to target through jump host)
-                        let done1 = done_tx.clone();
-                        let t2s = tokio::spawn(async move {
-                            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                            let mut buf = vec![0u8; 32768];
-                            loop {
-                                match tcp_reader.read(&mut buf).await {
-                                    Ok(0) => break,
-                                    Ok(n) => {
-                                        if (ch_writer.write_all(&buf[..n]).await).is_err() {
-                                            break;
-                                        }
-                                    }
-                                    Err(_) => break,
-                                }
-                            }
-                            let _ = ch_writer.shutdown().await;
-                            let _ = done1.send(()).await;
-                        });
-
-                        // SSH channel -> TCP (from target through jump host)
-                        let done2 = done_tx;
-                        let s2t = tokio::spawn(async move {
-                            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                            let mut buf = vec![0u8; 32768];
-                            loop {
-                                match ch_reader.read(&mut buf).await {
-                                    Ok(0) => break,
-                                    Ok(n) => {
-                                        if (tcp_writer.write_all(&buf[..n]).await).is_err() {
-                                            break;
-                                        }
-                                    }
-                                    Err(_) => break,
-                                }
-                            }
-                            let _ = tcp_writer.shutdown().await;
-                            let _ = done2.send(()).await;
-                        });
-
-                        done_rx.recv().await;
-                        t2s.abort();
-                        s2t.abort();
+                        // One cancellation scope, with correct half-close semantics.
+                        let mut channel_stream = forward_channel.into_stream();
+                        let mut tcp_stream = tcp_stream;
+                        let _ = tokio::io::copy_bidirectional(&mut tcp_stream, &mut channel_stream)
+                            .await;
                     }
                     Err(e) => {
                         error!("[SessionManager] Bridge accept error: {}", e);
@@ -429,8 +493,17 @@ impl SessionManager {
                 drop(jump_ssh);
             });
 
+            // Drop-guard: if any step below fails, abort the bridge task so
+            // its listener and the jump-host SSH connection do not leak.
+            let bridge_guard = JumpBridgeGuard::new(bridge_handle);
+
             // Now connect the target SSH through our local bridge
             let mut ssh_client = SshClient::new(ssh_output_tx);
+            // TOFU: the SSH handshake traverses the jump tunnel, so the key
+            // presented during this handshake belongs to the TARGET server.
+            // Verify it under the target's real identity, not the local
+            // bridge address.
+            ssh_client.set_host_key_check(self.host_key_check(&server.host, server.port)?);
             info!(
                 "[SessionManager] Connecting to target through bridge at 127.0.0.1:{}...",
                 bridge_port
@@ -461,10 +534,14 @@ impl SessionManager {
             session.set_ssh_client(ssh_client).await;
             session.set_state(SessionState::Connected).await;
 
-            Some(bridge_handle)
+            // Session is live: the bridge task ends by itself when the
+            // session's TCP stream closes, so disarm the drop-guard.
+            bridge_guard.keep_alive();
         } else {
             // === Direct Connection (no jump host) ===
             let mut ssh_client = SshClient::new(ssh_output_tx);
+            // TOFU: verify the server's host key before credentials are sent.
+            ssh_client.set_host_key_check(self.host_key_check(&server.host, server.port)?);
 
             info!("[SessionManager] Connecting SSH client...");
             match &credential {
@@ -503,14 +580,12 @@ impl SessionManager {
 
             session.set_ssh_client(ssh_client).await;
             session.set_state(SessionState::Connected).await;
-
-            None
-        };
+        }
 
         info!("[SessionManager] Shell opened successfully");
 
         // Spawn task to bridge SSH output to broadcast channel
-        let session_for_output = session.clone();
+        let session_for_output = Arc::downgrade(&session);
         let session_id_for_output = session.id.clone();
         tokio::spawn(async move {
             debug!(
@@ -518,7 +593,10 @@ impl SessionManager {
                 session_id_for_output
             );
             while let Some(data) = ssh_output_rx.recv().await {
-                session_for_output.publish_output(data).await;
+                let Some(session) = session_for_output.upgrade() else {
+                    break;
+                };
+                session.publish_output(data).await;
             }
             debug!(
                 "[SessionManager] Output bridge task ended for session {}",
@@ -527,7 +605,7 @@ impl SessionManager {
         });
 
         // Spawn task to bridge input channel to SSH stdin
-        let session_clone = session.clone();
+        let session_clone = Arc::downgrade(&session);
         let session_id_for_input = session.id.clone();
         tokio::spawn(async move {
             debug!(
@@ -535,7 +613,10 @@ impl SessionManager {
                 session_id_for_input
             );
             while let Some(data) = input_rx.recv().await {
-                if let Err(e) = session_clone.write_to_ssh(&data).await {
+                let Some(session) = session_clone.upgrade() else {
+                    break;
+                };
+                if let Err(e) = session.write_to_ssh(&data).await {
                     error!(
                         "[SessionManager] Error writing to SSH for session {}: {}",
                         session_id_for_input, e
@@ -568,9 +649,12 @@ impl SessionManager {
                             sid, e
                         );
                     } else {
+                        // Never log the command content: post-login commands
+                        // may embed tokens. Session id + length are enough.
                         info!(
-                            "[SessionManager] Sent post-login command for session {}: {}",
-                            sid, cmd_str
+                            "[SessionManager] Sent post-login command for session {} ({} chars, content not logged)",
+                            sid,
+                            cmd_str.len()
                         );
                     }
                 });
@@ -630,6 +714,9 @@ impl SessionManager {
 
         // Create and connect SSH client
         let mut ssh_client = SshClient::new(ssh_output_tx);
+        // TOFU: verify the server's host key before credentials are sent
+        // (reconnect path — same enforcement as a fresh connection).
+        ssh_client.set_host_key_check(self.host_key_check(&server.host, server.port)?);
 
         info!("[SessionManager] Starting SSH connection...");
         match &credential {
@@ -678,7 +765,7 @@ impl SessionManager {
         session.set_state(SessionState::Connected).await;
 
         // Bridge SSH output to session broadcast
-        let session_for_output = session.clone();
+        let session_for_output = Arc::downgrade(&session);
         let session_id_clone = session_id.to_string();
         tokio::spawn(async move {
             debug!(
@@ -686,7 +773,10 @@ impl SessionManager {
                 session_id_clone
             );
             while let Some(data) = ssh_output_rx.recv().await {
-                session_for_output.publish_output(data).await;
+                let Some(session) = session_for_output.upgrade() else {
+                    break;
+                };
+                session.publish_output(data).await;
             }
             debug!(
                 "[SessionManager] Output bridge task ended for session {}",
@@ -703,8 +793,12 @@ impl SessionManager {
 
     pub async fn kill(&self, id: &str) -> Result<()> {
         info!("[SessionManager] Killing session {}", id);
-        let mut sessions = self.sessions.write().await;
-        if let Some(session) = sessions.remove(id) {
+        let session = self.sessions.write().await.remove(id);
+        if let Some(session) = session {
+            // Backend lifecycle closure: stop tunnels and recording that only
+            // the frontend used to remember. Runs for every teardown path
+            // (session_kill, session_kill_all, delete_server, reaper).
+            self.run_lifecycle_cleanup(id).await;
             // Disconnect SSH gracefully
             if let Err(e) = session.disconnect().await {
                 error!("[SessionManager] Error disconnecting session {}: {}", id, e);
@@ -719,14 +813,16 @@ impl SessionManager {
 
     pub async fn kill_all(&self) -> Result<()> {
         info!("[SessionManager] Killing all sessions");
-        let mut sessions = self.sessions.write().await;
+        // Move ownership out before awaiting cleanup. Other sessions must
+        // remain accessible while a slow peer is disconnecting.
+        let sessions = std::mem::take(&mut *self.sessions.write().await);
         let count = sessions.len();
-        for (id, session) in sessions.iter() {
+        for (id, session) in &sessions {
+            self.run_lifecycle_cleanup(id).await;
             if let Err(e) = session.disconnect().await {
                 error!("[SessionManager] Error disconnecting session {}: {}", id, e);
             }
         }
-        sessions.clear();
         info!("[SessionManager] Killed {} sessions", count);
         Ok(())
     }

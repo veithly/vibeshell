@@ -279,12 +279,14 @@ pub fn send_key(session_id: &str, tokens: &[String]) -> Result<()> {
         bail!("Could not parse any key input from the provided tokens");
     }
 
-    ipc_support::send(&IpcMessage::SendInput {
+    match ipc_support::send(&IpcMessage::SendInput {
         session_id: session_id.to_string(),
         data,
-    })?;
-
-    Ok(())
+    })? {
+        IpcMessage::Ok => Ok(()),
+        IpcMessage::Error { message } => bail!("{message}"),
+        _ => bail!("Unexpected terminal input response"),
+    }
 }
 
 #[cfg(test)]

@@ -29,7 +29,8 @@ interface PluginStore {
     sessionId: string,
     inputs?: PluginInputValues,
     sudoPassword?: string | null,
-    trySudo?: boolean
+    trySudo?: boolean,
+    confirmed?: boolean
   ) => Promise<PluginExecutionResult | null>;
   clearError: () => void;
 }
@@ -167,7 +168,8 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
     sessionId,
     inputs = {},
     sudoPassword = null,
-    trySudo = false
+    trySudo = false,
+    confirmed = false
   ) => {
     const requestSequence = ++executionRequestSequence;
     set({ operationId: `${pluginId}:${actionId}`, error: null });
@@ -180,6 +182,7 @@ export const usePluginStore = create<PluginStore>((set, get) => ({
           inputs,
           sudoPassword: sudoPassword ?? undefined,
           trySudo,
+          confirmed,
         },
       });
       if (result.success) {

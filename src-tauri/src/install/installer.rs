@@ -34,6 +34,15 @@ fn write_if_changed(path: &PathBuf, content: &str) -> Result<()> {
 
 fn install_skill_file_to_dirs(skills_dirs: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
     let skill_content = render_skill_md()?;
+    let references = crate::plugins::builtin_catalog()
+        .map_err(anyhow::Error::msg)?
+        .into_iter()
+        .map(|manifest| {
+            let reference =
+                crate::plugins::agent_reference(&manifest).map_err(anyhow::Error::msg)?;
+            Ok((manifest.id, reference))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let mut installed_paths = Vec::new();
 
     for skills_dir in skills_dirs {
@@ -42,6 +51,12 @@ fn install_skill_file_to_dirs(skills_dirs: Vec<PathBuf>) -> Result<Vec<PathBuf>>
             .with_context(|| format!("Failed to create skill directory {:?}", skill_dir))?;
 
         let skill_path = skill_dir.join("SKILL.md");
+        // Write referenced content before publishing the main entry point.
+        let reference_dir = skill_dir.join("references");
+        fs::create_dir_all(&reference_dir)?;
+        for (id, content) in &references {
+            write_if_changed(&reference_dir.join(format!("{id}.md")), content)?;
+        }
         write_if_changed(&skill_path, &skill_content)?;
 
         // Remove the obsolete Node gateway helper from prior installations. The
@@ -243,5 +258,25 @@ mod tests {
         assert!(content.contains("name: vibeshell"));
         assert!(content.contains("native `vibeshell` executable"));
         assert!(!skills_dir.join(SKILL_DIR_NAME).join("gateway.mjs").exists());
+        for manifest in crate::plugins::builtin_catalog().unwrap() {
+            let relative = format!("references/{}.md", manifest.id);
+            assert!(
+                content.contains(&relative),
+                "missing main Skill index entry {}",
+                manifest.id
+            );
+            let reference =
+                fs::read_to_string(skills_dir.join(SKILL_DIR_NAME).join(relative)).unwrap();
+            assert_eq!(
+                reference,
+                crate::plugins::agent_reference(&manifest).unwrap()
+            );
+            assert!(reference.contains("## MCP equivalent"));
+            for action in crate::plugins::agent_actions(&manifest) {
+                assert!(reference.contains(&format!("## `{}`", action["id"].as_str().unwrap())));
+            }
+        }
+        // A repeated install must remain complete and not append duplicate docs.
+        install_skill_file_to_dirs(vec![skills_dir]).unwrap();
     }
 }

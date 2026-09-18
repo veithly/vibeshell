@@ -1,7 +1,11 @@
 {
   "name": "vibeshell",
-  "version": "1.0.15",
-  "description": "High-performance SSH/SFTP terminal with AI integration",
+  "version": "1.1.0",
+  "license": "GPL-3.0-only",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "description": "Local-first SSH workspace for humans and coding agents",
   "type": "module",
   "scripts": {
     "dev": "node node_modules/vite/bin/vite.js",
@@ -15,7 +19,6 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@gsap/react": "^2.1.2",
     "@tauri-apps/api": "2.9.1",
     "@tauri-apps/plugin-process": "2.3.1",
     "@tauri-apps/plugin-updater": "2.9.0",
@@ -23,10 +26,8 @@
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
-    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "fflate": "^0.8.3",
-    "gsap": "^3.15.0",
     "highlight.js": "^11.11.1",
     "i18next": "^25.8.6",
     "i18next-browser-languagedetector": "^8.2.1",
@@ -52,7 +53,7 @@
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.6.2",
-    "vite": "^6.0.3",
-    "vitest": "^2.1.9"
+    "vite": "^6.4.3",
+    "vitest": "^4.1.11"
   }
 }

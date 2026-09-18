@@ -117,8 +117,29 @@ pub enum IpcMessage {
     ListServers,
     /// List all active sessions
     ListSessions,
+    SessionService {
+        request: super::runtime_services::RuntimeRequest,
+    },
+    ServiceResult {
+        value: serde_json::Value,
+    },
+    PluginList {
+        installed_only: bool,
+    },
+    PluginDescribe {
+        plugin_id: String,
+        reference: bool,
+    },
+    PluginExecute {
+        request: crate::plugins::PluginExecuteRequest,
+    },
+    PluginData {
+        data: serde_json::Value,
+    },
     /// Create a new session connecting to the specified server
-    CreateSession { server_name: String },
+    CreateSession {
+        server_name: String,
+    },
     /// Create and connect a new session with explicit credentials
     CreateSessionWithCredentials {
         server_name: String,
@@ -129,13 +150,32 @@ pub enum IpcMessage {
         rows: Option<u32>,
     },
     /// Attach to an existing session (starts streaming output)
-    AttachSession { session_id: String },
+    AttachSession {
+        session_id: String,
+    },
     /// Detach from a session (keeps it running)
-    DetachSession { session_id: String },
+    DetachSession {
+        session_id: String,
+    },
     /// Kill/terminate a session
-    KillSession { session_id: String },
+    KillSession {
+        session_id: String,
+    },
     /// Send input data to a session
-    SendInput { session_id: String, data: Vec<u8> },
+    SendInput {
+        session_id: String,
+        data: Vec<u8>,
+    },
+    /// GUI keystrokes share input tracking, but are not Agent commands.
+    SendUserInput {
+        session_id: String,
+        data: Vec<u8>,
+    },
+    /// Secret input is classified normally, but its contents never enter audit.
+    SendSensitiveInput {
+        session_id: String,
+        data: Vec<u8>,
+    },
     /// Resize the PTY for a session
     Resize {
         session_id: String,
@@ -149,8 +189,15 @@ pub enum IpcMessage {
         #[serde(default)]
         stdin: Option<String>,
     },
+    /// Capture a quick command's actual exit status, with GUI execution limits.
+    ExecQuickCommand {
+        session_id: String,
+        command: String,
+    },
     /// Initialize SFTP context for a session
-    SftpInit { session_id: String },
+    SftpInit {
+        session_id: String,
+    },
     /// List directory contents
     SftpListDir {
         session_id: String,
@@ -184,7 +231,10 @@ pub enum IpcMessage {
         excluded_paths: Vec<String>,
     },
     /// Create a remote directory
-    SftpMkdir { session_id: String, path: String },
+    SftpMkdir {
+        session_id: String,
+        path: String,
+    },
     /// Delete a remote file or directory
     SftpDelete {
         session_id: String,
@@ -198,9 +248,14 @@ pub enum IpcMessage {
         new_path: String,
     },
     /// Return the current SFTP working directory
-    SftpPwd { session_id: String },
+    SftpPwd {
+        session_id: String,
+    },
     /// Stat a remote path
-    SftpStat { session_id: String, path: String },
+    SftpStat {
+        session_id: String,
+        path: String,
+    },
     /// Read a remote file for preview
     SftpReadFile {
         session_id: String,
@@ -227,34 +282,68 @@ pub enum IpcMessage {
 
     // Responses from GUI to CLI
     /// List of configured servers
-    ServerList { servers: Vec<IpcServerInfo> },
+    ServerList {
+        servers: Vec<IpcServerInfo>,
+    },
     /// List of active session IDs
-    SessionList { sessions: Vec<IpcSessionInfo> },
+    SessionList {
+        sessions: Vec<IpcSessionInfo>,
+    },
     /// A new session was created
-    SessionCreated { session_id: String },
+    SessionCreated {
+        session_id: String,
+    },
     /// Output data from a session (used in streaming mode)
-    SessionOutput { session_id: String, data: Vec<u8> },
+    SessionOutput {
+        session_id: String,
+        data: Vec<u8>,
+    },
     /// Session has ended (sent during streaming attach)
-    SessionEnded { reason: String },
+    SessionEnded {
+        reason: String,
+    },
     /// Output for a single remote command
-    CommandOutput { output: String },
+    CommandOutput {
+        output: String,
+    },
+    CommandResult {
+        output: String,
+        exit_code: i32,
+    },
     /// SFTP directory entries
-    SftpEntries { entries: Vec<SftpEntry> },
+    SftpEntries {
+        entries: Vec<SftpEntry>,
+    },
     /// SFTP path response
-    SftpPath { path: String },
+    SftpPath {
+        path: String,
+    },
     /// SFTP stat response
-    SftpStatResult { entry: SftpEntry },
+    SftpStatResult {
+        entry: SftpEntry,
+    },
     /// SFTP file preview response
-    SftpFileContent { content: SftpFileContent },
+    SftpFileContent {
+        content: SftpFileContent,
+    },
     /// SFTP transfer response
-    SftpTransfer { progress: TransferProgress },
+    SftpTransfer {
+        progress: TransferProgress,
+    },
     /// SFTP directory transfer response
-    SftpDirectoryTransfer { summary: DirectoryTransferSummary },
+    SftpDirectoryTransfer {
+        summary: DirectoryTransferSummary,
+    },
     /// Error response
-    Error { message: String },
+    Error {
+        message: String,
+    },
     /// Success acknowledgment
     Ok,
 }
+
+#[cfg(not(windows))]
+use sha2::{Digest, Sha256};
 
 /// Socket name type alias for platform-specific implementation.
 #[cfg(windows)]
@@ -262,15 +351,124 @@ type SocketName = interprocess::local_socket::Name<'static>;
 #[cfg(not(windows))]
 type SocketName = interprocess::local_socket::Name<'static>;
 
+/// Per-user private directory holding the IPC socket on unix.
+///
+/// A fixed location such as `/tmp/vibeshell.sock` lets any local user
+/// pre-create or squat the path and would expose the endpoint to every
+/// account on the machine. The endpoint therefore lives in a directory owned
+/// by the current user (mode 0700): `$XDG_RUNTIME_DIR/vibeshell-ipc` when the
+/// platform provides a runtime dir (Linux), otherwise
+/// `$TMPDIR/vibeshell-ipc-<uid-tag>` keyed by a hash of `$HOME`.
+#[cfg(not(windows))]
+fn ipc_socket_dir() -> Result<PathBuf> {
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        let runtime_dir = runtime_dir.trim();
+        if !runtime_dir.is_empty() {
+            let dir = Path::new(runtime_dir).join("vibeshell-ipc");
+            ensure_private_directory(&dir)?;
+            return Ok(dir);
+        }
+    }
+
+    let dir = std::env::temp_dir().join(format!("vibeshell-ipc-{}", ipc_user_tag()));
+    ensure_private_directory(&dir)?;
+    Ok(dir)
+}
+
+#[cfg(not(windows))]
+fn ensure_private_directory(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    match fs::DirBuilder::new().mode(0o700).create(path) {
+        Ok(()) => (),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error).context("Cannot create private IPC directory"),
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    anyhow::ensure!(
+        metadata.is_dir() && !metadata.file_type().is_symlink(),
+        "IPC directory must not be a symlink or file"
+    );
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .context("Cannot secure IPC directory; refusing to expose the service")?;
+    Ok(())
+}
+
+/// Stable per-user token for the temp-dir fallback. `$HOME` identifies the
+/// account; hashing keeps the path short and avoids embedding user names.
+/// When `$HOME` is unset, callers share one 0700 directory (first creator
+/// wins), which is fine for the same-user daemon/CLI deployment model.
+#[cfg(not(windows))]
+fn ipc_user_tag() -> String {
+    let identity = std::env::var("HOME").unwrap_or_default();
+    let digest = Sha256::digest(identity.as_bytes());
+    digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Restrict a file or directory to its owner (no-op on failure so endpoint
+/// setup never hard-fails on exotic filesystems).
+#[cfg(not(windows))]
+fn set_private_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(mode);
+        let _ = fs::set_permissions(path, permissions);
+    }
+}
+
+/// Full filesystem path of the unix IPC socket.
+#[cfg(not(windows))]
+fn socket_file_path() -> Result<PathBuf> {
+    bounded_socket_path(ipc_socket_dir()?, &socket_name_base())
+}
+
+#[cfg(not(windows))]
+fn bounded_socket_path(mut directory: PathBuf, name: &str) -> Result<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    anyhow::ensure!(
+        !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0']),
+        "IPC name must be a single file name"
+    );
+    let path = directory.join(name);
+    // Keep existing short endpoints unchanged for GUI/CLI compatibility.
+    if path.as_os_str().as_bytes().len() <= 100 {
+        return Ok(path);
+    }
+    let digest = Sha256::digest(path.as_os_str().as_bytes());
+    let shortened: String = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if directory.join(&shortened).as_os_str().as_bytes().len() > 100 {
+        directory = PathBuf::from("/tmp").join(format!("vibeshell-ipc-{}", ipc_user_tag()));
+        match fs::create_dir(&directory) {
+            Ok(()) => (),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+            Err(error) => return Err(error).context("Cannot create short IPC directory"),
+        }
+        let metadata = fs::symlink_metadata(&directory)?;
+        anyhow::ensure!(
+            metadata.is_dir() && !metadata.file_type().is_symlink(),
+            "IPC directory must not be a symlink or file"
+        );
+        // Failure is fatal: never expose an IPC endpoint in another user's directory.
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(directory.join(shortened))
+}
+
 /// Get the platform-specific socket name/path.
 ///
 /// On Windows, we use named pipes in the namespaced format.
-/// On Unix, we use Unix domain sockets in `/tmp/`.
+/// On Unix, we use a Unix domain socket inside a per-user private directory.
 fn get_socket_name() -> Result<SocketName> {
-    let socket_name = socket_name_base();
-
     #[cfg(windows)]
     {
+        let socket_name = socket_name_base();
         // On Windows, use namespaced name (named pipe)
         socket_name
             .to_ns_name::<GenericNamespaced>()
@@ -278,9 +476,12 @@ fn get_socket_name() -> Result<SocketName> {
     }
     #[cfg(not(windows))]
     {
-        // On Unix, use a socket file in /tmp
-        let path = format!("/tmp/{}", socket_name);
-        path.to_fs_name::<GenericFilePath>()
+        // On Unix, use a socket file in a per-user private directory
+        // (`VIBESHELL_IPC_NAME` still only names the file inside that dir).
+        socket_file_path()?
+            .to_string_lossy()
+            .to_string()
+            .to_fs_name::<GenericFilePath>()
             .context("Failed to create filesystem socket name")
     }
 }
@@ -300,7 +501,9 @@ fn socket_name_display() -> String {
     }
     #[cfg(not(windows))]
     {
-        format!("/tmp/{}", socket_name_base())
+        socket_file_path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| format!("<unavailable>/{}", socket_name_base()))
     }
 }
 
@@ -414,6 +617,67 @@ fn listener_options(socket_name: SocketName) -> Result<ListenerOptions<'static>>
     #[cfg(not(windows))]
     {
         Ok(ListenerOptions::new().name(socket_name))
+    }
+}
+
+/// Copy of an IPC message that is safe to include in debug logs: the secret
+/// fields of `CreateSessionWithCredentials` are replaced with placeholders so
+/// credentials never reach the log output.
+fn redact_for_log(message: &IpcMessage) -> IpcMessage {
+    match message {
+        IpcMessage::CreateSessionWithCredentials {
+            server_name,
+            auth_type,
+            passphrase,
+            cols,
+            rows,
+            ..
+        } => IpcMessage::CreateSessionWithCredentials {
+            server_name: server_name.clone(),
+            auth_type: auth_type.clone(),
+            credential: "[REDACTED]".to_string(),
+            passphrase: passphrase.as_ref().map(|_| "[REDACTED]".to_string()),
+            cols: *cols,
+            rows: *rows,
+        },
+        IpcMessage::ExecCommand {
+            session_id, stdin, ..
+        } => IpcMessage::ExecCommand {
+            session_id: session_id.clone(),
+            command: "[REDACTED]".into(),
+            stdin: stdin.as_ref().map(|_| "[REDACTED]".into()),
+        },
+        IpcMessage::ExecQuickCommand { session_id, .. } => IpcMessage::ExecQuickCommand {
+            session_id: session_id.clone(),
+            command: "[REDACTED]".into(),
+        },
+        IpcMessage::SendInput { session_id, .. }
+        | IpcMessage::SendUserInput { session_id, .. }
+        | IpcMessage::SendSensitiveInput { session_id, .. } => IpcMessage::SendInput {
+            session_id: session_id.clone(),
+            data: Vec::new(),
+        },
+        IpcMessage::SftpWriteFile {
+            session_id, path, ..
+        } => IpcMessage::SftpWriteFile {
+            session_id: session_id.clone(),
+            path: path.clone(),
+            content: "[REDACTED]".into(),
+        },
+        IpcMessage::SftpAddFile {
+            session_id,
+            path,
+            overwrite,
+            parents,
+            ..
+        } => IpcMessage::SftpAddFile {
+            session_id: session_id.clone(),
+            path: path.clone(),
+            content: "[REDACTED]".into(),
+            overwrite: *overwrite,
+            parents: *parents,
+        },
+        other => other.clone(),
     }
 }
 
@@ -558,6 +822,15 @@ impl IpcServer {
             }
         };
 
+        #[cfg(not(windows))]
+        {
+            // Restrict the socket file to its owner so other local accounts
+            // cannot connect to (or tamper with) the IPC endpoint.
+            if let Ok(path) = socket_file_path() {
+                set_private_mode(&path, 0o600);
+            }
+        }
+
         log::info!("[IPC] Server listening on {}", Self::socket_name_display());
 
         // Accept connections in a loop
@@ -623,7 +896,7 @@ impl IpcServer {
         let message: IpcMessage =
             serde_json::from_str(line.trim()).context("Failed to parse IPC message")?;
 
-        log::debug!("[IPC] Received: {:?}", message);
+        log::debug!("[IPC] Received: {:?}", redact_for_log(&message));
 
         // Check for streaming attach — handled specially (keeps connection alive)
         if let IpcMessage::AttachSession { ref session_id } = message {
@@ -787,7 +1060,214 @@ impl IpcServer {
         sftp_contexts: Arc<Mutex<std::collections::HashMap<String, SftpContext>>>,
         rt: &tokio::runtime::Handle,
     ) -> IpcMessage {
+        use crate::mcp::server::{AgentActivityEvent, AgentActivityStatus};
+        let user_input = matches!(&message, IpcMessage::SendUserInput { .. });
+        let sensitive = matches!(&message, IpcMessage::SendSensitiveInput { .. });
+        let message = match message {
+            IpcMessage::SendUserInput { session_id, data }
+            | IpcMessage::SendSensitiveInput { session_id, data } => {
+                IpcMessage::SendInput { session_id, data }
+            }
+            other => other,
+        };
+        let mut input_guard = None;
+        let mut checkpoint = None;
+        let mut denied = None;
+        let mut descriptions: Vec<(String, Option<String>, String)> = Vec::new();
+        match &message {
+            IpcMessage::SendInput { session_id, data } => {
+                input_guard =
+                    Some(rt.block_on(session_manager.agent_input_tracker.lock_session(session_id)));
+                let (saved, commands, redact) = rt.block_on(
+                    session_manager
+                        .agent_input_tracker
+                        .checkpoint_and_observe_sensitive(
+                            session_id,
+                            &String::from_utf8_lossy(data),
+                            &[],
+                            false,
+                            sensitive,
+                        ),
+                );
+                checkpoint = Some(saved);
+                if !user_input {
+                    let config = crate::mcp::GuardConfig::from_stored_json(
+                        database
+                            .get_setting(crate::mcp::guard::GUARD_CONFIG_KEY)
+                            .ok()
+                            .flatten()
+                            .as_deref(),
+                    );
+                    if commands.is_empty() && !data.is_empty() {
+                        descriptions.push(("cli.input_pending".into(), Some(session_id.clone()),
+                            if redact { "[sensitive input omitted]".into() } else {
+                                String::from_utf8_lossy(data).chars().flat_map(|ch| ch.escape_debug()).collect()
+                            }));
+                    }
+                    for command in commands {
+                        if config.enabled
+                            && (!command.is_verifiable
+                                || crate::mcp::guard::classify_command(&command.command, &config)
+                                    .requires_approval)
+                        {
+                            denied = Some("Terminal command requires approval in the VibeShell Agent Gateway; no input was sent".to_string());
+                        }
+                        descriptions.push((
+                            "cli.input".into(),
+                            Some(session_id.clone()),
+                            if redact {
+                                "[sensitive input omitted]".into()
+                            } else {
+                                command.command
+                            },
+                        ));
+                    }
+                }
+            }
+            IpcMessage::ExecCommand {
+                session_id,
+                command,
+                ..
+            } => descriptions.push(("cli.exec".into(), Some(session_id.clone()), command.clone())),
+            IpcMessage::CreateSession { server_name }
+            | IpcMessage::CreateSessionWithCredentials { server_name, .. } => {
+                descriptions.push(("cli.session_create".into(), None, server_name.clone()))
+            }
+            IpcMessage::SftpWriteFile { session_id, path, .. } | IpcMessage::SftpAddFile { session_id, path, .. } =>
+                descriptions.push(("cli.sftp_write".into(), Some(session_id.clone()), format!("Write {path} (contents omitted)"))),
+            IpcMessage::SftpReadFile { session_id, path, .. } =>
+                descriptions.push(("cli.sftp_read".into(), Some(session_id.clone()), path.clone())),
+            IpcMessage::SftpListDir { session_id, path, .. } =>
+                descriptions.push(("cli.sftp_list".into(), Some(session_id.clone()), path.clone())),
+            IpcMessage::SftpMkdir { session_id, path } =>
+                descriptions.push(("cli.sftp_mkdir".into(), Some(session_id.clone()), path.clone())),
+            IpcMessage::SftpDelete { session_id, path, recursive } =>
+                descriptions.push(("cli.sftp_delete".into(), Some(session_id.clone()), format!("{path} (recursive={recursive})"))),
+            IpcMessage::SftpRename { session_id, old_path, new_path } =>
+                descriptions.push(("cli.sftp_rename".into(), Some(session_id.clone()), format!("{old_path} → {new_path}"))),
+            IpcMessage::SftpDownloadFile { session_id, remote_path, local_path } =>
+                descriptions.push(("cli.sftp_download".into(), Some(session_id.clone()), format!("{remote_path} → {local_path}"))),
+            IpcMessage::SftpUploadFile { session_id, local_path, remote_path } =>
+                descriptions.push(("cli.sftp_upload".into(), Some(session_id.clone()), format!("{local_path} → {remote_path}"))),
+            IpcMessage::SftpUploadDirectory { session_id, local_path, remote_path, mode, delete_extra, excluded_paths, .. } =>
+                descriptions.push(("cli.sftp_directory".into(), Some(session_id.clone()), format!("{mode:?}: {local_path} → {remote_path}; delete_extra={delete_extra}; excludes={excluded_paths:?}"))),
+            IpcMessage::PluginExecute { request } => descriptions.push(("cli.plugin_request".into(), Some(request.session_id.clone()), format!("{}/{}", request.plugin_id, request.action_id))),
+            IpcMessage::KillSession { session_id } => descriptions.push((
+                "cli.session_kill".into(),
+                Some(session_id.clone()),
+                "Close session".into(),
+            )),
+            _ => {}
+        }
+        let mut events: Vec<_> = descriptions
+            .into_iter()
+            .map(|(tool, session_id, summary)| AgentActivityEvent {
+                id: uuid::Uuid::new_v4().to_string(),
+                tool,
+                session_id,
+                summary,
+                status: AgentActivityStatus::Started,
+                timestamp: chrono::Utc::now().timestamp_millis(),
+            })
+            .collect();
+        for event in &events {
+            if let Err(error) = database.agent_activity_record(event) {
+                if let Some(saved) = checkpoint {
+                    rt.block_on(session_manager.agent_input_tracker.restore(saved));
+                }
+                return IpcMessage::Error { message: format!("Operation was not executed because its audit record could not be saved: {error}") };
+            }
+        }
+        let response = if let Some(message) = denied {
+            IpcMessage::Error { message }
+        } else {
+            Self::dispatch_message(
+                message,
+                database.clone(),
+                session_manager.clone(),
+                sftp_contexts,
+                rt,
+            )
+        };
+        if matches!(&response, IpcMessage::Error { .. }) {
+            if let Some(saved) = checkpoint {
+                rt.block_on(session_manager.agent_input_tracker.restore(saved));
+            }
+        }
+        drop(input_guard);
+        for event in &mut events {
+            event.status = if matches!(&response, IpcMessage::Error { .. }) {
+                AgentActivityStatus::Failed
+            } else {
+                AgentActivityStatus::Succeeded
+            };
+            event.timestamp = chrono::Utc::now().timestamp_millis();
+            if let IpcMessage::SessionCreated { session_id } = &response {
+                event.session_id = Some(session_id.clone());
+            }
+            if let Err(error) = database.agent_activity_record(event) {
+                log::error!("Operation completed but completion audit could not be saved: {error}");
+            }
+        }
+        response
+    }
+
+    fn dispatch_message(
+        message: IpcMessage,
+        database: Arc<Database>,
+        session_manager: Arc<SessionManager>,
+        sftp_contexts: Arc<Mutex<std::collections::HashMap<String, SftpContext>>>,
+        rt: &tokio::runtime::Handle,
+    ) -> IpcMessage {
+        // Normalize both exec entry points into the same approval gate.
+        let quick = matches!(&message, IpcMessage::ExecQuickCommand { .. });
+        let message = match message {
+            IpcMessage::ExecQuickCommand {
+                session_id,
+                command,
+            } => IpcMessage::ExecCommand {
+                session_id,
+                command,
+                stdin: None,
+            },
+            other => other,
+        };
         match message {
+            IpcMessage::SessionService { request } => {
+                match rt.block_on(super::runtime_services::dispatch(&session_manager, request)) {
+                    Ok(value) => IpcMessage::ServiceResult { value },
+                    Err(message) => IpcMessage::Error { message },
+                }
+            }
+            IpcMessage::PluginList { installed_only } => {
+                match crate::plugins::agent::list(&database, installed_only) {
+                    Ok(data) => IpcMessage::PluginData {
+                        data: serde_json::json!(data),
+                    },
+                    Err(message) => IpcMessage::Error { message },
+                }
+            }
+            IpcMessage::PluginDescribe {
+                plugin_id,
+                reference,
+            } => match crate::plugins::agent::describe(&database, &plugin_id, reference) {
+                Ok(data) => IpcMessage::PluginData { data },
+                Err(message) => IpcMessage::Error { message },
+            },
+            IpcMessage::PluginExecute { request } => {
+                match rt.block_on(crate::plugins::agent::execute(
+                    &database,
+                    &session_manager,
+                    request,
+                    "cli.plugin",
+                    None,
+                )) {
+                    Ok(data) => IpcMessage::PluginData {
+                        data: serde_json::json!(data),
+                    },
+                    Err(message) => IpcMessage::Error { message },
+                }
+            }
             IpcMessage::ListServers => match database.server_list(None, None) {
                 std::result::Result::Ok(servers) => {
                     let servers = servers
@@ -866,21 +1346,12 @@ impl IpcServer {
                             },
                         }
                     }
-                    std::result::Result::Ok(None) => {
-                        match rt.block_on(session_manager.create_by_name(&server_name)) {
-                            std::result::Result::Ok(session) => IpcMessage::SessionCreated {
-                                session_id: session.id.clone(),
-                            },
-                            Err(e) => IpcMessage::Error {
-                                message: format!(
-                                    "No saved credentials for server '{}'. \
-                                     Please save credentials in the VibeShell GUI first, \
-                                     or connect through the GUI. ({})",
-                                    server_name, e
-                                ),
-                            },
-                        }
-                    }
+                    std::result::Result::Ok(None) => IpcMessage::Error {
+                        message: format!(
+                            "No saved credentials for server '{}'. Save the password or private key in VibeShell, or connect through the GUI. No SSH connection was created.",
+                            server_name
+                        ),
+                    },
                     Err(e) => IpcMessage::Error {
                         message: format!(
                             "Failed to look up credentials for '{}': {}",
@@ -995,17 +1466,57 @@ impl IpcServer {
                 command,
                 stdin,
             } => {
+                // IPC callers have no approval UI. Apply the same command-risk
+                // classification the MCP agent gateway uses and fail closed on
+                // risky commands instead of executing them unattended.
+                let guard_cfg = {
+                    let stored = database
+                        .get_setting(crate::mcp::guard::GUARD_CONFIG_KEY)
+                        .ok()
+                        .flatten();
+                    crate::mcp::guard::GuardConfig::from_stored_json(stored.as_deref())
+                };
+                if guard_cfg.enabled && guard_cfg.require_for_exec {
+                    let decision = crate::mcp::guard::classify_command(&command, &guard_cfg);
+                    if decision.requires_approval {
+                        log::warn!(
+                            "[IPC] Blocked ExecCommand on session {} (requires approval): {}",
+                            session_id,
+                            decision.reasons.join("; ")
+                        );
+                        return IpcMessage::Error {
+                            message: format!(
+                                "Command requires user approval, but no approval UI is \
+                                 available over IPC. Blocked for safety: {}",
+                                decision.reasons.join("; ")
+                            ),
+                        };
+                    }
+                }
+
                 match rt.block_on(async {
                     let session = session_manager
                         .get(&session_id)
                         .await
                         .ok_or_else(|| format!("Session not found: {}", session_id))?;
-                    session
-                        .exec_command_with_stdin(&command, stdin.as_deref())
-                        .await
-                        .map_err(|e| format!("Failed to execute command: {}", e))
+                    if quick {
+                        session
+                            .exec_quick_command(&command)
+                            .await
+                            .map(|result| IpcMessage::CommandResult {
+                                output: result.output,
+                                exit_code: result.exit_code,
+                            })
+                            .map_err(|e| format!("Failed to execute command: {e:#}"))
+                    } else {
+                        session
+                            .exec_command_with_stdin(&command, stdin.as_deref())
+                            .await
+                            .map(|output| IpcMessage::CommandOutput { output })
+                            .map_err(|e| format!("Failed to execute command: {e:#}"))
+                    }
                 }) {
-                    std::result::Result::Ok(output) => IpcMessage::CommandOutput { output },
+                    std::result::Result::Ok(response) => response,
                     Err(message) => IpcMessage::Error { message },
                 }
             }
@@ -1071,6 +1582,7 @@ impl IpcServer {
                         if name == "." || name == ".." {
                             continue;
                         }
+                        crate::sftp::helpers::validate_remote_entry_name(&name)?;
                         let file_type = entry.file_type();
                         let is_directory = file_type.is_dir();
                         let metadata = entry.metadata();
@@ -1336,6 +1848,13 @@ impl IpcServer {
                 };
                 let resolved =
                     resolve_remote_path(&remote_path, &context.home_dir, &context.current_path);
+                // The local target is remote-influenced content: confine it to
+                // benign directories so it cannot be planted over dotfiles,
+                // LaunchAgents, crontabs, etc.
+                let target = match crate::mcp::server::confine_download_target(&local_path) {
+                    Ok(target) => target,
+                    Err(message) => return IpcMessage::Error { message },
+                };
                 match rt.block_on(async {
                     let session = session_manager
                         .get(&session_id)
@@ -1349,7 +1868,7 @@ impl IpcServer {
                         .read(&resolved)
                         .await
                         .map_err(|e| format!("Failed to read remote file {}: {}", resolved, e))?;
-                    if let Some(parent) = Path::new(&local_path).parent() {
+                    if let Some(parent) = target.parent() {
                         if !parent.as_os_str().is_empty() {
                             std::fs::create_dir_all(parent).map_err(|e| {
                                 format!(
@@ -1360,8 +1879,10 @@ impl IpcServer {
                             })?;
                         }
                     }
-                    std::fs::write(&local_path, &content)
-                        .map_err(|e| format!("Failed to write local file {}: {}", local_path, e))?;
+                    crate::mcp::server::ensure_parent_within_allowlist(&target)?;
+                    std::fs::write(&target, &content).map_err(|e| {
+                        format!("Failed to write local file {}: {}", target.display(), e)
+                    })?;
 
                     let filename = Path::new(&resolved)
                         .file_name()
@@ -1843,6 +2364,52 @@ impl IpcClient {
 mod tests {
     use super::*;
 
+    #[cfg(not(windows))]
+    #[test]
+    fn socket_names_are_bounded_stable_and_confined() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::env::temp_dir().join("vibeshell-ipc-path-test");
+        let name = "long-endpoint-".repeat(30);
+        let path = bounded_socket_path(dir.clone(), &name).unwrap();
+        assert!(path.as_os_str().as_bytes().len() <= 100);
+        assert_eq!(path, bounded_socket_path(dir.clone(), &name).unwrap());
+        assert_ne!(
+            path,
+            bounded_socket_path(dir.clone(), &(name + "other")).unwrap()
+        );
+        for invalid in [
+            "/tmp/public.sock",
+            "../escape",
+            "a/b",
+            ".",
+            "..",
+            "bad\0name",
+        ] {
+            assert!(bounded_socket_path(dir.clone(), invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn missing_saved_credentials_never_create_a_phantom_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = Arc::new(Database::new_at(directory.path().join("test.db")).unwrap());
+        let manager = Arc::new(SessionManager::new(database.clone()));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let response = IpcServer::handle_message(
+            IpcMessage::CreateSession {
+                server_name: "no-credentials".into(),
+            },
+            database,
+            manager.clone(),
+            Arc::new(Mutex::new(std::collections::HashMap::new())),
+            runtime.handle(),
+        );
+        assert!(
+            matches!(response, IpcMessage::Error { message } if message.contains("No saved credentials"))
+        );
+        assert!(runtime.block_on(manager.list()).is_empty());
+    }
+
     #[test]
     fn test_ipc_message_serialization() {
         // Test that messages can be serialized to JSON
@@ -2014,10 +2581,165 @@ mod tests {
             "Windows socket should be a named pipe"
         );
         #[cfg(not(windows))]
+        {
+            assert!(
+                display.contains("vibeshell-ipc"),
+                "Unix socket should live in a per-user vibeshell-ipc directory: {}",
+                display
+            );
+            assert!(
+                display.ends_with(DEFAULT_SOCKET_NAME),
+                "Unix socket display should end with the socket file name: {}",
+                display
+            );
+            // The old fixed `/tmp/vibeshell.sock` path must not be used.
+            assert_ne!(display, format!("/tmp/{}", DEFAULT_SOCKET_NAME));
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_ipc_socket_dir_is_private() {
+        let dir = ipc_socket_dir().expect("IPC socket directory should be creatable");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "IPC socket directory must be private");
+        // Same-user clients resolve the same path deterministically.
+        let again = ipc_socket_dir().expect("second call should succeed");
+        assert_eq!(dir, again);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_ipc_directory_rejects_symlinks() {
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("target");
+        let link = temporary.path().join("link");
+        fs::create_dir(&target).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(ensure_private_directory(&link).is_err());
+        assert!(ensure_private_directory(&target).is_ok());
+    }
+
+    #[test]
+    fn native_activity_retains_failed_attempts_but_never_authentication_or_file_contents() {
+        let temporary = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::new_at(temporary.path().join("audit.db")).unwrap());
+        let manager = Arc::new(SessionManager::new(db.clone()));
+        let contexts = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let send = |message| {
+            IpcServer::handle_message(
+                message,
+                db.clone(),
+                manager.clone(),
+                contexts.clone(),
+                runtime.handle(),
+            )
+        };
+        for _ in 0..2 {
+            assert!(matches!(
+                send(IpcMessage::ExecCommand {
+                    session_id: "missing".into(),
+                    command: "printf audited".into(),
+                    stdin: Some("stdin-secret".into())
+                }),
+                IpcMessage::Error { .. }
+            ));
+        }
+        send(IpcMessage::SendSensitiveInput {
+            session_id: "missing".into(),
+            data: b"input-secret\n".to_vec(),
+        });
+        send(IpcMessage::SftpWriteFile {
+            session_id: "missing".into(),
+            path: "/file".into(),
+            content: "file-secret".into(),
+        });
+        let events = db.agent_activity_list(Some(0), None, 100).unwrap();
+        assert_eq!(events.len(), 8);
+        assert_ne!(events[0].event.id, events[2].event.id);
         assert!(
-            display.starts_with("/tmp/"),
-            "Unix socket should be in /tmp"
+            events
+                .iter()
+                .filter(
+                    |event| event.event.status == crate::mcp::server::AgentActivityStatus::Failed
+                )
+                .count()
+                == 4
         );
+        let text = serde_json::to_string(&events).unwrap();
+        for secret in ["stdin-secret", "input-secret", "file-secret"] {
+            assert!(!text.contains(secret));
+        }
+        assert!(text.contains("printf audited") && text.contains("/file"));
+        send(IpcMessage::SendUserInput {
+            session_id: "missing".into(),
+            data: b"human-private-input\n".to_vec(),
+        });
+        assert_eq!(db.agent_activity_list(Some(0), None, 100).unwrap().len(), 8);
+    }
+
+    #[test]
+    fn test_redact_for_log_hides_credentials() {
+        let msg = IpcMessage::CreateSessionWithCredentials {
+            server_name: "web".to_string(),
+            auth_type: "password".to_string(),
+            credential: "hunter2".to_string(),
+            passphrase: Some("secondary-secret".to_string()),
+            cols: Some(80),
+            rows: Some(24),
+        };
+        let debug = format!("{:?}", redact_for_log(&msg));
+        assert!(!debug.contains("hunter2"), "password leaked to log output");
+        assert!(
+            !debug.contains("secondary-secret"),
+            "passphrase leaked to log output"
+        );
+        assert!(debug.contains("[REDACTED]"));
+        assert!(debug.contains("web"));
+
+        // Non-credential messages pass through unchanged.
+        assert!(matches!(
+            redact_for_log(&IpcMessage::ListSessions),
+            IpcMessage::ListSessions
+        ));
+    }
+
+    #[test]
+    fn command_secrets_are_redacted_and_exit_codes_roundtrip() {
+        for message in [
+            IpcMessage::ExecCommand {
+                session_id: "s".into(),
+                command: "secret-command".into(),
+                stdin: Some("secret-password".into()),
+            },
+            IpcMessage::ExecQuickCommand {
+                session_id: "s".into(),
+                command: "secret-command".into(),
+            },
+            IpcMessage::SendInput {
+                session_id: "s".into(),
+                data: b"secret-password".to_vec(),
+            },
+            IpcMessage::SftpWriteFile {
+                session_id: "s".into(),
+                path: "/f".into(),
+                content: "secret-content".into(),
+            },
+        ] {
+            assert!(!format!("{:?}", redact_for_log(&message)).contains("secret"));
+        }
+        let message = IpcMessage::CommandResult {
+            output: "failure".into(),
+            exit_code: 7,
+        };
+        let decoded: IpcMessage =
+            serde_json::from_str(&serde_json::to_string(&message).unwrap()).unwrap();
+        assert!(matches!(
+            decoded,
+            IpcMessage::CommandResult { exit_code: 7, .. }
+        ));
     }
 
     #[test]

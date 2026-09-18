@@ -119,3 +119,10 @@ pnpm-lock.yaml
 *.debug.*
 .codegraph/
 .zcode/
+
+# Private machine audit reports; publish sanitized product docs instead.
+/docs/PONYTAIL_*.md
+
+# Python release-tool caches
+__pycache__/
+*.py[cod]

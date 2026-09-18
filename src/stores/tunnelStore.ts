@@ -59,6 +59,9 @@ export const useTunnelStore = create<TunnelStore>((set) => ({
       set((state) => ({
         configs: state.configs.map((c) => (c.id === id ? { ...c, ...input } : c)),
       }));
+    } else {
+      set({ error: result.error.message });
+      throw result.error;
     }
   },
 
@@ -68,6 +71,9 @@ export const useTunnelStore = create<TunnelStore>((set) => ({
       set((state) => ({
         configs: state.configs.filter((c) => c.id !== id),
       }));
+    } else {
+      set({ error: result.error.message });
+      throw result.error;
     }
   },
 

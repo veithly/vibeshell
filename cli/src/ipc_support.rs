@@ -19,15 +19,9 @@ pub fn ensure_ipc_ready() -> Result<()> {
 
 pub fn send(message: &IpcMessage) -> Result<IpcMessage> {
     ensure_ipc_ready()?;
-    match IpcClient::send(message) {
-        Ok(response) => Ok(response),
-        Err(_) => {
-            // If the endpoint restarted between readiness check and connect, give the
-            // daemon one more chance to come up before surfacing the failure.
-            ensure_ipc_ready()?;
-            IpcClient::send(message).map_err(connect_error_context)
-        }
-    }
+    // A lost reply does not prove the operation was not executed. Never replay
+    // writes/commands/session creation without a server-side idempotency key.
+    IpcClient::send(message).map_err(connect_error_context)
 }
 
 pub fn connect_streaming(message: &IpcMessage) -> Result<BufReader<Stream>> {

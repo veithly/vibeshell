@@ -91,7 +91,7 @@ export function RedisConsole({ plugin, sessionId }: { plugin: PluginRecord; sess
 
   const deleteKey = async (key: string) => {
     if (!window.confirm(t('plugins.actionConfirm', { name: `DEL ${key}` }))) return;
-    await run('delete-key', { key });
+    await run('delete-key', { key }, true);
     setDetail(null);
     void scan(pattern);
   };

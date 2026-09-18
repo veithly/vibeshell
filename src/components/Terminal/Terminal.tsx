@@ -11,6 +11,7 @@ import { CompletionPopup, type CompletionItem } from './CompletionPopup';
 import { MobileKeyBar } from './MobileKeyBar';
 import { useCompletion } from './useCompletion';
 import { applyTrackedInput, getClickedInputPosition, getCursorMoveSequence } from './inputCursor';
+import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { fireAndForgetInvoke, flushInputBatch } from '../../lib/tauri';
 
 type ConnectionStatus = 'initializing' | 'listening' | 'receiving' | 'error';
@@ -374,6 +375,10 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
     const handleContextMenu = useCallback((e: React.MouseEvent) => {
       e.preventDefault();
+      // Keep the shared menu's document-level contextmenu dismissal from
+      // firing for this event, so right-clicking elsewhere in the terminal
+      // moves the menu instead of closing it.
+      e.stopPropagation();
       setContextMenu({
         visible: true,
         x: e.clientX,
@@ -384,14 +389,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     const closeContextMenu = useCallback(() => {
       setContextMenu((prev) => ({ ...prev, visible: false }));
     }, []);
-
-    useEffect(() => {
-      if (!contextMenu.visible) return;
-
-      const handleClick = () => closeContextMenu();
-      window.addEventListener('click', handleClick);
-      return () => window.removeEventListener('click', handleClick);
-    }, [contextMenu.visible, closeContextMenu]);
 
     const isNativeTextInputTarget = (target: EventTarget | null): boolean => {
       if (!(target instanceof HTMLElement)) return false;
@@ -499,8 +496,20 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       interface SessionOutputEvent {
         session_id?: string;
         sessionId?: string;
-        data: number[];
+        /** Base64-encoded terminal output (backend coalesces bursts). */
+        data: string;
       }
+
+      // Base64 -> raw bytes. The backend sends base64 because JSON number
+      // arrays inflate every output chunk roughly 4x on the IPC bridge.
+      const decodeBase64 = (encoded: string): Uint8Array => {
+        const binary = atob(encoded);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
+      };
 
       const setupListener = async () => {
         try {
@@ -515,7 +524,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
               }
 
               if (xtermRef.current) {
-                xtermRef.current.write(new Uint8Array(event.payload.data));
+                xtermRef.current.write(decodeBase64(event.payload.data));
               }
             }
           });
@@ -1008,6 +1017,59 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     const themeColors = currentTheme?.colors || themes[0].colors;
     const bgColor = themeColors.bg;
 
+    // Right-click menu items. Presentation and dismissal live in the shared
+    // ContextMenu; the handlers are unchanged.
+    const contextMenuItems: ContextMenuItem[] = [
+      {
+        id: 'copy',
+        label: 'Copy',
+        shortcut: 'Ctrl+C',
+        icon: (
+          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
+            <rect x="5" y="5" width="8" height="8" rx="1" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M11 3H4a1 1 0 0 0-1 1v7" stroke="currentColor" strokeWidth="1.3" />
+          </svg>
+        ),
+        onClick: () => { void handleCopy(); },
+      },
+      {
+        id: 'paste',
+        label: 'Paste',
+        shortcut: 'Ctrl+V',
+        icon: (
+          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
+            <rect x="4" y="3" width="8" height="10" rx="1" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M6 3V2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1" stroke="currentColor" strokeWidth="1.3" />
+          </svg>
+        ),
+        onClick: () => { void handlePaste(); },
+      },
+      { id: 'divider-edit', label: '', onClick: () => {}, divider: true },
+      {
+        id: 'select-all',
+        label: 'Select All',
+        shortcut: 'Ctrl+A',
+        icon: (
+          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="2" width="12" height="12" rx="1" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M5 5h6M5 8h6M5 11h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+          </svg>
+        ),
+        onClick: () => { xtermRef.current?.selectAll(); },
+      },
+      {
+        id: 'clear',
+        label: 'Clear',
+        icon: (
+          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
+            <path d="M2 4h12M5 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" stroke="currentColor" strokeWidth="1.3" />
+            <path d="M13 4v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4" stroke="currentColor" strokeWidth="1.3" />
+          </svg>
+        ),
+        onClick: () => { xtermRef.current?.clear(); },
+      },
+    ];
+
     return (
       <div className="terminal-mobile-shell relative">
         <div
@@ -1054,92 +1116,13 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           currentInput={completionState.currentInput}
         />
 
-        {contextMenu.visible && (
-          <div
-            className="fixed z-50 min-w-[160px] py-1 rounded-lg border"
-            style={{
-              left: contextMenu.x,
-              top: contextMenu.y,
-              backgroundColor: themeColors.bgDark,
-              borderColor: themeColors.bgHl,
-            }}
-          >
-            <button
-              className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 transition-colors"
-              style={{ color: themeColors.fg }}
-              onClick={() => {
-                handleCopy();
-                closeContextMenu();
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = themeColors.bgHl)}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
-                <rect x="5" y="5" width="8" height="8" rx="1" stroke="currentColor" strokeWidth="1.3" />
-                <path d="M11 3H4a1 1 0 0 0-1 1v7" stroke="currentColor" strokeWidth="1.3" />
-              </svg>
-              Copy
-              <span className="ml-auto text-xs" style={{ color: themeColors.fgDark }}>
-                Ctrl+C
-              </span>
-            </button>
-            <button
-              className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 transition-colors"
-              style={{ color: themeColors.fg }}
-              onClick={() => {
-                handlePaste();
-                closeContextMenu();
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = themeColors.bgHl)}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
-                <rect x="4" y="3" width="8" height="10" rx="1" stroke="currentColor" strokeWidth="1.3" />
-                <path d="M6 3V2a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1" stroke="currentColor" strokeWidth="1.3" />
-              </svg>
-              Paste
-              <span className="ml-auto text-xs" style={{ color: themeColors.fgDark }}>
-                Ctrl+V
-              </span>
-            </button>
-            <div className="my-1 border-t" style={{ borderColor: themeColors.bgHl }} />
-            <button
-              className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 transition-colors"
-              style={{ color: themeColors.fg }}
-              onClick={() => {
-                xtermRef.current?.selectAll();
-                closeContextMenu();
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = themeColors.bgHl)}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
-                <rect x="2" y="2" width="12" height="12" rx="1" stroke="currentColor" strokeWidth="1.3" />
-                <path d="M5 5h6M5 8h6M5 11h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-              </svg>
-              Select All
-              <span className="ml-auto text-xs" style={{ color: themeColors.fgDark }}>
-                Ctrl+A
-              </span>
-            </button>
-            <button
-              className="w-full px-3 py-1.5 text-left text-sm flex items-center gap-2 transition-colors"
-              style={{ color: themeColors.fg }}
-              onClick={() => {
-                xtermRef.current?.clear();
-                closeContextMenu();
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = themeColors.bgHl)}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-            >
-              <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none">
-                <path d="M2 4h12M5 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" stroke="currentColor" strokeWidth="1.3" />
-                <path d="M13 4v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4" stroke="currentColor" strokeWidth="1.3" />
-              </svg>
-              Clear
-            </button>
-          </div>
-        )}
+        <ContextMenu
+          isOpen={contextMenu.visible}
+          position={{ x: contextMenu.x, y: contextMenu.y }}
+          items={contextMenuItems}
+          onClose={closeContextMenu}
+          dense
+        />
 
         {completionState.ghostText && (
           <GhostTextOverlay

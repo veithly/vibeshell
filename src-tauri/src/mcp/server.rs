@@ -59,13 +59,14 @@ pub struct McpState {
 
 impl McpState {
     pub fn new(database: Arc<Database>, session_manager: Arc<SessionManager>) -> Self {
+        let agent_input_tracker = session_manager.agent_input_tracker.clone();
         Self {
             database,
             session_manager,
             activity_emitter: None,
             terminal_input_emitter: None,
             approvals: None,
-            agent_input_tracker: Arc::new(guard::SharedAgentInputTracker::default()),
+            agent_input_tracker,
         }
     }
 
@@ -98,10 +99,14 @@ impl McpState {
         self
     }
 
-    fn emit_activity(&self, event: AgentActivityEvent) {
+    fn emit_activity(&self, event: AgentActivityEvent) -> Result<(), String> {
+        self.database
+            .agent_activity_record(&event)
+            .map_err(|error| format!("Agent activity could not be recorded: {error}"))?;
         if let Some(emitter) = &self.activity_emitter {
             emitter(event);
         }
+        Ok(())
     }
 
     fn emit_terminal_input(&self, session_id: &str, text: String, kind: TerminalInputKind) {
@@ -157,7 +162,7 @@ impl McpState {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentActivityEvent {
     pub id: String,
@@ -168,7 +173,7 @@ pub struct AgentActivityEvent {
     pub timestamp: i64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentActivityStatus {
     Started,
@@ -451,28 +456,39 @@ async fn handle_tools_call(
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
 
-    state.emit_activity(AgentActivityEvent {
-        id: activity_id.clone(),
-        tool: name.to_string(),
-        summary: summary.clone(),
-        status: AgentActivityStatus::Started,
-        session_id: session_id.clone(),
-        timestamp: chrono::Utc::now().timestamp_millis(),
-    });
+    state
+        .emit_activity(AgentActivityEvent {
+            id: activity_id.clone(),
+            tool: name.to_string(),
+            summary: summary.clone(),
+            status: AgentActivityStatus::Started,
+            session_id: session_id.clone(),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        })
+        .map_err(|error| (INTERNAL_ERROR, error))?;
 
     // Execute the tool
     let result = execute_tool(state, name, &arguments).await;
 
     match result {
         Ok(content) => {
-            state.emit_activity(AgentActivityEvent {
+            let session_id = if name == "session_create" {
+                serde_json::from_str::<Value>(&content)
+                    .ok()
+                    .and_then(|value| value.get("id").and_then(Value::as_str).map(str::to_string))
+            } else {
+                session_id
+            };
+            if let Err(error) = state.emit_activity(AgentActivityEvent {
                 id: activity_id,
                 tool: name.to_string(),
                 summary,
                 status: AgentActivityStatus::Succeeded,
                 session_id,
                 timestamp: chrono::Utc::now().timestamp_millis(),
-            });
+            }) {
+                log::error!("Operation completed; completion audit failed: {error}");
+            }
             Ok(json!({
                 "content": [{
                     "type": "text",
@@ -481,14 +497,16 @@ async fn handle_tools_call(
             }))
         }
         Err(err) => {
-            state.emit_activity(AgentActivityEvent {
+            if let Err(error) = state.emit_activity(AgentActivityEvent {
                 id: activity_id,
                 tool: name.to_string(),
                 summary,
                 status: AgentActivityStatus::Failed,
                 session_id,
                 timestamp: chrono::Utc::now().timestamp_millis(),
-            });
+            }) {
+                log::error!("Failed operation completion audit could not be saved: {error}");
+            }
             Ok(json!({
                 "content": [{
                     "type": "text",
@@ -507,7 +525,10 @@ fn activity_summary(name: &str, args: &Value) -> String {
             .get("server_name")
             .or_else(|| args.get("server_id"))
             .and_then(Value::as_str),
-        "session_send_input" => args.get("data").and_then(Value::as_str),
+        "session_send_input" => {
+            Some("Terminal input submission; complete commands are recorded separately")
+        }
+        "plugin_execute" => args.get("actionId").and_then(Value::as_str),
         "sftp_ls" | "sftp_mkdir" | "sftp_rm" | "sftp_read" | "sftp_write" | "get_content"
         | "edit_file" | "add_file" => args.get("path").and_then(Value::as_str),
         "sftp_upload" | "sftp_upload_directory" | "sftp_sync_directory" => args
@@ -526,6 +547,10 @@ fn activity_summary(name: &str, args: &Value) -> String {
     let Some(detail) = detail else {
         return name.replace('_', " ");
     };
+    // Exec commands must remain complete in the UI and durable history.
+    if name == "exec" {
+        return detail.to_string();
+    }
     let detail = detail.replace(['\r', '\n'], " ");
     let detail = if detail.chars().count() > 160 {
         format!("{}...", detail.chars().take(157).collect::<String>())
@@ -543,11 +568,88 @@ pub async fn execute_tool_public(
     name: &str,
     args: &Value,
 ) -> Result<String, String> {
-    execute_tool(state, name, args).await
+    // Both transports use the exact same guarded/audited entry point.
+    let response = handle_tools_call(state, Some(json!({"name": name, "arguments": args})))
+        .await
+        .map_err(|(_, message)| message)?;
+    let content = response["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    if response["isError"].as_bool().unwrap_or(false) {
+        Err(content)
+    } else {
+        Ok(content)
+    }
 }
 
 async fn execute_tool(state: &McpState, name: &str, args: &Value) -> Result<String, String> {
     match name {
+        "plugin_list" => serde_json::to_string(&crate::plugins::agent::list(
+            &state.database,
+            args.get("installed_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+        )?)
+        .map_err(|e| e.to_string()),
+        "plugin_describe" => {
+            let data = crate::plugins::agent::describe(
+                &state.database,
+                args.get("plugin_id")
+                    .and_then(Value::as_str)
+                    .ok_or("Missing plugin_id")?,
+                args.get("reference")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            )?;
+            match data {
+                Value::String(text) => Ok(text),
+                other => serde_json::to_string(&other).map_err(|e| e.to_string()),
+            }
+        }
+        "plugin_execute" => {
+            let mut request: crate::plugins::PluginExecuteRequest =
+                serde_json::from_value(args.clone())
+                    .map_err(|e| format!("Invalid plugin request: {e}"))?;
+            // Never treat a model-provided confirmed=true as human approval.
+            request.confirmed = false;
+            if !crate::plugins::agent::is_local(&state.session_manager, &request.session_id).await {
+                request.session_id = resolve_session(state, &request.session_id)
+                    .await?
+                    .id
+                    .clone();
+            }
+            let prepared = crate::plugins::agent::prepare(
+                &state.database,
+                &request,
+                crate::plugins::agent::is_local(&state.session_manager, &request.session_id).await,
+            )?;
+            if prepared.requires_confirmation {
+                state
+                    .require_approval(
+                        "plugin_execute",
+                        Some(&request.session_id),
+                        &prepared.command,
+                        vec![format!(
+                            "Plugin action {}/{} requires approval",
+                            request.plugin_id, request.action_id
+                        )],
+                    )
+                    .await?;
+                request.confirmed = true;
+            }
+            serde_json::to_string(
+                &crate::plugins::agent::execute(
+                    &state.database,
+                    &state.session_manager,
+                    request,
+                    "mcp.plugin",
+                    Some(&prepared.command),
+                )
+                .await?,
+            )
+            .map_err(|e| e.to_string())
+        }
         // Server Management
         "server_list" => tool_server_list(state, args).await,
         "server_add" => tool_server_add(state, args).await,
@@ -824,12 +926,29 @@ async fn tool_server_delete(state: &McpState, args: &Value) -> Result<String, St
         .ok_or("Missing required field: id")?;
     let id = resolve_server_id(state, id)?;
 
+    // Terminate live sessions first so nothing keeps using the doomed config.
+    // Lifecycle cleanup in SessionManager also stops their tunnels and
+    // recordings.
+    let killed_sessions = state
+        .session_manager
+        .kill_by_server_id(&id)
+        .await
+        .map_err(|e| format!("Failed to close sessions for server: {}", e))?;
+
     state
         .database
         .server_delete(&id)
         .map_err(|e| e.to_string())?;
 
-    Ok(format!("Server '{}' deleted successfully", short_id(&id)))
+    if killed_sessions.is_empty() {
+        Ok(format!("Server '{}' deleted successfully", short_id(&id)))
+    } else {
+        Ok(format!(
+            "Server '{}' deleted successfully (stopped {} active session(s))",
+            short_id(&id),
+            killed_sessions.len()
+        ))
+    }
 }
 
 // === Session Management Tool Implementations ===
@@ -1018,14 +1137,22 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
         .agent_input_tracker
         .lock_session(&resolved_session_id)
         .await;
-    let (tracker_checkpoint, executed_commands) = state
+    let (tracker_checkpoint, executed_commands, redact) = state
         .agent_input_tracker
-        .checkpoint_and_observe(&resolved_session_id, data_arg, &keys_arg, append_enter)
+        .checkpoint_and_observe_sensitive(
+            &resolved_session_id,
+            data_arg,
+            &keys_arg,
+            append_enter,
+            args.get("sensitive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        )
         .await;
 
     // Gate and surface commands that will actually execute in the shared terminal.
     let cfg = state.load_guard_config();
-    for command in executed_commands {
+    for command in &executed_commands {
         if cfg.enabled {
             let mut decision = guard::classify_command(&command.command, &cfg);
             if !command.is_verifiable {
@@ -1040,7 +1167,11 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
                     .require_approval(
                         "session_send_input",
                         Some(&resolved_session_id),
-                        &command.command,
+                        if redact {
+                            "[sensitive input omitted]"
+                        } else {
+                            &command.command
+                        },
                         decision.reasons,
                     )
                     .await
@@ -1050,19 +1181,35 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
                 }
             }
         }
+    }
 
-        state.emit_terminal_input(
-            &resolved_session_id,
-            command.command,
-            TerminalInputKind::Input,
-        );
+    let mut input_events = Vec::new();
+    for command in executed_commands {
+        let event = AgentActivityEvent {
+            id: Uuid::new_v4().to_string(),
+            tool: "mcp.input".into(),
+            summary: if redact {
+                "[sensitive input omitted]".into()
+            } else {
+                command.command
+            },
+            status: AgentActivityStatus::Started,
+            session_id: Some(resolved_session_id.clone()),
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        };
+        if let Err(error) = state.emit_activity(event.clone()) {
+            state.agent_input_tracker.restore(tracker_checkpoint).await;
+            return Err(error);
+        }
+        input_events.push(event);
     }
 
     // Emit printable typing immediately before the PTY write. This lets the UI
     // decorate split input calls at the actual cursor position; command notices
     // above remain whole and are emitted only when Enter submits the line.
     let typing_text = data_arg.trim_end_matches(['\r', '\n']);
-    if !typing_text.is_empty()
+    if !redact
+        && !typing_text.is_empty()
         && typing_text
             .chars()
             .all(|ch| !ch.is_control() || matches!(ch, '\r' | '\n'))
@@ -1074,7 +1221,26 @@ async fn tool_session_send_input(state: &McpState, args: &Value) -> Result<Strin
         );
     }
 
-    if let Err(error) = session.send_input(data.clone()).await {
+    let written = session.write_to_ssh(&data).await;
+    for mut event in input_events {
+        event.status = if written.is_ok() {
+            AgentActivityStatus::Succeeded
+        } else {
+            AgentActivityStatus::Failed
+        };
+        event.timestamp = chrono::Utc::now().timestamp_millis();
+        if written.is_ok() {
+            state.emit_terminal_input(
+                &resolved_session_id,
+                event.summary.clone(),
+                TerminalInputKind::Input,
+            );
+        }
+        if let Err(error) = state.emit_activity(event) {
+            log::error!("Terminal input completion audit failed: {error}");
+        }
+    }
+    if let Err(error) = written {
         state.agent_input_tracker.restore(tracker_checkpoint).await;
         return Err(format!("Failed to send terminal input: {}", error));
     }
@@ -1482,6 +1648,113 @@ async fn tool_sftp_upload_directory(
     ))
 }
 
+/// Local directories an automated download may write into: the user's
+/// Downloads folder and VibeShell's own data directory. Anything else
+/// (dotfiles, LaunchAgents, crontabs, /etc) is rejected.
+fn allowed_download_roots() -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(downloads) =
+        directories::UserDirs::new().and_then(|dirs| dirs.download_dir().map(ToOwned::to_owned))
+    {
+        roots.push(downloads);
+    }
+    if let Some(data_dir) = directories::BaseDirs::new().map(|dirs| dirs.data_dir().to_path_buf()) {
+        // Mirrors platform::APP_BUNDLE_IDENTIFIER (cfg'd out on mobile targets).
+        roots.push(data_dir.join("com.vibeshell.desktop"));
+    }
+    roots
+}
+
+/// Validate and normalize a remote-influenced local download target.
+///
+/// Rejects explicit `..` traversal and any path outside the download
+/// allowlist. Callers must re-check with
+/// [`ensure_parent_within_allowlist`] after creating parent directories so
+/// symlinked components cannot bypass the lexical check.
+pub(crate) fn confine_download_target(local_path: &str) -> Result<std::path::PathBuf, String> {
+    use std::path::{Component, Path};
+
+    let requested = Path::new(local_path);
+    if requested.as_os_str().is_empty() {
+        return Err("Local download path is empty".to_string());
+    }
+    if requested
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!(
+            "Rejected local download path '{}': '..' traversal is not allowed",
+            local_path
+        ));
+    }
+
+    let absolute = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        let cwd = std::env::current_dir()
+            .map_err(|e| format!("Failed to resolve relative download path: {}", e))?;
+        cwd.join(requested)
+    };
+
+    // Lexically normalize (`.` and `..`) without touching the filesystem.
+    let mut normalized = std::path::PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+
+    let roots = allowed_download_roots();
+    if !roots.iter().any(|root| normalized.starts_with(root)) {
+        let allowed = roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "Rejected local download path '{}': downloads are limited to the Downloads folder and the VibeShell data directory (allowed: {})",
+            local_path, allowed
+        ));
+    }
+
+    Ok(normalized)
+}
+
+/// Re-validate the (now existing) parent of a download target against the
+/// allowlist using canonicalized paths, closing the symlink escape hatch.
+pub(crate) fn ensure_parent_within_allowlist(target: &std::path::Path) -> Result<(), String> {
+    let parent = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Download path '{}' has no parent directory",
+                target.display()
+            )
+        })?;
+    let canonical_parent = parent.canonicalize().map_err(|e| {
+        format!(
+            "Failed to resolve download directory {}: {}",
+            parent.display(),
+            e
+        )
+    })?;
+    let mut canonical_roots = allowed_download_roots()
+        .into_iter()
+        .filter_map(|root| root.canonicalize().ok());
+    if !canonical_roots.any(|root| canonical_parent.starts_with(root)) {
+        return Err(format!(
+            "Rejected local download path '{}': resolves outside the allowed download directories",
+            target.display()
+        ));
+    }
+    Ok(())
+}
+
 async fn tool_sftp_download(state: &McpState, args: &Value) -> Result<String, String> {
     let session_id = args
         .get("session_id")
@@ -1498,6 +1771,10 @@ async fn tool_sftp_download(state: &McpState, args: &Value) -> Result<String, St
         .and_then(|v| v.as_str())
         .ok_or("Missing required field: local_path")?;
 
+    // The local target is remote-influenced; confine it to benign directories
+    // so downloaded content cannot be planted over dotfiles or service configs.
+    let target = confine_download_target(local_path)?;
+
     let (sftp, home_dir) = open_sftp_for_session(state, session_id).await?;
     let resolved_remote = resolve_remote_path(remote_path, &home_dir, &home_dir);
 
@@ -1509,21 +1786,26 @@ async fn tool_sftp_download(state: &McpState, args: &Value) -> Result<String, St
     let file_size = content.len();
 
     // Ensure parent directory exists locally
-    if let Some(parent) = std::path::Path::new(local_path).parent() {
+    if let Some(parent) = target.parent() {
         if !parent.as_os_str().is_empty() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|e| format!("Failed to create local directory: {}", e))?;
         }
     }
+    // Re-validate against the canonicalized parent so symlinked path
+    // components cannot bypass the allowlist.
+    ensure_parent_within_allowlist(&target)?;
 
-    tokio::fs::write(local_path, &content)
+    tokio::fs::write(&target, &content)
         .await
-        .map_err(|e| format!("Failed to write local file '{}': {}", local_path, e))?;
+        .map_err(|e| format!("Failed to write local file '{}': {}", target.display(), e))?;
 
     Ok(format!(
         "Downloaded '{}' -> '{}' ({} bytes)",
-        resolved_remote, local_path, file_size
+        resolved_remote,
+        target.display(),
+        file_size
     ))
 }
 
@@ -1976,6 +2258,45 @@ mod tests {
         assert_eq!(completed.status, AgentActivityStatus::Succeeded);
     }
 
+    #[tokio::test]
+    async fn stdio_and_http_share_durable_activity_without_truncating_commands() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = Arc::new(Database::new_at(temp.path().join("stdio.db")).unwrap());
+        let manager = Arc::new(SessionManager::new(database.clone()));
+        let state = McpState::new(database.clone(), manager);
+        let catalog = execute_tool_public(&state, "plugin_list", &json!({"installed_only":false}))
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Vec<Value>>(&catalog).unwrap().len(),
+            crate::plugins::builtin_catalog().unwrap().len()
+        );
+        let command = format!("printf '{}'\nwhoami", "界".repeat(500));
+        assert_eq!(
+            activity_summary("exec", &json!({"command":command})),
+            command
+        );
+        assert!(execute_tool_public(
+            &state,
+            "exec",
+            &json!({"session_id":"absent","command":command})
+        )
+        .await
+        .is_err());
+        let events = database.agent_activity_list(Some(0), None, 100).unwrap();
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].event.status, AgentActivityStatus::Started);
+        assert_eq!(events[1].event.status, AgentActivityStatus::Succeeded);
+        assert_eq!(events[2].event.summary, command);
+        assert_eq!(events[3].event.status, AgentActivityStatus::Failed);
+        assert_eq!(events[2].event.id, events[3].event.id);
+        assert!(!activity_summary(
+            "session_send_input",
+            &json!({"data":"private-input","sensitive":true})
+        )
+        .contains("private-input"));
+    }
+
     #[test]
     fn short_ids_expand_only_when_the_default_prefix_is_ambiguous() {
         let ids = [
@@ -1991,5 +2312,38 @@ mod tests {
             "abcdef01-0000-0000-0000-000000000002",
         ];
         assert_ne!(unique_short_id(ambiguous[0], &ambiguous), "abcdef01");
+    }
+
+    #[test]
+    fn download_target_rejects_traversal_and_outside_paths() {
+        // Explicit `..` traversal is rejected outright, even when it would
+        // stay inside an allowed root.
+        assert!(confine_download_target("../plant.sh").is_err());
+        assert!(confine_download_target("downloads/sub/../plant.sh").is_err());
+        assert!(confine_download_target("").is_err());
+
+        // Arbitrary absolute paths outside the allowlist are rejected.
+        assert!(confine_download_target("/tmp/vibeshell-plant.sh").is_err());
+        assert!(confine_download_target("/etc/cron.d/evil").is_err());
+    }
+
+    #[test]
+    fn download_target_allows_only_listed_roots() {
+        let roots = allowed_download_roots();
+        let Some(downloads) = roots.iter().find(|root| root.file_name().is_some()) else {
+            return; // No usable roots in this environment; rejection paths covered above.
+        };
+
+        let target =
+            confine_download_target(&downloads.join("recording.txt").display().to_string())
+                .expect("path inside an allowed root must be accepted");
+        assert_eq!(target, downloads.join("recording.txt"));
+    }
+
+    #[test]
+    fn download_target_allowlist_parent_check_rejects_escapes() {
+        // A canonical parent outside the allowlist must be rejected even when
+        // the lexical check was satisfied (simulates a symlink escape).
+        assert!(ensure_parent_within_allowlist(std::path::Path::new("/tmp")).is_err());
     }
 }

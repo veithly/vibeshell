@@ -1,7 +1,8 @@
-import { useState, useCallback, memo, useRef, useEffect, type ReactNode } from 'react';
+import { useState, useCallback, memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle, RefreshCw, Code2, ExternalLink, Save } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { useSessionStore, type Session, type SessionState, type SessionType } from '../../stores/sessionStore';
 import { useRecordingStore } from '../../stores/recordingStore';
 import { useFileWorkspaceStore, type FileWorkspaceTab as FileTabModel } from '../../stores/fileWorkspaceStore';
@@ -359,9 +360,10 @@ const PluginTabChip = memo(function PluginTabChip({
 });
 
 /**
- * Context menu for session tabs
+ * Context menu for session tabs. Owns the item list only; presentation,
+ * viewport clamping and dismissal live in the shared ContextMenu.
  */
-interface ContextMenuProps {
+interface TabContextMenuProps {
   x: number;
   y: number;
   session: Session;
@@ -383,89 +385,56 @@ function TabContextMenu({
   onReconnect,
   onOpenInWindow,
   onClose,
-}: ContextMenuProps) {
+}: TabContextMenuProps) {
   const { t } = useTranslation();
-  const menuRef = useRef<HTMLDivElement>(null);
   const canReconnect =
     session.sessionType === 'ssh' && (session.state === 'disconnected' || session.state === 'error');
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleEscape);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEscape);
-    };
-  }, [onClose]);
-
-  // Clamp menu position to viewport
-  const clampedX = Math.min(x, window.innerWidth - 200);
-  const clampedY = Math.min(y, window.innerHeight - 120);
+  const items: ContextMenuItem[] = [];
+  if (canReconnect) {
+    items.push({
+      id: 'reconnect',
+      label: t('session.reconnect'),
+      icon: <RefreshCw className="w-3 h-3 text-tokyo-cyan" />,
+      onClick: onReconnect,
+    });
+  }
+  if (onOpenInWindow) {
+    items.push({
+      id: 'open-in-window',
+      label: t('session.openInWindow'),
+      icon: <ExternalLink className="w-3 h-3 text-tokyo-cyan" />,
+      onClick: onOpenInWindow,
+    });
+  }
+  if (session.state === 'connected') {
+    if (isRecording) {
+      items.push({
+        id: 'stop-recording',
+        label: t('session.stopRecording'),
+        icon: <Circle className="w-3 h-3 fill-tokyo-red" />,
+        onClick: onStopRecording,
+        danger: true,
+      });
+    } else {
+      items.push({
+        id: 'start-recording',
+        label: t('session.startRecording'),
+        icon: <Circle className="w-3 h-3 text-tokyo-red" />,
+        onClick: onStartRecording,
+      });
+    }
+  }
 
   return (
-    <div
-      ref={menuRef}
-      role="menu"
-      className="fixed z-50 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg py-1 min-w-[180px]"
-      style={{ left: clampedX, top: clampedY }}
-    >
-      <div className="px-3 py-1.5 text-xs text-tokyo-comment border-b border-tokyo-bg-hl mb-1 font-medium">
-        {session.serverName}
-      </div>
-      {canReconnect && (
-        <button
-          role="menuitem"
-          className="w-full text-left px-3 py-2 text-sm text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors
-                     flex items-center gap-2.5 cursor-pointer"
-          onClick={() => { onReconnect(); onClose(); }}
-        >
-          <RefreshCw className="w-3 h-3 text-tokyo-cyan" />
-          {t('session.reconnect')}
-        </button>
-      )}
-      {onOpenInWindow && (
-        <button
-          role="menuitem"
-          className="w-full text-left px-3 py-2 text-sm text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors
-                     flex items-center gap-2.5 cursor-pointer"
-          onClick={() => { onOpenInWindow(); onClose(); }}
-        >
-          <ExternalLink className="w-3 h-3 text-tokyo-cyan" />
-          {t('session.openInWindow')}
-        </button>
-      )}
-      {session.state === 'connected' && (
-        isRecording ? (
-          <button
-            role="menuitem"
-            className="w-full text-left px-3 py-2 text-sm text-tokyo-red hover:bg-tokyo-bg-hl transition-colors
-                       flex items-center gap-2.5 cursor-pointer"
-            onClick={() => { onStopRecording(); onClose(); }}
-          >
-            <Circle className="w-3 h-3 fill-tokyo-red" />
-            {t('session.stopRecording')}
-          </button>
-        ) : (
-          <button
-            role="menuitem"
-            className="w-full text-left px-3 py-2 text-sm text-tokyo-fg hover:bg-tokyo-bg-hl transition-colors
-                       flex items-center gap-2.5 cursor-pointer"
-            onClick={() => { onStartRecording(); onClose(); }}
-          >
-            <Circle className="w-3 h-3 text-tokyo-red" />
-            {t('session.startRecording')}
-          </button>
-        )
-      )}
-    </div>
+    <ContextMenu
+      isOpen
+      position={{ x, y }}
+      items={items}
+      onClose={onClose}
+      header={session.serverName}
+      minWidth={180}
+    />
   );
 }
 
@@ -474,7 +443,7 @@ function TabContextMenu({
  */
 export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInWindow, onPaneDropTab, rightActions, onSaveLayout }: SessionTabsProps) {
   const { t } = useTranslation();
-  const { sessions, activeSessionId, setActiveSession, killSession, killLocalShellSession, removeSession, moveSessionBefore } =
+  const { sessions, activeSessionId, setActiveSession, killSession, killLocalShellSession, moveSessionBefore } =
     useSessionStore();
   const {
     tabs: fileTabs,
@@ -531,14 +500,15 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
   }, [closeFileTab, t]);
 
   const closeInactiveSession = useCallback(async (session: Session) => {
-    const success = session.sessionType === 'local'
-      ? await killLocalShellSession(session.id)
-      : await killSession(session.id);
-
-    if (!success) {
-      removeSession(session.id);
+    // The store removes the tab on success (and when the backend reports the
+    // session already gone); on other failures the tab is kept so the sync
+    // poll can reconcile instead of the tab flickering back after removal.
+    if (session.sessionType === 'local') {
+      await killLocalShellSession(session.id);
+    } else {
+      await killSession(session.id);
     }
-  }, [killSession, killLocalShellSession, removeSession]);
+  }, [killSession, killLocalShellSession]);
 
   const handleRequestClose = useCallback((session: Session) => {
     if (!canCloseWorkspaceSession(session.id)) return;
@@ -558,14 +528,15 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
     const sessionType = confirmClose.sessionType;
     setConfirmClose(null);
 
-    const success = sessionType === 'local'
-      ? await killLocalShellSession(sessionId)
-      : await killSession(sessionId);
-
-    if (!success) {
-      removeSession(sessionId);
+    // The store removes the tab on success (and when the backend reports the
+    // session already gone); on other failures the tab stays so the sync poll
+    // can reconcile instead of the tab being resurrected after force-removal.
+    if (sessionType === 'local') {
+      await killLocalShellSession(sessionId);
+    } else {
+      await killSession(sessionId);
     }
-  }, [confirmClose, killSession, killLocalShellSession, removeSession]);
+  }, [confirmClose, killSession, killLocalShellSession]);
 
   const handleCancelClose = useCallback(() => {
     setConfirmClose(null);
@@ -573,6 +544,10 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
 
   const handleContextMenu = useCallback((e: React.MouseEvent, session: Session) => {
     e.preventDefault();
+    // Keep the shared menu's document-level contextmenu dismissal from firing
+    // for this event, so right-clicking another tab moves the menu instead
+    // of closing it.
+    e.stopPropagation();
     setContextMenu({ x: e.clientX, y: e.clientY, session });
   }, []);
 

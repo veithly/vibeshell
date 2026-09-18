@@ -55,7 +55,11 @@ pub enum CredentialType {
     PrivateKey,
 }
 
+// Recordings are only serialized to the frontend (they are device-local and
+// never part of the cloud-sync JSON payloads), so the wire shape matches the
+// TypeScript `Recording` interface which uses camelCase.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Recording {
     pub id: String,
     pub session_id: String,

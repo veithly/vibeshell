@@ -2,6 +2,7 @@
 name = "vshell"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [[bin]]
 name = "vibeshell"

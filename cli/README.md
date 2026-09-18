@@ -31,7 +31,7 @@ vibeshell ssh <server>
 vibeshell sftp <server>
 ```
 
-Commands that need an SSH/SFTP session automatically start the native local daemon. The daemon stores its IPC endpoint and state under the current user's VibeShell data directory and can be inspected directly:
+Commands that need an SSH/SFTP session automatically start the native local daemon. The daemon uses a private per-user IPC endpoint and the same saved-profile database as the desktop. A GUI-owned service can also answer native CLI requests. Inspect the current owner and sessions with:
 
 ```bash
 vibeshell daemon status
@@ -48,10 +48,26 @@ vibeshell import putty --path ~/putty-sessions.reg
 
 OpenSSH `Host`, `Include`, `IdentityFile`, `ProxyJump`, `RemoteCommand`, and `ForwardAgent` metadata are supported. Tabby SSH profiles and PuTTY sessions/registry exports are supported. Third-party stored passwords are deliberately not copied. OpenSSH-format private keys are referenced by local path and read only when a connection is established; PuTTY `.ppk` keys must first be converted to OpenSSH format.
 
+## Agent-readable plugins and license
+
+```bash
+vibeshell plugins list --installed --json
+vibeshell plugins describe server-performance
+vibeshell plugins docs server-performance
+vibeshell plugins run server-performance status --session SESSION_ID --inputs '{}'
+vibeshell license
+```
+
+Select an existing session and verify the plugin is installed and enabled first. Plugin action details are in the packaged `skills/vibeshell/references/` documents or available live through `plugins docs`; the main Skill contains discovery instructions and an index. CLI and MCP share permission and input checks. Confirmation and sudo opt-in require the person's authorization.
+
+The desktop displays Agent/CLI operations in activity history. Use shared terminal commands when collaborating with a person and independent exec for non-interfering inspection. Inputs marked as sent are not proof of remote command success. Connections require their owning process to remain alive; upgrade the GUI and CLI together rather than mixing incompatible service versions.
+
+VibeShell 1.1.0 is GPL-3.0-only. Release archives include LICENSE, NOTICE and legacy attribution; matching source materials are available beside the release binaries. Earlier MIT grants are not revoked. The software comes without warranty to the extent permitted by law.
+
 ## Build from source
 
 ```bash
-cargo build --release --package vshell --bin vibeshell
+cargo build --release --locked --package vshell --bin vibeshell
 ```
 
 To prepare the target-suffixed binary consumed by Tauri desktop packaging:

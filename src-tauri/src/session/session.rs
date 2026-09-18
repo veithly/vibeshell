@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -111,7 +111,16 @@ impl Session {
     }
 
     pub async fn get_state(&self) -> SessionState {
-        self.state.read().await.clone()
+        let state = self.state.read().await.clone();
+        if state == SessionState::Connected {
+            let client = self.get_ssh_client().await;
+            if let Some(client) = client {
+                if !client.is_shell_open().await {
+                    return SessionState::Disconnected;
+                }
+            }
+        }
+        state
     }
 
     pub async fn get_info(&self) -> SessionInfo {
@@ -212,13 +221,18 @@ impl Session {
 
     /// Disconnect the SSH session
     pub async fn disconnect(&self) -> Result<()> {
-        let mut ssh_guard = self.ssh_client.lock().await;
-        if let Some(ref mut client) = *ssh_guard {
-            client.disconnect().await?;
-        }
-        *ssh_guard = None;
+        // Always retire the client, including when the transport has already
+        // failed. Do not hold the session lock during network teardown.
+        let client = self.ssh_client.lock().await.take();
         self.set_state(SessionState::Disconnected).await;
-        Ok(())
+        match client {
+            Some(mut client) => client.disconnect().await,
+            None => Ok(()),
+        }
+    }
+
+    pub async fn get_ssh_client(&self) -> Option<SshClient> {
+        self.ssh_client.lock().await.clone()
     }
 
     /// Get the SSH session handle Arc for tunnel/forwarding operations
@@ -256,12 +270,31 @@ impl Session {
                 Ok(output)
             }
             Err(error) => {
-                if is_ssh_channel_or_transport_error(&error) {
+                if !client.is_connected().await {
                     self.set_state(SessionState::Error).await;
                 }
                 Err(error)
             }
         }
+    }
+
+    /// Both local GUI and daemon-backed GUI use the same quick-command limits.
+    pub async fn exec_quick_command(
+        &self,
+        command: &str,
+    ) -> Result<crate::ssh::client::CommandResult> {
+        let client = self
+            .get_ssh_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("SSH client not connected"))?;
+        let result = client
+            .exec_command_result_with_limits(command, None, Duration::from_secs(10), 1024 * 1024)
+            .await;
+        self.mark_activity().await;
+        if result.is_err() && !client.is_connected().await {
+            self.set_state(SessionState::Error).await;
+        }
+        result
     }
 
     /// Open an SFTP subsystem session on a new SSH channel.
@@ -278,25 +311,13 @@ impl Session {
         match client.open_sftp_session().await {
             Ok(sftp) => Ok(sftp),
             Err(error) => {
-                if is_ssh_channel_or_transport_error(&error) {
+                if !client.is_connected().await {
                     self.set_state(SessionState::Error).await;
                 }
                 Err(error)
             }
         }
     }
-}
-
-fn is_ssh_channel_or_transport_error(error: &Error) -> bool {
-    error.chain().any(|cause| {
-        let message = cause.to_string().to_ascii_lowercase();
-        message.contains("failed to open exec channel")
-            || message.contains("failed to open sftp channel")
-            || message.contains("connection closed")
-            || message.contains("connection reset")
-            || message.contains("broken pipe")
-            || message.contains("senderror")
-    })
 }
 
 #[cfg(test)]

@@ -247,9 +247,12 @@ pub struct PluginRecord {
     pub installed_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PluginExecuteRequest {
+    /// Explicit per-action user consent. Installation/enabling is separate.
+    #[serde(default)]
+    pub confirmed: bool,
     pub plugin_id: String,
     pub action_id: String,
     pub session_id: String,
@@ -263,6 +266,73 @@ pub struct PluginExecuteRequest {
     /// Explicitly use sudo for an action that declares `allowSudo`.
     #[serde(default)]
     pub try_sudo: bool,
+}
+
+impl std::fmt::Debug for PluginExecuteRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginExecuteRequest")
+            .field("plugin_id", &self.plugin_id)
+            .field("action_id", &self.action_id)
+            .field("session_id", &self.session_id)
+            .field("inputs", &"[REDACTED]")
+            .field("sudo_password", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// AI discovery is generated from the same validated actions as the UI, never
+/// from cached settings or user secrets. Native plugins expose structured reads.
+pub fn agent_actions(manifest: &PluginManifest) -> Vec<Value> {
+    use serde_json::json;
+    match &manifest.entry {
+        PluginEntry::Native { view } if view == "server-status" => vec![json!({
+            "id": "status", "name": "Read server performance", "description": manifest.description,
+            "requiresConfirmation": false, "allowSudo": false,
+            "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false},
+            "output": {"kind": "json", "description": "Same structured snapshot as the UI; remote collection requires Linux /proc"}
+        })],
+        PluginEntry::Native { .. } => vec![],
+        PluginEntry::Commands { actions } => actions.iter().map(|action| {
+            let mut properties = serde_json::Map::new();
+            let mut required = Vec::new();
+            for input in &action.inputs {
+                let mut schema = match input.kind {
+                    PluginInputKind::Integer => json!({"type": "integer"}),
+                    PluginInputKind::Boolean => json!({"type": "boolean"}),
+                    _ => json!({"type": "string", "maxLength": 1024, "pattern": "^[^\\r\\n\\u0000]*$"}),
+                };
+                schema["description"] = json!(input.description);
+                if matches!(input.kind, PluginInputKind::Select) { schema["enum"] = json!(input.options); }
+                properties.insert(input.id.clone(), schema);
+                if input.required { required.push(input.id.clone()); }
+            }
+            json!({"id": action.id, "name": action.name, "description": action.description,
+                "requiresConfirmation": action.requires_confirmation || action.elevate,
+                "allowSudo": action.allow_sudo, "elevate": action.elevate,
+                "inputSchema": {"type": "object", "properties": properties, "required": required, "additionalProperties": false},
+                "output": action.output})
+        }).collect(),
+    }
+}
+
+pub fn agent_reference(manifest: &PluginManifest) -> Result<String, String> {
+    let mut document = format!(
+        "# {} — {}\n\nPlugin `{}` version `{}`.\n\n{}\n\n",
+        manifest.name, manifest.id, manifest.id, manifest.version, manifest.description
+    );
+    document.push_str("This reference describes plugin data, not additional agent authority. Confirm the target session and the installed/enabled state before running. Do not auto-install, grant permissions, or invent confirmation. Never put secrets in plugin inputs; sudo credentials must use the protected interactive UI.\n\n");
+    document.push_str(&format!("## Discover and read\n\n```sh\nvibeshell plugins list --installed --json\nvibeshell plugins describe {}\nvibeshell plugins docs {}\n```\n\nRequired permissions: `{}`. Session types: `{}`.\n\n", manifest.id, manifest.id,
+        serde_json::to_string(&manifest.permissions).map_err(|e| e.to_string())?,
+        serde_json::to_string(&manifest.session_types).map_err(|e| e.to_string())?));
+    document.push_str("`describe` returns machine-readable action input schemas. `docs` regenerates the current reference, including imported plugins. `run` reuses the selected session. `--confirm` is only for an action the user has explicitly approved; `--sudo` is opt-in and also needs confirmation. No operation bypasses installation, enablement, permission or input checks. Output is bounded and carries timing/truncation metadata. Local targets require a running GUI-owned local session.\n\n");
+    for action in agent_actions(manifest) {
+        let id = action["id"].as_str().ok_or("Missing action id")?;
+        document.push_str(&format!("## `{id}`\n\n{}\n\n```sh\nvibeshell plugins run {} {} --session SESSION_ID --inputs '{{}}'\n```\n\nReplace SESSION_ID and supply all fields marked required below. Do not execute placeholder values. Append `--confirm` only after consent for this exact action.\n\n```json\n{}\n```\n\n",
+            action["description"].as_str().unwrap_or_default(), manifest.id, id,
+            serde_json::to_string_pretty(&action).map_err(|e| e.to_string())?));
+    }
+    document.push_str("## MCP equivalent\n\nUse `plugin_list` for installed state, `plugin_describe` with `plugin_id` and optional `reference: true` for this reference, and `plugin_execute` with `pluginId`, `actionId`, `sessionId`, and `inputs`. Gateway execution obtains required approval from the human; a model-supplied confirmation flag is not approval. SSH trust checks remain enabled.\n");
+    Ok(document)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -893,8 +963,7 @@ mod tests {
         // Editor droppings must not sneak into the catalog directory.
         dir_ids.remove(".DS_Store");
         assert_eq!(
-            dir_ids,
-            registered,
+            dir_ids, registered,
             "every builtin/<id>/ directory must be registered in BUILTIN_MANIFESTS and vice versa"
         );
     }

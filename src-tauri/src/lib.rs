@@ -26,7 +26,6 @@ use std::sync::Arc;
 pub use ipc::{IpcServer, IpcServerRunError};
 pub use mcp::{AgentGateway, AgentGatewayStatus, McpServer};
 pub use session::SessionManager;
-pub use sftp::SftpClient;
 pub use storage::Database;
 
 use commands::{
@@ -46,14 +45,22 @@ use commands::{
     coding_agent_list,
     coding_agent_workspace_diff,
     coding_agent_workspace_status,
-    delete_credential,
+    db_connection_columns,
+    db_connection_databases,
+    db_connection_delete,
+    db_connection_list,
+    db_connection_probe,
+    db_connection_query,
+    db_connection_save,
+    db_connection_tables,
+    db_connection_test,
+    db_session_detect,
     delete_fingerprint,
     delete_fingerprint_by_id,
     delete_group,
     delete_recording,
     delete_server,
     detect_ai_tools,
-    detect_ssh_import_sources,
     get_agent_guard_config,
     get_agent_guard_status,
     get_app_version,
@@ -61,7 +68,6 @@ use commands::{
     // Fingerprint commands
     get_fingerprint,
     get_groups,
-    get_recording_content,
     get_runtime_capabilities,
     get_server_status,
     get_servers,
@@ -71,11 +77,11 @@ use commands::{
     history_list,
     history_record,
     history_set_favorite,
-    import_ssh_profiles,
     install_to_tool,
     is_session_recording,
     list_fingerprints,
     list_recordings,
+    load_settings,
     local_shell_attach,
     local_shell_create,
     local_shell_detach,
@@ -91,21 +97,10 @@ use commands::{
     open_external_url,
     pick_directory_for_upload,
     pick_download_directory,
-    pick_file_for_upload,
     pick_files_for_upload,
     // Dialog commands
     pick_ssh_key_file,
     pick_workspace_directory,
-    db_connection_columns,
-    db_connection_databases,
-    db_connection_delete,
-    db_connection_list,
-    db_connection_probe,
-    db_connection_query,
-    db_connection_save,
-    db_connection_tables,
-    db_connection_test,
-    db_session_detect,
     plugin_execute,
     plugin_export,
     plugin_import,
@@ -114,17 +109,18 @@ use commands::{
     plugin_set_enabled,
     plugin_uninstall,
     plugin_update_settings,
-    preview_ssh_import,
+    probe_host_key,
     read_ssh_key_file,
     resolve_agent_approval,
     save_credential,
     save_fingerprint,
+    save_settings,
     session_attach,
     session_connect,
     session_create,
     session_detach,
+    session_exec_command,
     session_kill,
-    session_kill_all,
     session_list,
     session_resize,
     session_send_bytes,
@@ -143,7 +139,6 @@ use commands::{
     sftp_read_file,
     sftp_rename,
     sftp_save_upload_ignore_config,
-    sftp_stat,
     sftp_upload_directory,
     sftp_upload_file,
     sftp_write_file,
@@ -156,7 +151,6 @@ use commands::{
     // Logging/recording commands
     start_recording,
     stop_recording,
-    touch_fingerprint,
     tunnel_config_add,
     tunnel_config_delete,
     // Tunnel commands
@@ -184,12 +178,6 @@ use tauri::Manager;
 /// Returns the current version of VibeShell
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
-}
-
-/// Greet command - example Tauri command
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! Welcome to VibeShell.", name)
 }
 
 /// Open developer tools (F12)
@@ -224,7 +212,8 @@ pub fn run() {
 
     log::info!("[VibeShell] Starting application v{}", version());
 
-    let builder = tauri::Builder::default().manage(commands::local_files::PendingOpenFiles::default());
+    let builder =
+        tauri::Builder::default().manage(commands::local_files::PendingOpenFiles::default());
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let builder = builder
@@ -254,20 +243,87 @@ pub fn run() {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             let primary_install = app.config().identifier == platform::APP_BUNDLE_IDENTIFIER;
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if primary_install { platform::copy_legacy_app_data(&app_data_dir)?; }
+            if primary_install {
+                platform::copy_legacy_app_data(&app_data_dir)?;
+            }
 
             let database = Arc::new(Database::new_at(platform::database_path(&app_data_dir))?);
             let session_manager = Arc::new(SessionManager::new(database.clone()));
             let sftp_state = Arc::new(SftpState::new());
             let fingerprint_state =
                 FingerprintState::new_at(platform::fingerprint_path(&app_data_dir))
-                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
+                    .map_err(std::io::Error::other)?;
+            // SSH host-key (TOFU) verification: every connect path in the
+            // session manager checks the server key against the SAME store
+            // the fingerprint UI commands use (one shared instance, no stale
+            // reads between the approval dialog saving a key and the
+            // subsequent connect consulting it).
+            session_manager.set_fingerprint_store(fingerprint_state.store.clone());
             let local_shell_manager = Arc::new(LocalShellManager::new());
             let tunnel_manager = Arc::new(tunnel::TunnelManager::new());
             let session_logger = Arc::new(logging::SessionLogger::new(database.clone()));
+
+            // Backend lifecycle closure: every teardown path in SessionManager
+            // (kill, kill_all, delete_server via kill_by_server_id, reaper)
+            // also stops the dying session's tunnels and recording, which only
+            // the frontend used to remember.
+            session_manager.set_tunnel_manager(tunnel_manager.clone());
+            session_manager.set_session_logger(session_logger.clone());
+
+            // Session reaper: only the CLI IPC loop called
+            // reap_inactive_sessions and that loop never runs in the GUI, so
+            // idle detached sessions lived forever. Same cadence and idle TTL
+            // as ipc/socket.rs.
+            {
+                const SESSION_REAPER_INTERVAL: std::time::Duration =
+                    std::time::Duration::from_secs(60);
+                const SESSION_IDLE_TTL: std::time::Duration =
+                    std::time::Duration::from_secs(30 * 60);
+
+                let reaper = session_manager.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(SESSION_REAPER_INTERVAL);
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+                    loop {
+                        interval.tick().await;
+                        if let Err(err) = reaper.reap_inactive_sessions(SESSION_IDLE_TTL).await {
+                            log::warn!("[SessionManager] Session reaper failed: {}", err);
+                        }
+                    }
+                });
+            }
+
             let session_access_state = Arc::new(SessionAccessState::new(SessionAccessMode::Local));
+            session_access_state.bind_manager(&session_manager);
+            let _ = session_manager
+                .local_shell_manager
+                .set(local_shell_manager.clone());
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if primary_install {
+                // Share GUI-owned sessions with the native CLI. If a daemon
+                // already owns IPC, keep its live sessions and attach to it;
+                // never replace a live socket or terminate sessions on startup.
+                if ipc::IpcClient::is_server_running() {
+                    session_access_state.set_mode(SessionAccessMode::Remote);
+                } else {
+                    let db = database.clone();
+                    let manager = session_manager.clone();
+                    let access = session_access_state.clone();
+                    std::thread::spawn(move || {
+                        let server = IpcServer::new(db, manager);
+                        if let Err(error) = server.run() {
+                            if ipc::IpcClient::is_server_running() {
+                                access.set_mode(SessionAccessMode::Remote);
+                            } else {
+                                log::error!("Could not start shared CLI service: {error}");
+                            }
+                        }
+                    });
+                }
+            }
             let cloud_sync_manager = Arc::new(CloudSyncManager::new(database.clone())?);
-            let agent_input_tracker = Arc::new(mcp::SharedAgentInputTracker::default());
+            let agent_input_tracker = session_manager.agent_input_tracker.clone();
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
@@ -302,14 +358,26 @@ pub fn run() {
                     ));
 
                 let gateway = if primary_install {
-                    AgentGateway::start(database.clone(), session_manager.clone(), activity_emitter,
-                        terminal_input_emitter, approval_manager.clone(), agent_input_tracker.clone())
+                    AgentGateway::start(
+                        database.clone(),
+                        session_manager.clone(),
+                        activity_emitter,
+                        terminal_input_emitter,
+                        approval_manager.clone(),
+                        agent_input_tracker.clone(),
+                    )
                 } else {
                     // Alternate bundle identifiers must not replace the normal
                     // application's CLI/agent discovery manifest during UI QA.
-                    AgentGateway::start_at_path(database.clone(), session_manager.clone(), activity_emitter,
-                        terminal_input_emitter, approval_manager.clone(), agent_input_tracker.clone(),
-                        app_data_dir.join("agent-gateway.json"))
+                    AgentGateway::start_at_path(
+                        database.clone(),
+                        session_manager.clone(),
+                        activity_emitter,
+                        terminal_input_emitter,
+                        approval_manager.clone(),
+                        agent_input_tracker.clone(),
+                        app_data_dir.join("agent-gateway.json"),
+                    )
                 }?;
                 app.manage(gateway);
                 app.manage(approval_manager);
@@ -346,7 +414,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            greet,
+            commands::history::agent_activity_list,
             open_devtools,
             commands::workspace_window::workspace_pointer_state,
             commands::workspace_window::workspace_exit,
@@ -398,13 +466,16 @@ pub fn run() {
             session_create,
             session_connect,
             session_kill,
-            session_kill_all,
             session_send_input,
             session_send_bytes,
             session_resize,
             session_attach,
             session_detach,
+            session_exec_command,
             get_server_status,
+            // Settings persistence (SQLite settings table)
+            load_settings,
+            save_settings,
             // AI tool installation commands
             detect_ai_tools,
             install_to_tool,
@@ -414,20 +485,14 @@ pub fn run() {
             add_server,
             update_server,
             delete_server,
-            // SSH configuration import commands
-            detect_ssh_import_sources,
-            preview_ssh_import,
-            import_ssh_profiles,
             get_groups,
             add_group,
             delete_group,
             // Credential commands
             save_credential,
             get_credential,
-            delete_credential,
             // Dialog commands
             pick_ssh_key_file,
-            pick_file_for_upload,
             pick_files_for_upload,
             pick_directory_for_upload,
             pick_download_directory,
@@ -443,7 +508,6 @@ pub fn run() {
             sftp_delete,
             sftp_rename,
             sftp_pwd,
-            sftp_stat,
             sftp_read_file,
             sftp_write_file,
             commands::local_files::pick_local_files,
@@ -463,8 +527,8 @@ pub fn run() {
             delete_fingerprint_by_id,
             list_fingerprints,
             verify_fingerprint,
-            touch_fingerprint,
             clear_fingerprints,
+            probe_host_key,
             // Local shell commands
             local_shell_list_shells,
             local_shell_get_default,
@@ -505,20 +569,27 @@ pub fn run() {
             is_session_recording,
             get_session_recording_id,
             delete_recording,
-            get_recording_content,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { ref urls } = event {
-                commands::local_files::queue_open_files(app, urls.iter().filter_map(|url| url.to_file_path().ok()));
+                commands::local_files::queue_open_files(
+                    app,
+                    urls.iter().filter_map(|url| url.to_file_path().ok()),
+                );
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show(); let _ = window.unminimize(); let _ = window.set_focus();
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
                 }
             }
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = event
+            {
                 if commands::workspace_window::save_handler_ready()
                     && app.get_webview_window("main").is_some()
                 {

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::fs;
 use std::sync::Arc;
-use std::time::Instant;
 
 use chrono::Utc;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -17,9 +16,9 @@ use crate::local_shell::LocalShellManager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::plugins::MAX_MANIFEST_BYTES;
 use crate::plugins::{
-    builtin_catalog, parse_manifest, render_command, ManifestValidationPolicy, PluginEntry,
-    PluginExecuteRequest, PluginExecutionResult, PluginManifest, PluginPermission, PluginRecord,
-    PluginSource, MAX_PLUGIN_OUTPUT_BYTES, MAX_PLUGIN_SETTINGS_BYTES,
+    builtin_catalog, parse_manifest, ManifestValidationPolicy, PluginExecuteRequest,
+    PluginExecutionResult, PluginManifest, PluginPermission, PluginRecord, PluginSource,
+    MAX_PLUGIN_OUTPUT_BYTES, MAX_PLUGIN_SETTINGS_BYTES,
 };
 use crate::session::SessionManager;
 use crate::storage::{Database, PluginInstallation};
@@ -125,10 +124,7 @@ pub async fn plugin_export(
         let path = FileDialog::new()
             .add_filter("VibeShell plugin manifest", &["json"])
             .set_title("Export VibeShell Plugin")
-            .set_file_name(format!(
-                "{}-{}.plugin.json",
-                manifest.id, manifest.version
-            ))
+            .set_file_name(format!("{}-{}.plugin.json", manifest.id, manifest.version))
             .save_file();
 
         let Some(path) = path else {
@@ -220,7 +216,7 @@ pub fn plugin_update_settings(
 /// manifests are user-reviewed at enable time and can only change through a
 /// re-import (which revokes grants), so their stored snapshot stays
 /// authoritative.
-fn permission_satisfied(
+pub(crate) fn permission_satisfied(
     source: PluginSource,
     manifest: &PluginManifest,
     granted: &[PluginPermission],
@@ -240,138 +236,45 @@ pub async fn plugin_execute(
     request: PluginExecuteRequest,
     local_shell_manager: State<'_, Arc<LocalShellManager>>,
 ) -> Result<PluginExecutionResult, String> {
-    let installation = db
-        .plugin_installation_get(&request.plugin_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("Plugin is not installed: {}", request.plugin_id))?;
-
-    if !installation.enabled {
-        return Err(format!("Plugin is disabled: {}", request.plugin_id));
+    let local = local_shell_manager
+        .get_session(&request.session_id)
+        .await
+        .is_some();
+    if !local && access_state.is_remote_session(&request.session_id).await {
+        return match ipc_send(IpcMessage::PluginExecute { request }).await? {
+            IpcMessage::PluginData { data } => {
+                serde_json::from_value(data).map_err(|error| error.to_string())
+            }
+            IpcMessage::Error { message } => Err(message),
+            _ => Err("Unexpected plugin RPC response".into()),
+        };
     }
-
-    let source = PluginSource::parse(&installation.source)?;
-    let manifest = manifest_for_installation(&installation, &source)?;
-    let granted_permissions: Vec<PluginPermission> =
-        serde_json::from_str(&installation.granted_permissions_json)
-            .map_err(|error| format!("Stored plugin permissions are invalid: {}", error))?;
-
-    // Determine whether the target session is local or remote, then enforce the
-    // matching permission. Local shell sessions are only available on desktop.
-    let is_local = is_local_session(&manager, &request.session_id, &local_shell_manager).await;
-    let required_permission = if is_local {
-        PluginPermission::LocalExec
-    } else {
-        PluginPermission::RemoteExec
-    };
-    if !permission_satisfied(source, &manifest, &granted_permissions, &required_permission) {
-        return Err(format!(
-            "Plugin {} has not been granted {} permission",
-            request.plugin_id,
-            permission_label(&required_permission)
-        ));
-    }
-
-    let PluginEntry::Commands { actions } = &manifest.entry else {
-        return Err(format!(
-            "Plugin {} does not expose command actions",
-            request.plugin_id
-        ));
-    };
-    let action = actions
-        .iter()
-        .find(|action| action.id == request.action_id)
-        .ok_or_else(|| {
-            format!(
-                "Plugin action not found: {}/{}",
-                request.plugin_id, request.action_id
-            )
-        })?;
-
-    if request.try_sudo && !action.allow_sudo {
-        return Err(format!(
-            "Plugin action does not support optional sudo: {}/{}",
-            request.plugin_id, request.action_id
-        ));
-    }
-    let use_sudo = action.elevate || request.try_sudo;
-    let has_password = use_sudo
-        && request
-            .sudo_password
-            .as_deref()
-            .is_some_and(|password| !password.is_empty());
-    let command = render_command(action, &request.inputs, use_sudo, has_password)?;
-    let stdin = if has_password {
-        request.sudo_password.clone()
-    } else {
-        None
-    };
-
-    let started = Instant::now();
-    let output = if is_local {
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        {
-            run_local_command(&command, stdin.as_deref()).await?
-        }
-        #[cfg(any(target_os = "android", target_os = "ios"))]
-        {
-            let _ = stdin;
-            return Err("Local plugin execution is not available on mobile".to_string());
-        }
-    } else {
-        let bounded = bound_remote_output(&command);
-        run_remote_command(
-            &manager,
-            &access_state,
-            &request.session_id,
-            &bounded,
-            stdin.as_deref(),
-        )
-        .await?
-    };
-
-    let (output, truncated) = truncate_output(output);
-    Ok(PluginExecutionResult {
-        plugin_id: request.plugin_id,
-        action_id: request.action_id,
-        output,
-        duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
-        truncated,
-    })
+    crate::plugins::agent::execute(&db, &manager, request, "ui.plugin", None).await
 }
 
-/// Returns true when `session_id` belongs to a local shell session rather than
-/// an SSH session. Desktop-only because local shells are desktop-only.
-async fn is_local_session(
-    ssh_manager: &State<'_, Arc<SessionManager>>,
-    session_id: &str,
-    local_shell_manager: &State<'_, Arc<LocalShellManager>>,
-) -> bool {
-    // An SSH session with this id means it's remote.
-    if ssh_manager.get(session_id).await.is_some() {
-        return false;
-    }
-    local_shell_manager.get_session(session_id).await.is_some()
-}
-
-fn permission_label(permission: &PluginPermission) -> &'static str {
-    match permission {
-        PluginPermission::RemoteExec => "remote_exec",
-        PluginPermission::LocalExec => "local_exec",
-        PluginPermission::LocalSystemRead => "local_system_read",
-    }
-}
-
-/// Execute a one-shot command on the local machine. Uses a plain process
-/// (not a PTY) so output is captured the same way remote plugin output is.
+/// Capture at most one plugin-sized buffer per stream, but keep draining both
+/// streams so a verbose child cannot deadlock on a full pipe. All work is timed.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn run_local_command(command: &str, stdin: Option<&str>) -> Result<String, String> {
+pub(crate) async fn run_local_command(
+    command: &str,
+    stdin: Option<&str>,
+) -> Result<String, String> {
     use std::process::Stdio;
-    use tokio::io::AsyncWriteExt;
-
-    // Run through the user's shell so shell operators (pipes, the `head -c`
-    // output bound, etc.) behave identically to the remote path.
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-    let mut child = tokio::process::Command::new(&shell)
+    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+    async fn capture(mut reader: impl AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
+        let mut output = Vec::new();
+        let mut chunk = [0; 8192];
+        loop {
+            let count = reader.read(&mut chunk).await?;
+            if count == 0 {
+                return Ok(output);
+            }
+            let keep = count.min((MAX_PLUGIN_OUTPUT_BYTES + 1).saturating_sub(output.len()));
+            output.extend_from_slice(&chunk[..keep]);
+        }
+    }
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    let mut child = tokio::process::Command::new(shell)
         .arg("-c")
         .arg(command)
         .stdin(Stdio::piped())
@@ -379,60 +282,43 @@ async fn run_local_command(command: &str, stdin: Option<&str>) -> Result<String,
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|error| format!("Failed to spawn local command: {}", error))?;
-
-    if let (Some(password), Some(mut stdin_handle)) = (stdin, child.stdin.take()) {
-        let _ = stdin_handle
-            .write_all(format!("{password}\n").as_bytes())
-            .await;
-        // Drop closes stdin, signalling EOF to sudo -S.
-        drop(stdin_handle);
+        .map_err(|error| format!("Failed to spawn plugin: {error}"))?;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("Missing stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| std::io::Error::other("Missing stderr"))?;
+        let write = async {
+            if let Some(mut handle) = child.stdin.take() {
+                if let Some(password) = stdin {
+                    handle.write_all(format!("{password}\n").as_bytes()).await?;
+                }
+            }
+            Ok::<_, std::io::Error>(())
+        };
+        let (mut output, stderr, ()) = tokio::try_join!(capture(stdout), capture(stderr), write)?;
+        let status = child.wait().await?;
+        output.extend_from_slice(&stderr);
+        Ok::<_, std::io::Error>((status, String::from_utf8_lossy(&output).into_owned()))
+    })
+    .await
+    .map_err(|_| "Local plugin timed out after 60s".to_string())?
+    .map_err(|error| format!("Local plugin failed: {error}"))?;
+    if !result.0.success() {
+        return Err(format!(
+            "Local plugin exited with {}: {}",
+            result.0,
+            result.1.chars().take(4096).collect::<String>()
+        ));
     }
-
-    let output = tokio::time::timeout(std::time::Duration::from_secs(60), child.wait_with_output())
-        .await
-        .map_err(|_| "Local command timed out after 60s".to_string())?
-        .map_err(|error| format!("Local command failed: {}", error))?;
-
-    // Merge stdout + stderr to match the remote 2>&1 behaviour.
-    let mut combined = output.stdout;
-    combined.extend_from_slice(&output.stderr);
-    Ok(String::from_utf8_lossy(&combined).into_owned())
+    Ok(result.1)
 }
 
-async fn run_remote_command(
-    manager: &State<'_, Arc<SessionManager>>,
-    access_state: &State<'_, Arc<SessionAccessState>>,
-    session_id: &str,
-    command: &str,
-    stdin: Option<&str>,
-) -> Result<String, String> {
-    if let Some(session) = manager.get(session_id).await {
-        session
-            .exec_command_with_stdin(command, stdin)
-            .await
-            .map_err(|error| format!("Plugin command failed: {}", error))
-    } else if access_state.is_remote() {
-        match ipc_send(IpcMessage::ExecCommand {
-            session_id: session_id.to_string(),
-            command: command.to_string(),
-            stdin: stdin.map(|s| s.to_string()),
-        })
-        .await?
-        {
-            IpcMessage::CommandOutput { output } => Ok(output),
-            IpcMessage::Error { message } => Err(message),
-            other => Err(format!(
-                "Unexpected IPC response while running plugin: {:?}",
-                other
-            )),
-        }
-    } else {
-        Err(format!("Session not found: {}", session_id))
-    }
-}
-
-fn list_plugins(db: &Database) -> Result<Vec<PluginRecord>, String> {
+pub(crate) fn list_plugins(db: &Database) -> Result<Vec<PluginRecord>, String> {
     let installations = db
         .plugin_installation_list()
         .map_err(|error| error.to_string())?;
@@ -578,7 +464,7 @@ fn set_plugin_enabled(
     record_from_installation(&installation)
 }
 
-fn manifest_for_installation(
+pub(crate) fn manifest_for_installation(
     installation: &PluginInstallation,
     source: &PluginSource,
 ) -> Result<PluginManifest, String> {
@@ -616,7 +502,7 @@ fn record_from_installation(installation: &PluginInstallation) -> Result<PluginR
     })
 }
 
-fn truncate_output(mut output: String) -> (String, bool) {
+pub(crate) fn truncate_output(mut output: String) -> (String, bool) {
     if output.len() <= MAX_PLUGIN_OUTPUT_BYTES {
         return (output, false);
     }
@@ -627,14 +513,6 @@ fn truncate_output(mut output: String) -> (String, bool) {
     }
     output.truncate(boundary);
     (output, true)
-}
-
-fn bound_remote_output(command: &str) -> String {
-    format!(
-        "({}) 2>&1 | head -c {}",
-        command,
-        MAX_PLUGIN_OUTPUT_BYTES + 1
-    )
 }
 
 async fn ipc_send(message: IpcMessage) -> Result<IpcMessage, String> {
@@ -805,12 +683,126 @@ mod tests {
         assert!(disabled.granted_permissions.is_empty());
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_plugin_reports_failure_and_closes_unused_stdin() {
+        let output = run_local_command("cat; printf PLUGIN_OK", None)
+            .await
+            .unwrap();
+        assert_eq!(output, "PLUGIN_OK");
+        let error = run_local_command("printf PLUGIN_FAILED >&2; exit 7", None)
+            .await
+            .unwrap_err();
+        assert!(error.contains("7") && error.contains("PLUGIN_FAILED"));
+    }
+
     #[test]
-    fn remote_command_caps_output_before_it_reaches_the_client() {
+    fn every_plugin_exposes_live_actions_and_reference_without_settings() {
+        use crate::plugins::agent;
+        let (_directory, db) = test_db();
+        assert!(agent::list(&db, true).unwrap().is_empty());
+        let catalog = builtin_catalog().unwrap();
+        for manifest in &catalog {
+            install_builtin(&db, &manifest.id).unwrap();
+            db.plugin_installation_update_settings(
+                &manifest.id,
+                r#"{"privateSetting":"must-not-leak"}"#,
+            )
+            .unwrap();
+            let description = agent::describe(&db, &manifest.id, false).unwrap();
+            assert_eq!(description["installed"], true);
+            assert!(!description["actions"].as_array().unwrap().is_empty());
+            assert!(!description.to_string().contains("must-not-leak"));
+            let reference = agent::describe(&db, &manifest.id, true).unwrap();
+            let reference = reference.as_str().unwrap();
+            assert!(reference.contains(&format!("vibeshell plugins docs {}", manifest.id)));
+            assert!(!reference.contains("must-not-leak"));
+            for action in description["actions"].as_array().unwrap() {
+                assert_eq!(action["inputSchema"]["additionalProperties"], false);
+                assert!(reference.contains(&format!("## `{}`", action["id"].as_str().unwrap())));
+            }
+        }
+        assert_eq!(agent::list(&db, true).unwrap().len(), catalog.len());
+        set_plugin_enabled(&db, "server-performance", false).unwrap();
         assert_eq!(
-            bound_remote_output("docker ps"),
-            "(docker ps) 2>&1 | head -c 1000001"
+            agent::describe(&db, "server-performance", false).unwrap()["enabled"],
+            false
         );
+        assert!(agent::describe(&db, "does-not-exist", true).is_err());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[tokio::test]
+    async fn imported_plugin_api_enforces_grants_inputs_and_exact_reviewed_command() {
+        use crate::plugins::{agent, PluginExecuteRequest};
+        let (_directory, db) = test_db();
+        let manifest = r#"{
+          "schemaVersion":1,"id":"example.ai","name":"AI Fixture","description":"Safe fixture",
+          "version":"1.0.0","author":"Tests","category":"operations","icon":"wrench",
+          "permissions":["remote_exec"],"sessionTypes":["ssh"],
+          "entry":{"type":"commands","actions":[{"id":"show","name":"Show","description":"Show test text",
+            "program":"printf","args":["%s","{{input.text}}"],"requiresConfirmation":true,
+            "inputs":[{"id":"text","label":"Text","kind":"text","required":true}]}]}}
+        "#;
+        let imported = install_external_manifest(&db, manifest).unwrap();
+        assert!(!imported.enabled);
+        let mut request: PluginExecuteRequest = serde_json::from_value(serde_json::json!({
+            "pluginId":"example.ai","actionId":"show","sessionId":"not-connected",
+            "inputs":{"text":"a 'quoted' value"}
+        }))
+        .unwrap();
+        assert!(agent::prepare(&db, &request, false).is_err());
+        set_plugin_enabled(&db, "example.ai", true).unwrap();
+        let prepared = agent::prepare(&db, &request, false).unwrap();
+        assert!(prepared.requires_confirmation);
+        assert!(agent::describe(&db, "example.ai", true)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("## `show`"));
+        assert!(agent::prepare(&db, &request, true).is_err());
+        let manager = SessionManager::new(Arc::new(
+            Database::new_at(_directory.path().join("empty.db")).unwrap(),
+        ));
+        assert!(
+            agent::execute(&db, &manager, request.clone(), "test.plugin", None)
+                .await
+                .unwrap_err()
+                .contains("approval")
+        );
+        request.confirmed = true;
+        assert!(agent::execute(
+            &db,
+            &manager,
+            request.clone(),
+            "test.plugin",
+            Some("a different reviewed command")
+        )
+        .await
+        .unwrap_err()
+        .contains("changed"));
+        request
+            .inputs
+            .insert("extra".into(), serde_json::json!(true));
+        assert!(agent::prepare(&db, &request, false).is_err());
+        request.inputs.remove("extra");
+        request
+            .inputs
+            .insert("text".into(), serde_json::json!("new\nline"));
+        assert!(agent::prepare(&db, &request, false).is_err());
+        request
+            .inputs
+            .insert("text".into(), serde_json::json!("ordinary"));
+        request.sudo_password = Some("hidden-password".into());
+        assert!(!format!("{request:?}").contains("hidden-password"));
+        request.try_sudo = true;
+        assert!(agent::prepare(&db, &request, false).is_err());
+        request.try_sudo = false;
+        let mut installation = db.plugin_installation_get("example.ai").unwrap().unwrap();
+        installation.granted_permissions_json = "[]".into();
+        db.plugin_installation_upsert(&installation).unwrap();
+        assert!(agent::prepare(&db, &request, false).is_err());
+        assert!(db.agent_activity_list(None, None, 100).unwrap().is_empty());
     }
 
     #[test]

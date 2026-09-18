@@ -77,7 +77,7 @@ export function ServicesDashboard({ plugin, sessionId }: { plugin: PluginRecord;
     if (!window.confirm(t('plugins.actionConfirm', { name: `systemctl ${action} ${unit}` }))) {
       return;
     }
-    await run(action, { service: unit });
+    await run(action, { service: unit }, true);
     await load();
   };
 

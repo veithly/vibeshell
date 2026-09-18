@@ -161,6 +161,11 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_command_history_server_last_used
                 ON command_history(server_id, last_used_at DESC);
 
+            CREATE TABLE IF NOT EXISTS agent_activity (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                payload TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS plugin_installations (
                 plugin_id TEXT PRIMARY KEY,
                 version TEXT NOT NULL,
@@ -201,6 +206,8 @@ impl Database {
         }
 
         sync::initialize(&mut conn)?;
+
+        migrate_plaintext_credentials(&conn)?;
 
         Ok(())
     }
@@ -321,6 +328,16 @@ impl Database {
 
     /// Update an existing server. Updates the updated_at timestamp automatically.
     pub fn server_update(&self, server: &Server) -> Result<()> {
+        self.server_update_with_credentials(server, None)
+    }
+
+    /// Metadata, credential rename and optional secret edits commit together.
+    /// Omitted fields preserve the original secret; an empty passphrase clears it.
+    pub fn server_update_with_credentials(
+        &self,
+        server: &Server,
+        update: Option<&CredentialUpdate>,
+    ) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
 
         let now = Utc::now().timestamp();
@@ -328,6 +345,86 @@ impl Database {
         let auth_type_str = auth_type_to_string(&server.auth_type);
 
         let tx = conn.transaction()?;
+        let (old_name, old_auth): (String, String) = tx.query_row(
+            "SELECT name, auth_type FROM servers WHERE id = ?1",
+            [&server.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let same_auth_family = (old_auth == "password") == (auth_type_str == "password");
+        if !same_auth_family && update.is_none() {
+            anyhow::bail!("Changing authentication requires a new password or private key; existing credentials were not changed");
+        }
+        // UNIQUE conflicts abort the entire transaction instead of deleting a
+        // credential that happened to have the destination name.
+        if old_name != server.name {
+            tx.execute(
+                "UPDATE server_credentials SET server_name = ?2 WHERE server_name = ?1",
+                rusqlite::params![old_name, server.name],
+            )?;
+        }
+        if let Some(update) = update {
+            use rusqlite::OptionalExtension;
+            let previous: Option<(String, Option<String>, Option<String>)> = tx.query_row(
+                "SELECT credential, passphrase, key_path FROM server_credentials WHERE server_name = ?1",
+                [&server.name], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).optional()?;
+            let (old_secret, old_phrase, old_path) = if same_auth_family {
+                previous.unwrap_or_default()
+            } else {
+                (String::new(), None, None)
+            };
+            let secret = match &update.credential {
+                Some(value) => value.clone(),
+                None => decrypt_credential_value(&old_secret)?,
+            };
+            let phrase = match &update.passphrase {
+                Some(value) => Some(value.clone()),
+                None => old_phrase
+                    .map(|value| decrypt_credential_value(&value))
+                    .transpose()?,
+            }
+            .filter(|value| !value.is_empty());
+            let key_path = update
+                .key_path
+                .clone()
+                .or(old_path)
+                .filter(|value| !value.is_empty());
+            if auth_type_str == "password" && secret.is_empty() {
+                anyhow::bail!(
+                    "A non-empty password is required; existing credentials were not changed"
+                );
+            }
+            if auth_type_str != "password" {
+                if secret.trim().is_empty() && key_path.is_none() {
+                    anyhow::bail!("A private key or key path is required");
+                }
+                if !secret.trim().is_empty() {
+                    russh::keys::decode_secret_key(&secret, phrase.as_deref())
+                        .map_err(|_| anyhow::anyhow!("Private key or passphrase is invalid; existing credentials were not changed"))?;
+                }
+            }
+            let encrypted = encrypt_credential_value(&secret)?;
+            let encrypted_phrase = if auth_type_str == "password" {
+                None
+            } else {
+                phrase
+                    .as_deref()
+                    .map(encrypt_credential_value)
+                    .transpose()?
+            };
+            let key_path = if auth_type_str == "password" {
+                None
+            } else {
+                key_path
+            };
+            tx.execute(
+                "INSERT INTO server_credentials (id, server_name, auth_type, credential, passphrase, key_path, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT(server_name) DO UPDATE SET auth_type=excluded.auth_type,
+                 credential=excluded.credential, passphrase=excluded.passphrase, key_path=excluded.key_path",
+                rusqlite::params![Uuid::new_v4().to_string(), server.name, auth_type_str, encrypted, encrypted_phrase, key_path, now],
+            )?;
+        }
         let changed = tx.execute(
             r#"UPDATE servers SET
                name = ?2, host = ?3, port = ?4, username = ?5, auth_type = ?6,
@@ -496,7 +593,198 @@ pub struct Credential {
     pub created_at: i64,
 }
 
+/// Version marker prefixing credential values encrypted with the device key
+/// (see `storage::crypto::Crypto::device`). Any stored value without this
+/// prefix is treated as legacy plaintext.
+const CREDENTIAL_ENC_PREFIX: &str = "enc:v1:";
+
+/// Encrypt a credential field for storage. Empty values are stored as-is so
+/// `None`/empty passphrase semantics are preserved.
+fn encrypt_credential_value(value: &str) -> Result<String> {
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let crypto = crate::storage::crypto::Crypto::device()?;
+    Ok(format!(
+        "{}{}",
+        CREDENTIAL_ENC_PREFIX,
+        crypto.encrypt_base64(value.as_bytes())?
+    ))
+}
+
+/// Decrypt a stored credential field. Legacy plaintext values (no version
+/// marker) pass through unchanged. Decryption failure is an error, never a
+/// panic.
+fn decrypt_credential_value(stored: &str) -> Result<String> {
+    let Some(encoded) = stored.strip_prefix(CREDENTIAL_ENC_PREFIX) else {
+        return Ok(stored.to_string());
+    };
+    let crypto = crate::storage::crypto::Crypto::device()?;
+    let plaintext = crypto.decrypt_base64(encoded).map_err(|error| {
+        log::error!("Failed to decrypt a stored credential: {}", error);
+        anyhow::anyhow!("Stored credential could not be decrypted on this device")
+    })?;
+    String::from_utf8(plaintext)
+        .map_err(|_| anyhow::anyhow!("Stored credential is not valid UTF-8"))
+}
+
+/// One-time upgrade pass: encrypt any `server_credentials` rows still stored
+/// as plaintext. Idempotent — encrypted values carry `CREDENTIAL_ENC_PREFIX`.
+/// Best-effort: if the device key cannot be used, plaintext rows are left in
+/// place (they remain readable) rather than blocking database startup.
+fn migrate_plaintext_credentials(conn: &Connection) -> Result<()> {
+    conn.execute(
+        r#"CREATE TABLE IF NOT EXISTS server_credentials (
+                id TEXT PRIMARY KEY,
+                server_name TEXT NOT NULL UNIQUE,
+                auth_type TEXT NOT NULL,
+                credential TEXT NOT NULL,
+                passphrase TEXT,
+                key_path TEXT,
+                created_at INTEGER NOT NULL
+            )"#,
+        [],
+    )?;
+
+    let mut stmt = conn.prepare("SELECT id, credential, passphrase FROM server_credentials")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let pending: Vec<(String, String, Option<String>)> = rows
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|(_, credential, passphrase)| {
+            let cred_plain =
+                !credential.is_empty() && !credential.starts_with(CREDENTIAL_ENC_PREFIX);
+            let pass_plain = passphrase
+                .as_deref()
+                .is_some_and(|p| !p.is_empty() && !p.starts_with(CREDENTIAL_ENC_PREFIX));
+            cred_plain || pass_plain
+        })
+        .collect();
+    drop(stmt);
+
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    if let Err(error) = crate::storage::crypto::Crypto::device() {
+        log::error!(
+            "[Storage] Skipping credential encryption migration (device key unavailable): {}",
+            error
+        );
+        return Ok(());
+    }
+
+    let mut migrated = 0usize;
+    for (id, credential, passphrase) in pending {
+        // A legacy row can mix an encrypted key and a plaintext passphrase
+        // (or vice versa). Never wrap existing ciphertext a second time.
+        let migrate_field = |value: &str| {
+            if value.starts_with(CREDENTIAL_ENC_PREFIX) {
+                Ok(value.to_string())
+            } else {
+                encrypt_credential_value(value)
+            }
+        };
+        let encrypted: Result<(String, Option<String>)> = (|| {
+            Ok((
+                migrate_field(&credential)?,
+                passphrase.as_deref().map(migrate_field).transpose()?,
+            ))
+        })();
+        match encrypted {
+            Ok((enc_credential, enc_passphrase)) => {
+                // Another GUI/daemon may have saved a new credential since
+                // the read. Only migrate the exact row we inspected.
+                migrated += conn.execute(
+                    "UPDATE server_credentials SET credential = ?2, passphrase = ?3 WHERE id = ?1 AND credential = ?4 AND passphrase IS ?5",
+                    rusqlite::params![id, enc_credential, enc_passphrase, credential, passphrase],
+                )?;
+            }
+            Err(error) => {
+                log::warn!(
+                    "[Storage] Could not encrypt stored credential row: {}",
+                    error
+                );
+            }
+        }
+    }
+    if migrated > 0 {
+        log::info!("[Storage] Encrypted {} stored credential row(s)", migrated);
+    }
+    Ok(())
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredAgentActivity {
+    pub sequence: i64,
+    #[serde(flatten)]
+    pub event: crate::mcp::server::AgentActivityEvent,
+}
+
+/// Explicit credential patch. Never place secrets in server-list responses or logs.
+#[derive(Clone, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CredentialUpdate {
+    pub credential: Option<String>,
+    pub passphrase: Option<String>,
+    pub key_path: Option<String>,
+}
+
 impl Database {
+    /// Append a durable lifecycle event. Command text is encrypted at rest and
+    /// is not part of cloud sync or diagnostic logs. Every run keeps its own id.
+    pub fn agent_activity_record(
+        &self,
+        event: &crate::mcp::server::AgentActivityEvent,
+    ) -> Result<()> {
+        if event.summary.len() > 256 * 1024 {
+            anyhow::bail!("Agent command exceeds the 256 KiB audit limit");
+        }
+        let payload = encrypt_credential_value(&serde_json::to_string(event)?)?;
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO agent_activity (payload) VALUES (?1)",
+            [payload],
+        )?;
+        Ok(())
+    }
+
+    pub fn agent_activity_list(
+        &self,
+        after: Option<i64>,
+        before: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<StoredAgentActivity>> {
+        let conn = self.conn.lock().unwrap();
+        // Incremental reads are ascending so a busy agent cannot skip events
+        // when one page fills; history pages read newest first.
+        let order = if after.is_some() { "ASC" } else { "DESC" };
+        let mut query = conn.prepare(&format!(
+            "SELECT sequence, payload FROM agent_activity
+             WHERE (?1 IS NULL OR sequence > ?1) AND (?2 IS NULL OR sequence < ?2)
+             ORDER BY sequence {order} LIMIT ?3"
+        ))?;
+        let rows = query
+            .query_map(
+                rusqlite::params![after, before, limit.clamp(1, 500)],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
+            .map(|(sequence, payload)| {
+                Ok(StoredAgentActivity {
+                    sequence,
+                    event: serde_json::from_str(&decrypt_credential_value(&payload)?)?,
+                })
+            })
+            .collect()
+    }
+
     // === Credential Operations ===
 
     /// Save credentials for a server (creates or updates)
@@ -534,13 +822,25 @@ impl Database {
             [],
         )?;
 
+        // Secrets are encrypted at rest with the device-local key; the
+        // `enc:v1:` prefix keeps ciphertext distinguishable from legacy
+        // plaintext rows.
+        let stored_credential = encrypt_credential_value(credential)?;
+        let stored_passphrase = passphrase.map(encrypt_credential_value).transpose()?;
+
         if let Some(id) = existing {
             // Update existing
             conn.execute(
                 r#"UPDATE server_credentials SET
                    auth_type = ?2, credential = ?3, passphrase = ?4, key_path = ?5
                    WHERE id = ?1"#,
-                rusqlite::params![id, auth_type, credential, passphrase, key_path],
+                rusqlite::params![
+                    id,
+                    auth_type,
+                    stored_credential,
+                    stored_passphrase,
+                    key_path
+                ],
             )?;
             Ok(id)
         } else {
@@ -549,7 +849,7 @@ impl Database {
             conn.execute(
                 r#"INSERT INTO server_credentials (id, server_name, auth_type, credential, passphrase, key_path, created_at)
                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
-                rusqlite::params![id, server_name, auth_type, credential, passphrase, key_path, now],
+                rusqlite::params![id, server_name, auth_type, stored_credential, stored_passphrase, key_path, now],
             )?;
             Ok(id)
         }
@@ -577,20 +877,36 @@ impl Database {
             "SELECT id, server_name, auth_type, credential, passphrase, key_path, created_at FROM server_credentials WHERE server_name = ?1",
             [server_name],
             |row| {
-                Ok(Credential {
-                    id: row.get(0)?,
-                    server_name: row.get(1)?,
-                    auth_type: row.get(2)?,
-                    credential: row.get(3)?,
-                    passphrase: row.get(4)?,
-                    key_path: row.get(5)?,
-                    created_at: row.get(6)?,
-                })
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
             },
         );
 
         match result {
-            Ok(cred) => Ok(Some(cred)),
+            Ok((id, server_name, auth_type, credential, passphrase, key_path, created_at)) => {
+                // Decryption failure is surfaced as an error, never a panic.
+                // Legacy plaintext values pass through unchanged.
+                let credential = decrypt_credential_value(&credential)?;
+                let passphrase = passphrase
+                    .map(|value| decrypt_credential_value(&value))
+                    .transpose()?;
+                Ok(Some(Credential {
+                    id,
+                    server_name,
+                    auth_type,
+                    credential,
+                    passphrase,
+                    key_path,
+                    created_at,
+                }))
+            }
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -1169,7 +1485,6 @@ impl Database {
 
     // === Plugin Operations ===
 
-
     // -----------------------------------------------------------------------
     // Database connections
     // -----------------------------------------------------------------------
@@ -1385,8 +1700,197 @@ mod tests {
     }
 
     #[test]
+    fn agent_activity_preserves_every_run_and_paginates_without_gaps() {
+        use crate::mcp::server::{AgentActivityEvent, AgentActivityStatus};
+        let db = test_db();
+        for index in 0..5 {
+            db.agent_activity_record(&AgentActivityEvent {
+                id: format!("run-{index}"),
+                tool: "cli.exec".into(),
+                summary: "printf repeated-command".into(),
+                status: AgentActivityStatus::Started,
+                session_id: Some("session".into()),
+                timestamp: index,
+            })
+            .unwrap();
+        }
+        let first = db.agent_activity_list(Some(0), None, 2).unwrap();
+        assert_eq!(
+            first.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        let next = db.agent_activity_list(Some(2), None, 2).unwrap();
+        assert_eq!(
+            next.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            [3, 4]
+        );
+        let history = db.agent_activity_list(None, Some(4), 2).unwrap();
+        assert_eq!(
+            history
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            [3, 2]
+        );
+        assert_eq!(db.agent_activity_list(Some(0), None, 500).unwrap().len(), 5);
+        let latest = db.agent_activity_list(None, None, 1).unwrap();
+        assert_eq!(latest[0].event.id, "run-4");
+        let payload: String = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT payload FROM agent_activity LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(payload.starts_with(CREDENTIAL_ENC_PREFIX));
+        assert!(!payload.contains("repeated-command"));
+    }
+
+    #[test]
+    fn agent_activity_reloads_full_multiline_commands_from_a_private_database() {
+        use crate::mcp::server::{AgentActivityEvent, AgentActivityStatus};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("activity.db");
+        let command = format!("printf '%s' '{}'\nwhoami", "x".repeat(500));
+        {
+            let db = Database::new_at(&path).unwrap();
+            let mut event = AgentActivityEvent {
+                id: "same-run".into(),
+                tool: "exec".into(),
+                summary: command.clone(),
+                status: AgentActivityStatus::Started,
+                session_id: None,
+                timestamp: 1,
+            };
+            db.agent_activity_record(&event).unwrap();
+            event.status = AgentActivityStatus::Succeeded;
+            db.agent_activity_record(&event).unwrap();
+            event.summary = "x".repeat(256 * 1024 + 1);
+            assert!(db.agent_activity_record(&event).is_err());
+        }
+        let events = Database::new_at(path)
+            .unwrap()
+            .agent_activity_list(None, None, 500)
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event.summary, command);
+        assert_eq!(events[0].event.status, AgentActivityStatus::Succeeded);
+        assert_eq!(events[1].event.status, AgentActivityStatus::Started);
+    }
+
+    fn credential_test_server(db: &Database, name: &str, auth_type: AuthType) -> Server {
+        let mut server = Server {
+            id: String::new(),
+            name: name.into(),
+            host: "test.invalid".into(),
+            port: 22,
+            username: "test".into(),
+            auth_type,
+            credential_id: None,
+            group_id: None,
+            tags: vec![],
+            created_at: 0,
+            updated_at: 0,
+            jump_host_id: None,
+            post_login_command: None,
+            agent_forwarding: false,
+        };
+        db.server_add(&mut server).unwrap();
+        server
+    }
+
+    #[test]
+    fn credential_edits_commit_with_metadata_and_preserve_omitted_secrets() {
+        let db = test_db();
+        let mut server = credential_test_server(&db, "old", AuthType::Password);
+        db.credential_save("old", "password", "original", None, None)
+            .unwrap();
+        server.name = "renamed".into();
+        db.server_update(&server).unwrap();
+        assert!(db.credential_get("old").unwrap().is_none());
+        assert!(db.credential_get("renamed").unwrap().unwrap().credential == "original");
+        db.server_update_with_credentials(
+            &server,
+            Some(&CredentialUpdate {
+                credential: Some("replacement".into()),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+        assert!(db.credential_get("renamed").unwrap().unwrap().credential == "replacement");
+        let conn = db.conn.lock().unwrap();
+        let stored: String = conn
+            .query_row("SELECT credential FROM server_credentials", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(stored.starts_with(CREDENTIAL_ENC_PREFIX));
+        assert!(!stored.contains("replacement"));
+    }
+
+    #[test]
+    fn failed_credential_edit_rolls_back_name_auth_and_secret() {
+        let db = test_db();
+        let mut server = credential_test_server(&db, "original", AuthType::Password);
+        db.credential_save("original", "password", "keep-me", None, None)
+            .unwrap();
+        server.name = "attempt".into();
+        server.auth_type = AuthType::KeyWithPassphrase;
+        assert!(db.server_update(&server).is_err());
+        assert!(db
+            .server_update_with_credentials(
+                &server,
+                Some(&CredentialUpdate {
+                    credential: Some("not-a-private-key".into()),
+                    ..Default::default()
+                })
+            )
+            .is_err());
+        let actual = db.server_get(&server.id).unwrap().unwrap();
+        assert_eq!(actual.name, "original");
+        assert_eq!(actual.auth_type, AuthType::Password);
+        assert!(db.credential_get("original").unwrap().unwrap().credential == "keep-me");
+        assert!(db.credential_get("attempt").unwrap().is_none());
+    }
+
+    #[test]
+    fn credential_rename_collision_never_deletes_another_secret() {
+        let db = test_db();
+        let mut server = credential_test_server(&db, "original", AuthType::Password);
+        db.credential_save("original", "password", "one", None, None)
+            .unwrap();
+        db.credential_save("occupied", "password", "two", None, None)
+            .unwrap();
+        server.name = "occupied".into();
+        assert!(db.server_update(&server).is_err());
+        assert_eq!(db.server_get(&server.id).unwrap().unwrap().name, "original");
+        assert!(db.credential_get("original").unwrap().unwrap().credential == "one");
+        assert!(db.credential_get("occupied").unwrap().unwrap().credential == "two");
+    }
+
+    #[test]
+    fn legacy_key_normalization_does_not_clear_credentials() {
+        let db = test_db();
+        let mut server = credential_test_server(&db, "legacy", AuthType::Key);
+        db.credential_save(
+            "legacy",
+            "key",
+            "existing-material",
+            None,
+            Some("/test/key"),
+        )
+        .unwrap();
+        server.auth_type = AuthType::KeyWithPassphrase;
+        db.server_update(&server).unwrap();
+        let saved = db.credential_get("legacy").unwrap().unwrap();
+        assert!(saved.credential == "existing-material");
+        assert_eq!(saved.key_path.as_deref(), Some("/test/key"));
+    }
+
+    #[test]
     fn test_database_init() {
-        let _db = Database::new().expect("Failed to create database");
+        let _db = test_db();
         // If we get here, schema was created successfully
     }
 
@@ -1615,6 +2119,129 @@ mod tests {
         ));
         // Default fallback
         assert!(matches!(string_to_auth_type("unknown"), AuthType::Password));
+    }
+
+    #[test]
+    fn test_credential_encryption_roundtrip_and_legacy_migration() {
+        let db = test_db();
+
+        // Roundtrip: save → get returns the original secrets.
+        db.credential_save(
+            "roundtrip",
+            "password",
+            "s3cret-password",
+            Some("s3cret-passphrase"),
+            None,
+        )
+        .unwrap();
+        let got = db.credential_get("roundtrip").unwrap().unwrap();
+        assert_eq!(got.credential, "s3cret-password");
+        assert_eq!(got.passphrase.as_deref(), Some("s3cret-passphrase"));
+
+        // At rest the secrets are ciphertext carrying the version marker.
+        {
+            let conn = db.conn.lock().unwrap();
+            let stored: String = conn
+                .query_row(
+                    "SELECT credential FROM server_credentials WHERE server_name = 'roundtrip'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                stored.starts_with("enc:v1:"),
+                "credential must be stored encrypted"
+            );
+            assert!(!stored.contains("s3cret-password"));
+            let stored_passphrase: Option<String> = conn
+                .query_row(
+                    "SELECT passphrase FROM server_credentials WHERE server_name = 'roundtrip'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let stored_passphrase = stored_passphrase.expect("passphrase should be stored");
+            assert!(
+                stored_passphrase.starts_with("enc:v1:"),
+                "passphrase must be stored encrypted"
+            );
+            assert!(!stored_passphrase.contains("s3cret-passphrase"));
+        }
+
+        // Legacy plaintext row: the startup migration encrypts it and
+        // credential_get transparently returns the original value.
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                r#"INSERT INTO server_credentials
+                   (id, server_name, auth_type, credential, passphrase, key_path, created_at)
+                   VALUES ('legacy-id', 'legacy-server', 'password', 'legacy-plaintext', NULL, NULL, 0)"#,
+                [],
+            )
+            .unwrap();
+        }
+        db.init_schema().unwrap(); // re-runs the migration pass
+        {
+            let conn = db.conn.lock().unwrap();
+            let stored: String = conn
+                .query_row(
+                    "SELECT credential FROM server_credentials WHERE server_name = 'legacy-server'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                stored.starts_with("enc:v1:"),
+                "migration should encrypt legacy plaintext"
+            );
+        }
+        let got = db.credential_get("legacy-server").unwrap().unwrap();
+        assert_eq!(got.credential, "legacy-plaintext");
+        assert!(got.passphrase.is_none());
+    }
+
+    #[test]
+    fn credential_migration_preserves_mixed_ciphertext_and_is_idempotent() {
+        let db = test_db();
+        let encrypted_key = encrypt_credential_value("original-key").unwrap();
+        let encrypted_pass = encrypt_credential_value("original-passphrase").unwrap();
+        for (name, key, pass) in [
+            (
+                "encrypted-key",
+                encrypted_key.as_str(),
+                "original-passphrase",
+            ),
+            ("encrypted-pass", "original-key", encrypted_pass.as_str()),
+        ] {
+            db.conn.lock().unwrap().execute(
+                "INSERT INTO server_credentials (id, server_name, auth_type, credential, passphrase, created_at) VALUES (?1, ?1, 'key_with_passphrase', ?2, ?3, 0)",
+                rusqlite::params![name, key, pass],
+            ).unwrap();
+        }
+        db.init_schema().unwrap();
+        db.init_schema().unwrap();
+        for name in ["encrypted-key", "encrypted-pass"] {
+            let loaded = db.credential_get(name).unwrap().unwrap();
+            assert_eq!(loaded.credential, "original-key");
+            assert_eq!(loaded.passphrase.as_deref(), Some("original-passphrase"));
+        }
+        let conn = db.conn.lock().unwrap();
+        let stored_key: String = conn
+            .query_row(
+                "SELECT credential FROM server_credentials WHERE id = 'encrypted-key'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let stored_pass: String = conn
+            .query_row(
+                "SELECT passphrase FROM server_credentials WHERE id = 'encrypted-pass'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_key, encrypted_key);
+        assert_eq!(stored_pass, encrypted_pass);
     }
 
     #[test]

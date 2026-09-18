@@ -1,0 +1,17 @@
+Port 22
+ListenAddress 0.0.0.0
+HostKey /etc/ssh/ssh_host_ed25519_key
+PasswordAuthentication yes
+KbdInteractiveAuthentication yes
+PubkeyAuthentication yes
+UsePAM yes
+PermitRootLogin no
+AllowUsers audit
+AuthorizedKeysFile .ssh/authorized_keys
+StrictModes yes
+AllowTcpForwarding yes
+GatewayPorts no
+MaxSessions 6
+PrintMotd no
+Subsystem sftp internal-sftp
+LogLevel VERBOSE

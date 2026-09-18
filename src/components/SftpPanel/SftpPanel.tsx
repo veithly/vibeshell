@@ -1,5 +1,4 @@
-import { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useRef, useMemo, useLayoutEffect } from 'react';
-import { createPortal } from 'react-dom';
+import { useState, useEffect, useImperativeHandle, forwardRef, useCallback, useRef, useMemo } from 'react';
 import type { SessionType } from '../../stores/sessionStore';
 import {
   ChevronUp,
@@ -32,13 +31,14 @@ import {
   MoreHorizontal,
   X,
 } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, formatFileSize } from '../../lib/utils';
 import { safeInvoke } from '../../lib/tauri';
 import { useNotificationStore } from '../../stores/notificationStore';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
 import { useFileWorkspaceStore } from '../../stores/fileWorkspaceStore';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { FileIcon } from './FileIcon';
 
 function usesCoarsePointer(): boolean {
@@ -142,16 +142,6 @@ interface SftpPanelProps {
   onFullscreenChange?: (isFullscreen: boolean) => void;
   /** Notifies the top-level SFTP command button about panel visibility. */
   onCollapsedChange?: (isCollapsed: boolean) => void;
-}
-
-/**
- * Format file size in human readable format
- */
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '-';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
 /**
@@ -314,8 +304,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   const columnsScrollerRef = useRef<HTMLDivElement>(null);
   const columnLoadRequestRef = useRef(0);
   const directoryLoadRequestRef = useRef(0);
+  const initRequestRef = useRef(0);
   const directoryFetchesRef = useRef<Map<string, Promise<SftpEntry[]>>>(new Map());
-  const contextMenuRef = useRef<HTMLDivElement>(null);
   const columnsRef = useRef<SftpColumn[]>([]);
   const viewModeRef = useRef<SftpViewMode>(viewMode);
 
@@ -371,6 +361,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     setError(null);
     columnLoadRequestRef.current += 1;
     directoryLoadRequestRef.current += 1;
+    // Invalidate any in-flight initializeSftp for the previous session.
+    initRequestRef.current += 1;
     directoryFetchesRef.current.clear();
     setShowDeleteDialog(false);
 
@@ -389,42 +381,19 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     onCollapsedChange?.(isCollapsed);
   }, [isCollapsed, onCollapsedChange]);
 
-  // Close context menu on click outside
+  // Close the toolbar overflow menu on any click outside of it. (The
+  // right-click context menu handles its own dismissal in ContextMenu.)
   useEffect(() => {
     const handleClickOutside = () => {
-      if (contextMenu.visible) {
-        setContextMenu({ visible: false, x: 0, y: 0 });
-      }
       setIsToolbarMenuOpen(false);
     };
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
-  }, [contextMenu.visible]);
+  }, []);
 
-  useLayoutEffect(() => {
-    if (!contextMenu.visible || !contextMenuRef.current) return;
-
-    const viewportMargin = 8;
-    const fitMenuToViewport = () => {
-      const menu = contextMenuRef.current;
-      if (!menu) return;
-
-      const rect = menu.getBoundingClientRect();
-      const maxX = Math.max(viewportMargin, window.innerWidth - rect.width - viewportMargin);
-      const maxY = Math.max(viewportMargin, window.innerHeight - rect.height - viewportMargin);
-
-      setContextMenu((previous) => {
-        if (!previous.visible) return previous;
-        const x = Math.min(Math.max(viewportMargin, previous.x), maxX);
-        const y = Math.min(Math.max(viewportMargin, previous.y), maxY);
-        return x === previous.x && y === previous.y ? previous : { ...previous, x, y };
-      });
-    };
-
-    fitMenuToViewport();
-    window.addEventListener('resize', fitMenuToViewport);
-    return () => window.removeEventListener('resize', fitMenuToViewport);
-  }, [contextMenu.visible, contextMenu.x, contextMenu.y]);
+  const closeContextMenu = useCallback(() => {
+    setContextMenu({ visible: false, x: 0, y: 0 });
+  }, []);
 
   // Handle resize dragging
   useEffect(() => {
@@ -585,6 +554,9 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   const initializeSftp = useCallback(async () => {
     if (!sessionId) return;
 
+    // Staleness guard (same pattern as loadDirectory): a session switch mid-init
+    // resets state and bumps the request id, so stale results never land.
+    const requestId = ++initRequestRef.current;
     setIsLoading(true);
     setError(null);
 
@@ -595,6 +567,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
           sessionId: sessionId,
         },
       });
+
+      if (requestId !== initRequestRef.current) return;
 
       if (!initResult.success) {
         throw new Error(initResult.error.message);
@@ -607,6 +581,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
         },
       });
 
+      if (requestId !== initRequestRef.current) return;
+
       let initialPath = '~';
       if (pwdResult.success && pwdResult.data) {
         initialPath = pwdResult.data;
@@ -618,12 +594,15 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       // Load directory listing
       await loadDirectory(initialPath);
     } catch (err) {
+      if (requestId !== initRequestRef.current) return;
       console.error('[SftpPanel] Failed to initialize SFTP:', err);
       setIsInitialized(false);
       setEntries([]);
       setError(getErrorMessage(err, 'Failed to initialize SFTP'));
     } finally {
-      setIsLoading(false);
+      if (requestId === initRequestRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [sessionId, loadDirectory]);
 
@@ -1206,14 +1185,12 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   // Select all entries
   const handleSelectAll = useCallback(() => {
     setSelectedEntries(new Set(entries.map(e => e.path)));
-    setContextMenu({ visible: false, x: 0, y: 0 });
   }, [entries]);
 
   // Clear selection
   const handleClearSelection = useCallback(() => {
     setSelectedEntries(new Set());
     setLastSelectedIndex(null);
-    setContextMenu({ visible: false, x: 0, y: 0 });
   }, []);
 
   // Copy selected file paths, or the current directory path when nothing is selected.
@@ -1231,8 +1208,6 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     } catch (err) {
       console.error('[SftpPanel] Failed to copy path:', err);
       notifyError('Copy Failed', err instanceof Error ? err.message : 'Failed to copy path');
-    } finally {
-      setContextMenu({ visible: false, x: 0, y: 0 });
     }
   }, [selectedEntriesArray, currentPath, notifySuccess, notifyError]);
 
@@ -1248,7 +1223,6 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     setArchiveName(defaultName);
     setCompressFormat('tar.gz');
     setShowCompressDialog(true);
-    setContextMenu({ visible: false, x: 0, y: 0 });
   }, [selectedEntriesArray]);
 
   // Compress selected files
@@ -1294,8 +1268,6 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     // Get archive files from selection
     const archiveEntries = selectedEntriesArray.filter(e => !e.isDirectory && isArchiveFile(e.name));
     if (archiveEntries.length === 0) return;
-
-    setContextMenu({ visible: false, x: 0, y: 0 });
 
     try {
       setIsLoading(true);
@@ -1345,7 +1317,6 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       name: targetEntry.name,
       size: targetEntry.size,
     });
-    setContextMenu({ visible: false, x: 0, y: 0 });
   }, [openFile, selectedEntry, sessionId]);
 
   const handleTouchEntryOpen = useCallback((entry: SftpEntry) => {
@@ -1417,6 +1388,118 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     }
     return { width: '100%', height: isCollapsed ? '40px' : `${panelHeight}px` };
   };
+
+  // Right-click menu items. Presentation, viewport clamping and dismissal live
+  // in the shared ContextMenu; every action calls the same handler it always did.
+  const selectionCount = selectedEntries.size;
+  const selectionCountLabel = `${selectionCount} item${selectionCount > 1 ? 's' : ''}`;
+  const contextMenuItems: ContextMenuItem[] = [];
+  if (selectionCount > 0) {
+    contextMenuItems.push({
+      id: 'copy-paths',
+      label: selectionCount === 1 ? 'Copy Path' : `Copy ${selectionCount} Paths`,
+      icon: <Copy className="w-4 h-4" />,
+      onClick: () => { void handleCopyPaths(); },
+    });
+    // Open a single file in the workspace tab strip.
+    if (selectionCount === 1 && selectedEntry && !selectedEntry.isDirectory) {
+      contextMenuItems.push({
+        id: 'open-in-tab',
+        label: 'Open in Tab',
+        icon: <Eye className="w-4 h-4" />,
+        onClick: () => handleOpenFile(),
+      });
+    }
+    if (pathTransferEnabled && selectedFiles.length > 0) {
+      contextMenuItems.push({
+        id: 'download',
+        label: selectedFiles.length > 1 ? `Download ${selectedFiles.length} files` : 'Download',
+        icon: <Download className="w-4 h-4" />,
+        onClick: () => { void handleDownload(); },
+      });
+    }
+    // Rename (single selection only)
+    if (selectionCount === 1 && selectedEntry) {
+      contextMenuItems.push({
+        id: 'rename',
+        label: 'Rename',
+        icon: <Edit3 className="w-4 h-4" />,
+        onClick: () => {
+          setRenameEntry(selectedEntry);
+          setNewName(selectedEntry.name);
+        },
+      });
+    }
+    contextMenuItems.push({
+      id: 'compress',
+      label: `Compress (${selectionCountLabel})`,
+      icon: <Archive className="w-4 h-4" />,
+      onClick: handleOpenCompressDialog,
+    });
+    // Extract (archives only)
+    if (hasSelectedArchives) {
+      contextMenuItems.push({
+        id: 'extract',
+        label: 'Extract here',
+        icon: <FolderOpen className="w-4 h-4" />,
+        onClick: () => { void handleExtract(); },
+      });
+    }
+    contextMenuItems.push(
+      { id: 'divider-delete', label: '', onClick: () => {}, divider: true },
+      {
+        id: 'delete',
+        label: `Delete (${selectionCountLabel})`,
+        icon: <Trash2 className="w-4 h-4" />,
+        onClick: () => { void handleDelete(); },
+        danger: true,
+      },
+      { id: 'divider-after-delete', label: '', onClick: () => {}, divider: true }
+    );
+  } else {
+    contextMenuItems.push({
+      id: 'copy-current-path',
+      label: 'Copy Current Path',
+      icon: <Copy className="w-4 h-4" />,
+      onClick: () => { void handleCopyPaths(); },
+    });
+  }
+  contextMenuItems.push({
+    id: 'select-all',
+    label: 'Select All',
+    icon: <CheckSquare className="w-4 h-4" />,
+    onClick: handleSelectAll,
+  });
+  if (selectionCount > 0) {
+    contextMenuItems.push({
+      id: 'clear-selection',
+      label: 'Clear Selection',
+      onClick: handleClearSelection,
+    });
+  }
+  contextMenuItems.push(
+    { id: 'divider-folder', label: '', onClick: () => {}, divider: true },
+    {
+      id: 'new-folder',
+      label: 'New Folder',
+      icon: <FolderPlus className="w-4 h-4" />,
+      onClick: () => setShowNewFolderDialog(true),
+    }
+  );
+  if (pathTransferEnabled) {
+    contextMenuItems.push({
+      id: 'upload',
+      label: 'Upload Files',
+      icon: <Upload className="w-4 h-4" />,
+      onClick: () => { void handleUpload(); },
+    });
+  }
+  contextMenuItems.push({
+    id: 'refresh',
+    label: 'Refresh',
+    icon: <RefreshCw className="w-4 h-4" />,
+    onClick: handleRefresh,
+  });
 
   return (
     <div
@@ -2322,182 +2405,14 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
           )}
 
           {/* Context Menu */}
-          {contextMenu.visible && createPortal(
-            <div
-              ref={contextMenuRef}
-              role="menu"
-              data-testid="sftp-context-menu"
-              className={cn(
-                'fixed bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-lg py-1 z-[60]',
-                'min-w-[160px] overflow-y-auto overscroll-contain'
-              )}
-              style={{
-                left: contextMenu.x,
-                top: contextMenu.y,
-                maxHeight: 'calc(100vh - 16px)',
-              }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {selectedEntries.size > 0 && (
-                <>
-                  {/* Copy path(s) */}
-                  <button
-                    onClick={handleCopyPaths}
-                    className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-                  >
-                    <Copy className="w-4 h-4" />
-                    {selectedEntries.size === 1 ? 'Copy Path' : `Copy ${selectedEntries.size} Paths`}
-                  </button>
-
-                  {/* Open a single file in the workspace tab strip. */}
-                  {selectedEntries.size === 1 && selectedEntry && !selectedEntry.isDirectory && (
-                    <button
-                      onClick={() => handleOpenFile()}
-                      className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-                    >
-                      <Eye className="w-4 h-4" />
-                      Open in Tab
-                    </button>
-                  )}
-
-                  {/* Download selected files */}
-                  {pathTransferEnabled && selectedFiles.length > 0 && (
-                    <button
-                      onClick={() => {
-                        setContextMenu({ visible: false, x: 0, y: 0 });
-                        handleDownload();
-                      }}
-                      className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-                    >
-                      <Download className="w-4 h-4" />
-                      {selectedFiles.length > 1 ? `Download ${selectedFiles.length} files` : 'Download'}
-                    </button>
-                  )}
-
-                  {/* Rename (single selection only) */}
-                  {selectedEntries.size === 1 && selectedEntry && (
-                    <button
-                      onClick={() => {
-                        setContextMenu({ visible: false, x: 0, y: 0 });
-                        setRenameEntry(selectedEntry);
-                        setNewName(selectedEntry.name);
-                      }}
-                      className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-                    >
-                      <Edit3 className="w-4 h-4" />
-                      Rename
-                    </button>
-                  )}
-
-                  {/* Compress */}
-                  <button
-                    onClick={handleOpenCompressDialog}
-                    className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-                  >
-                    <Archive className="w-4 h-4" />
-                    Compress ({selectedEntries.size} item{selectedEntries.size > 1 ? 's' : ''})
-                  </button>
-
-                  {/* Extract (archives only) */}
-                  {hasSelectedArchives && (
-                    <button
-                      onClick={handleExtract}
-                      className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-                    >
-                      <FolderOpen className="w-4 h-4" />
-                      Extract here
-                    </button>
-                  )}
-
-                  <div className="h-px bg-tokyo-bg-hl my-1" />
-
-                  {/* Delete */}
-                  <button
-                    onClick={() => {
-                      setContextMenu({ visible: false, x: 0, y: 0 });
-                      handleDelete();
-                    }}
-                    className="w-full px-3 py-1.5 text-left text-sm text-tokyo-red hover:bg-tokyo-bg-hl flex items-center gap-2"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                    Delete ({selectedEntries.size} item{selectedEntries.size > 1 ? 's' : ''})
-                  </button>
-
-                  <div className="h-px bg-tokyo-bg-hl my-1" />
-                </>
-              )}
-
-              {selectedEntries.size === 0 && (
-                <button
-                  onClick={handleCopyPaths}
-                  className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-                >
-                  <Copy className="w-4 h-4" />
-                  Copy Current Path
-                </button>
-              )}
-
-              {/* Select All */}
-              <button
-                onClick={handleSelectAll}
-                className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-              >
-                <CheckSquare className="w-4 h-4" />
-                Select All
-              </button>
-
-              {/* Clear Selection */}
-              {selectedEntries.size > 0 && (
-                <button
-                  onClick={handleClearSelection}
-                  className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-                >
-                  Clear Selection
-                </button>
-              )}
-
-              <div className="h-px bg-tokyo-bg-hl my-1" />
-
-              {/* New Folder */}
-              <button
-                onClick={() => {
-                  setContextMenu({ visible: false, x: 0, y: 0 });
-                  setShowNewFolderDialog(true);
-                }}
-                className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-              >
-                <FolderPlus className="w-4 h-4" />
-                New Folder
-              </button>
-
-              {/* Upload */}
-              {pathTransferEnabled && (
-                <button
-                  onClick={() => {
-                    setContextMenu({ visible: false, x: 0, y: 0 });
-                    handleUpload();
-                  }}
-                  className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-                >
-                  <Upload className="w-4 h-4" />
-                  Upload Files
-                </button>
-              )}
-
-              {/* Refresh */}
-              <button
-                onClick={() => {
-                  setContextMenu({ visible: false, x: 0, y: 0 });
-                  handleRefresh();
-                }}
-                className="w-full px-3 py-1.5 text-left text-sm text-tokyo-fg hover:bg-tokyo-bg-hl flex items-center gap-2"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Refresh
-              </button>
-            </div>,
-            document.body
-          )}
+          <ContextMenu
+            isOpen={contextMenu.visible}
+            position={{ x: contextMenu.x, y: contextMenu.y }}
+            items={contextMenuItems}
+            onClose={closeContextMenu}
+            dense
+            testId="sftp-context-menu"
+          />
         </div>
       )}
 

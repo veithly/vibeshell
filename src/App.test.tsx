@@ -310,7 +310,7 @@ vi.mock('./components/SelectServerDialog', () => ({ SelectServerDialog: () => nu
 vi.mock('./components/QuickCommandDialog', () => ({ QuickCommandDialog: () => null }));
 vi.mock('./components/ConfirmDialog', () => ({ ConfirmDialog: () => null }));
 vi.mock('./components/Notifications', () => ({ Notifications: () => null }));
-vi.mock('./components/AgentActivityPanel', () => ({ AgentActivityPanel: () => null }));
+vi.mock('./components/AgentActivityPanel', () => ({ AgentActivityPanel: () => null, AgentActivityNotice: () => null }));
 vi.mock('./components/AgentApprovalDialog', () => ({ AgentApprovalDialog: () => null }));
 vi.mock('./components/WorkspaceChangesPanel', () => ({ WorkspaceChangesPanel: () => null }));
 vi.mock('./components/SessionPluginDock', () => ({ SessionPluginDock: () => null }));

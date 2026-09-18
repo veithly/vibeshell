@@ -50,7 +50,7 @@ import { QuickCommandDialog } from './components/QuickCommandDialog';
 import { CommandHistoryDialog } from './components/CommandHistoryDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Notifications } from './components/Notifications';
-import { AgentActivityPanel } from './components/AgentActivityPanel';
+import { AgentActivityPanel, AgentActivityNotice } from './components/AgentActivityPanel';
 import { AgentApprovalDialog } from './components/AgentApprovalDialog';
 import { WorkspaceChangesPanel } from './components/WorkspaceChangesPanel';
 import { MobileWorkspaceActions } from './components/MobileWorkspaceActions';
@@ -117,7 +117,6 @@ function App() {
     setActiveSession,
     killSession,
     killLocalShellSession,
-    removeSession,
     connectWithCredentials,
     fetchSessions,
     syncRemoteSessions,
@@ -369,15 +368,17 @@ function App() {
 
   const closeInactiveSession = useCallback(async (session: Session) => {
     if (!canCloseWorkspaceSession(session.id)) return false;
-    const success = session.sessionType === 'local'
-      ? await killLocalShellSession(session.id)
-      : await killSession(session.id);
-
-    if (!success) {
-      removeSession(session.id);
+    // killSession/killLocalShellSession remove the tab on success (and when the
+    // backend reports the session already gone). On other failures the tab is
+    // kept so the periodic sync can reconcile instead of the tab flickering
+    // back after a forced removal.
+    if (session.sessionType === 'local') {
+      await killLocalShellSession(session.id);
+    } else {
+      await killSession(session.id);
     }
     return true;
-  }, [killSession, killLocalShellSession, removeSession]);
+  }, [killSession, killLocalShellSession]);
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
@@ -529,7 +530,6 @@ function App() {
   }, [workspaceReady, sessions, pluginTabs, fileTabs, detachedOwners, activeSessionId, activeFileTabId, activePluginTabId, activateFileTab, activatePluginTab, setActiveSession]);
 
   const handleConnected = useCallback((sessionId: string) => {
-    console.log('[App] handleConnected called with sessionId:', sessionId);
     activateFileTab(null);
     activatePluginTab(null);
     setActiveSession(sessionId);
@@ -537,13 +537,11 @@ function App() {
     // The Terminal component attaches after its event listener is ready so
     // the initial prompt/MOTD can be replayed without losing early output.
     setTimeout(() => {
-      console.log('[App] Focusing terminal for session:', sessionId);
       terminalRefs.current.get(sessionId)?.focus();
     }, 100);
   }, [activateFileTab, activatePluginTab, setActiveSession]);
 
   const handleConnect = useCallback(async (server: Server, options?: { forceNew?: boolean }) => {
-    console.log('[App] handleConnect called for server:', server.name);
     const forceNew = options?.forceNew ?? false;
 
     const credResult = await safeInvoke<{
@@ -557,7 +555,6 @@ function App() {
     } | null>('get_credential', { request: { serverName: server.name } });
 
     if (credResult.success && credResult.data) {
-      console.log('[App] Found saved credentials, auto-connecting...');
       const cred = credResult.data;
       const authType = (cred.auth_type === 'key' || cred.auth_type === 'key_with_passphrase') ? 'key' : 'password';
 
@@ -572,16 +569,13 @@ function App() {
       );
 
       if (session) {
-        console.log('[App] Auto-connect successful, session:', session.id);
         handleConnected(session.id);
       } else {
-        console.log('[App] Auto-connect failed, showing dialog');
         setServerToConnect(server);
         setConnectForceNew(forceNew);
         setIsConnectOpen(true);
       }
     } else {
-      console.log('[App] No saved credentials, opening connection dialog');
       setServerToConnect(server);
       setConnectForceNew(forceNew);
       setIsConnectOpen(true);
@@ -904,14 +898,15 @@ function App() {
     const session = sessions.find((s) => s.id === sessionId);
     setSessionToClose(null);
 
-    const success = session?.sessionType === 'local'
-      ? await killLocalShellSession(sessionId)
-      : await killSession(sessionId);
-
-    if (!success) {
-      removeSession(sessionId);
+    // The store removes the tab on success (and when the backend reports the
+    // session already gone); on other failures the tab stays so the sync poll
+    // can reconcile instead of the tab being resurrected after force-removal.
+    if (session?.sessionType === 'local') {
+      await killLocalShellSession(sessionId);
+    } else {
+      await killSession(sessionId);
     }
-  }, [sessionToClose, sessions, killSession, killLocalShellSession, removeSession]);
+  }, [sessionToClose, sessions, killSession, killLocalShellSession]);
 
   const handleCancelCloseSession = useCallback(() => {
     setSessionToClose(null);
@@ -1217,6 +1212,7 @@ function App() {
               )}
             />
 
+            {runtimeCapabilities.agentGateway && <AgentActivityNotice onOpen={() => setIsAgentActivityOpen(true)} />}
             <div className="relative flex min-h-0 flex-1">
               <div className="workspace-return-zone flex min-w-0 flex-1 flex-col" onMouseDownCapture={(event) => {
                 const pane = (event.target as Element).closest<HTMLElement>('[data-pane-id]');

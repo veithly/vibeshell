@@ -5,6 +5,7 @@ import { useServerStore } from '../../stores/serverStore';
 import { safeInvoke } from '../../lib/tauri';
 import { useNotificationStore } from '../../stores/notificationStore';
 import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
+import { useSshKeyPicker, getFileName } from '../../hooks/useSshKeyPicker';
 
 interface AddServerDialogProps {
   isOpen: boolean;
@@ -20,7 +21,6 @@ const INITIAL_FORM_DATA = {
   // 'key_with_passphrase' with an optional (possibly empty) passphrase.
   authType: 'password' as 'password' | 'key_with_passphrase',
   password: '',
-  keyPath: '',
   keyPassphrase: '',
   jumpHostId: '',
   agentForwarding: false,
@@ -36,53 +36,35 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
 
   const [formData, setFormData] = useState(INITIAL_FORM_DATA);
 
-  const [keyContent, setKeyContent] = useState<string | null>(null);
-  const [isLoadingKey, setIsLoadingKey] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showPassphrase, setShowPassphrase] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+
+  // SSH key file state (native picker flow shared with ConnectDialog)
+  const {
+    keyPath,
+    keyContent,
+    isLoadingKey,
+    browseForSshKey,
+    setKeyContent,
+    reset: resetKeyPicker,
+  } = useSshKeyPicker({
+    onBrowseStart: () => setLocalError(null),
+    onError: setLocalError,
+  });
 
   // Discard unsaved draft state whenever the dialog is closed so a cancelled
   // edit never leaks into the next "Add Server" flow.
   useEffect(() => {
     if (!isOpen) {
       setFormData(INITIAL_FORM_DATA);
-      setKeyContent(null);
+      resetKeyPicker();
       setLocalError(null);
       setShowPassword(false);
       setShowPassphrase(false);
       clearError();
     }
-  }, [isOpen, clearError]);
-
-  // Browse for SSH key file
-  const handleBrowseKey = useCallback(async () => {
-    setIsLoadingKey(true);
-    setLocalError(null);
-
-    try {
-      const result = await safeInvoke<string | null>('pick_ssh_key_file');
-
-      if (result.success && result.data) {
-        setFormData(prev => ({ ...prev, keyPath: result.data! }));
-
-        // Read the key file content
-        const readResult = await safeInvoke<string>('read_ssh_key_file', { path: result.data });
-
-        if (readResult.success) {
-          setKeyContent(readResult.data);
-        } else {
-          setLocalError(`Failed to read key file: ${readResult.error.message}`);
-          setFormData(prev => ({ ...prev, keyPath: '' }));
-        }
-      }
-    } catch (err) {
-      console.error('Error browsing for key:', err);
-      setLocalError(err instanceof Error ? err.message : 'Failed to browse for key file');
-    } finally {
-      setIsLoadingKey(false);
-    }
-  }, []);
+  }, [isOpen, clearError, resetKeyPicker]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
@@ -142,7 +124,7 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
             // Empty passphrase means an unencrypted key — store null so the
             // connect flow performs passphrase-less key auth.
             passphrase: isKeyAuth && formData.keyPassphrase ? formData.keyPassphrase : null,
-            keyPath: isKeyAuth ? formData.keyPath || null : null,
+            keyPath: isKeyAuth ? keyPath || null : null,
           },
         });
 
@@ -157,12 +139,12 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
 
       // Reset form and close
       setFormData(INITIAL_FORM_DATA);
-      setKeyContent(null);
+      resetKeyPicker();
       onClose();
     } catch (err) {
       console.error('Failed to add server:', err);
     }
-  }, [formData, keyContent, isMobile, addServer, updateServer, notifySuccess, onClose]);
+  }, [formData, keyPath, keyContent, isMobile, addServer, updateServer, notifySuccess, onClose, resetKeyPicker]);
 
   const handleChange = useCallback((field: string, value: string | number | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -171,17 +153,10 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
 
     // Reset key content when changing auth type
     if (field === 'authType') {
-      setKeyContent(null);
-      setFormData(prev => ({ ...prev, keyPath: '', password: '', keyPassphrase: '' }));
+      resetKeyPicker();
+      setFormData(prev => ({ ...prev, password: '', keyPassphrase: '' }));
     }
-  }, [clearError]);
-
-  // Helper to get filename from path
-  const getFileName = (path: string): string => {
-    if (!path) return '';
-    const parts = path.replace(/\\/g, '/').split('/');
-    return parts[parts.length - 1] || path;
-  };
+  }, [clearError, resetKeyPicker]);
 
   if (!isOpen) return null;
 
@@ -410,17 +385,17 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                         'min-w-0 flex-1 flex items-center gap-2 px-3 py-2 rounded-md',
                         'bg-tokyo-bg border border-tokyo-bg-hl',
                         'text-tokyo-fg',
-                        formData.keyPath ? '' : 'text-tokyo-comment'
+                        keyPath ? '' : 'text-tokyo-comment'
                       )}
                     >
                       <FileKey className="w-4 h-4 flex-shrink-0" />
                       <span className="truncate text-sm">
-                        {formData.keyPath ? getFileName(formData.keyPath) : 'No key file selected'}
+                        {keyPath ? getFileName(keyPath) : 'No key file selected'}
                       </span>
                     </div>
                     <button
                       type="button"
-                      onClick={handleBrowseKey}
+                      onClick={browseForSshKey}
                       disabled={isLoadingKey || loading}
                       className={cn(
                         'flex items-center justify-center gap-2 px-3 py-2 rounded-md',
@@ -434,9 +409,9 @@ export function AddServerDialog({ isOpen, onClose }: AddServerDialogProps) {
                       <span className="text-sm">{isLoadingKey ? 'Loading...' : 'Browse'}</span>
                     </button>
                   </div>
-                  {formData.keyPath && (
-                    <p className="mt-1 text-xs text-tokyo-comment truncate" title={formData.keyPath}>
-                      {formData.keyPath}
+                  {keyPath && (
+                    <p className="mt-1 text-xs text-tokyo-comment truncate" title={keyPath}>
+                      {keyPath}
                     </p>
                   )}
                 </div>

@@ -53,6 +53,9 @@ function scoreAsset(assetName) {
 
   if (name.endsWith('.tar.gz')) score += 80;
   if (name.endsWith('.zip')) score += 70;
+  // Tauri names NSIS installers "*-setup.exe" (no "nsis" in the name); the
+  // NSIS exe must outrank .msi so Windows clients get the NSIS updater path.
+  if (name.endsWith('-setup.exe')) score += 25;
   if (name.includes('nsis')) score += 20;
   if (name.includes('appimage')) score += 15;
   if (name.endsWith('.dmg')) score += 10;

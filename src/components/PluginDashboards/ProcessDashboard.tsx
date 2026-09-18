@@ -46,7 +46,7 @@ export function ProcessDashboard({ plugin, sessionId }: { plugin: PluginRecord; 
     if (!window.confirm(t('plugins.actionConfirm', { name: `${t('plugins.process.kill')} ${pid} (${command})` }))) {
       return;
     }
-    const result = await run('kill', { pid });
+    const result = await run('kill', { pid }, true);
     if (result !== null) load(sort);
   };
 

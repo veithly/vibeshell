@@ -52,6 +52,7 @@ const extension = target.includes('windows') ? '.exe' : '';
 const binaryName = `vibeshell${extension}`;
 const cargoArgs = [
   'build',
+  '--locked',
   '--package',
   'vshell',
   '--bin',

@@ -1,10 +1,13 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '../../lib/utils';
 
 export interface ContextMenuItem {
   id: string;
   label: string;
   icon?: React.ReactNode;
+  /** Right-aligned keyboard hint rendered after the label (e.g. 'Ctrl+C'). */
+  shortcut?: string;
   onClick: () => void;
   disabled?: boolean;
   danger?: boolean;
@@ -16,13 +19,37 @@ interface ContextMenuProps {
   position: { x: number; y: number };
   items: ContextMenuItem[];
   onClose: () => void;
+  /** Optional content rendered above the items, separated by a bottom border. */
+  header?: React.ReactNode;
+  /** Compact rows (py-1.5 instead of the default py-2). */
+  dense?: boolean;
+  /** Minimum menu width in px (default 160). */
+  minWidth?: number;
+  /** data-testid applied to the menu container. */
+  testId?: string;
 }
 
+const VIEWPORT_MARGIN = 8;
+
 /**
- * Generic context menu component
+ * Generic context menu component.
+ *
+ * Owns presentation and dismissal: rendered in a portal on document.body,
+ * clamped to the viewport, closed on outside mousedown/contextmenu and Escape.
+ * Callers only describe their items.
  */
-export function ContextMenu({ isOpen, position, items, onClose }: ContextMenuProps) {
+export function ContextMenu({
+  isOpen,
+  position,
+  items,
+  onClose,
+  header,
+  dense = false,
+  minWidth = 160,
+  testId,
+}: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const [adjustedPosition, setAdjustedPosition] = useState(position);
 
   // Close on click outside
   useEffect(() => {
@@ -60,29 +87,30 @@ export function ContextMenu({ isOpen, position, items, onClose }: ContextMenuPro
     };
   }, [isOpen, onClose]);
 
-  // Adjust position to keep menu within viewport
-  const getAdjustedPosition = useCallback(() => {
-    if (!menuRef.current) return position;
+  // Adjust position to keep the menu within the viewport (measured after
+  // layout so the real menu size is used; re-clamped on window resize).
+  useLayoutEffect(() => {
+    if (!isOpen) return;
 
-    const menuRect = menuRef.current.getBoundingClientRect();
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
+    const fitMenuToViewport = () => {
+      const menu = menuRef.current;
+      if (!menu) return;
 
-    let x = position.x;
-    let y = position.y;
+      const rect = menu.getBoundingClientRect();
+      const maxX = Math.max(VIEWPORT_MARGIN, window.innerWidth - rect.width - VIEWPORT_MARGIN);
+      const maxY = Math.max(VIEWPORT_MARGIN, window.innerHeight - rect.height - VIEWPORT_MARGIN);
+      const x = Math.min(Math.max(VIEWPORT_MARGIN, position.x), maxX);
+      const y = Math.min(Math.max(VIEWPORT_MARGIN, position.y), maxY);
 
-    // Adjust horizontal position
-    if (x + menuRect.width > viewportWidth) {
-      x = viewportWidth - menuRect.width - 8;
-    }
+      setAdjustedPosition((previous) => (
+        previous.x === x && previous.y === y ? previous : { x, y }
+      ));
+    };
 
-    // Adjust vertical position
-    if (y + menuRect.height > viewportHeight) {
-      y = viewportHeight - menuRect.height - 8;
-    }
-
-    return { x: Math.max(8, x), y: Math.max(8, y) };
-  }, [position]);
+    fitMenuToViewport();
+    window.addEventListener('resize', fitMenuToViewport);
+    return () => window.removeEventListener('resize', fitMenuToViewport);
+  }, [isOpen, position]);
 
   const handleItemClick = useCallback((item: ContextMenuItem) => {
     if (!item.disabled) {
@@ -93,21 +121,29 @@ export function ContextMenu({ isOpen, position, items, onClose }: ContextMenuPro
 
   if (!isOpen) return null;
 
-  const adjustedPosition = getAdjustedPosition();
-
-  return (
+  return createPortal(
     <div
       ref={menuRef}
+      role="menu"
+      data-testid={testId}
       className={cn(
-        'fixed z-[100] min-w-[160px] py-1',
+        'fixed z-[100] py-1',
         'bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl',
+        'overflow-y-auto overscroll-contain',
         'animate-fade-in'
       )}
       style={{
         left: adjustedPosition.x,
         top: adjustedPosition.y,
+        minWidth,
+        maxHeight: 'calc(100vh - 16px)',
       }}
     >
+      {header && (
+        <div className="px-3 py-1.5 text-xs text-tokyo-comment border-b border-tokyo-bg-hl mb-1 font-medium">
+          {header}
+        </div>
+      )}
       {items.map((item, index) => {
         if (item.divider) {
           return (
@@ -121,8 +157,10 @@ export function ContextMenu({ isOpen, position, items, onClose }: ContextMenuPro
         return (
           <button
             key={item.id}
+            role="menuitem"
             className={cn(
-              'w-full flex items-center gap-2 px-3 py-2 text-sm text-left',
+              'w-full flex items-center gap-2 px-3 text-sm text-left',
+              dense ? 'py-1.5' : 'py-2',
               'transition-colors duration-100',
               item.disabled
                 ? 'text-tokyo-comment cursor-not-allowed opacity-50'
@@ -135,10 +173,14 @@ export function ContextMenu({ isOpen, position, items, onClose }: ContextMenuPro
           >
             {item.icon && <span className="w-4 h-4 flex-shrink-0">{item.icon}</span>}
             {item.label}
+            {item.shortcut && (
+              <span className="ml-auto text-xs text-tokyo-comment">{item.shortcut}</span>
+            )}
           </button>
         );
       })}
-    </div>
+    </div>,
+    document.body
   );
 }
 

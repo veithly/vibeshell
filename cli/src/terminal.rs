@@ -143,7 +143,7 @@ fn run_interactive_loop<R: BufRead + Send + 'static>(session_id: &str, reader: R
 
                     let bytes = key_event_to_bytes(&key);
                     if !bytes.is_empty() {
-                        let _ = ipc_support::send(&IpcMessage::SendInput {
+                        let _ = ipc_support::send(&IpcMessage::SendUserInput {
                             session_id: sid.clone(),
                             data: bytes,
                         });
@@ -157,7 +157,7 @@ fn run_interactive_loop<R: BufRead + Send + 'static>(session_id: &str, reader: R
                     });
                 }
                 Event::Paste(text) if !text.is_empty() => {
-                    let _ = ipc_support::send(&IpcMessage::SendInput {
+                    let _ = ipc_support::send(&IpcMessage::SendUserInput {
                         session_id: sid.clone(),
                         data: text.into_bytes(),
                     });
@@ -338,10 +338,14 @@ pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<Comma
         }
     });
 
-    ipc_support::send(&IpcMessage::SendInput {
+    match ipc_support::send(&IpcMessage::SendInput {
         session_id: session_id.to_string(),
         data: format!("{}\n", command).into_bytes(),
-    })?;
+    })? {
+        IpcMessage::Ok => {}
+        IpcMessage::Error { message } => anyhow::bail!("{message}"),
+        _ => anyhow::bail!("Unexpected command submission response"),
+    }
 
     let start = Instant::now();
     let mut recent = String::new();

@@ -1,12 +1,12 @@
 {
   "name": "vibeshell",
-  "version": "1.0.8",
+  "version": "1.1.0",
   "description": "Native SSH, SFTP, and remote server workflows through VibeShell.",
   "author": {
     "name": "VibeShell"
   },
   "repository": "https://github.com/veithly/vibeshell",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "keywords": ["ssh", "sftp", "remote-development", "coding-agents"],
   "skills": "./skills/",
   "interface": {

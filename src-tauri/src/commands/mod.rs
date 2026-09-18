@@ -6,10 +6,12 @@ pub mod coding_agent;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[path = "coding_agent_mobile.rs"]
 pub mod coding_agent;
+pub mod dbconn;
 pub mod dialog;
 pub mod fingerprint;
 pub mod history;
 pub mod install;
+pub mod local_files;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod local_shell;
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -17,21 +19,20 @@ pub mod local_shell;
 pub mod local_shell;
 pub mod logging;
 pub mod platform;
-pub mod dbconn;
 pub mod plugin;
 pub mod server;
 pub mod session;
+pub mod settings;
 pub mod sftp;
 pub mod snippet;
-pub mod ssh_import;
 pub mod tunnel;
 pub mod workspace_window;
-pub mod local_files;
 
 pub use agent::*;
 pub use app::*;
 pub use cloud_sync::*;
 pub use coding_agent::*;
+pub use dbconn::*;
 pub use dialog::*;
 pub use fingerprint::*;
 pub use history::*;
@@ -39,13 +40,12 @@ pub use install::*;
 pub use local_shell::*;
 pub use logging::*;
 pub use platform::*;
-pub use dbconn::*;
 pub use plugin::*;
 pub use server::*;
 pub use session::*;
+pub use settings::*;
 pub use sftp::*;
 pub use snippet::*;
-pub use ssh_import::*;
 pub use tunnel::*;
 
 // Re-export server status types for use in frontend

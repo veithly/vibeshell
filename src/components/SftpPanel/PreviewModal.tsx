@@ -16,7 +16,7 @@ import {
   Edit3,
   Save,
 } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, formatFileSize } from '../../lib/utils';
 import { safeInvoke } from '../../lib/tauri';
 import { FileIcon, getSyntaxLanguage, isTextPreviewable, isImagePreviewable } from './FileIcon';
 
@@ -48,16 +48,6 @@ interface PreviewModalProps {
   onDownload?: () => void;
   /** Callback to save edited content */
   onSave?: (content: string) => Promise<void>;
-}
-
-/**
- * Format file size in human readable format
- */
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
 /**
@@ -634,7 +624,7 @@ export function PreviewModal({
               {isImage && imageDataUrl && (
                 <div
                   className={cn(
-                    'h-full flex items-center justify-center bg-[#1a1a2e]',
+                    'h-full flex items-center justify-center bg-tokyo-bg-dark',
                     'overflow-hidden',
                     zoom > 1 ? 'cursor-grab' : 'cursor-default',
                     isDragging && 'cursor-grabbing'
@@ -645,19 +635,7 @@ export function PreviewModal({
                   onMouseLeave={handleMouseUp}
                 >
                   {/* Checkerboard background for transparent images */}
-                  <div
-                    className="absolute inset-0 opacity-10"
-                    style={{
-                      backgroundImage: `
-                        linear-gradient(45deg, #333 25%, transparent 25%),
-                        linear-gradient(-45deg, #333 25%, transparent 25%),
-                        linear-gradient(45deg, transparent 75%, #333 75%),
-                        linear-gradient(-45deg, transparent 75%, #333 75%)
-                      `,
-                      backgroundSize: '20px 20px',
-                      backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
-                    }}
-                  />
+                  <div className="absolute inset-0 opacity-10 checkerboard-bg" />
                   <img
                     ref={imageRef}
                     src={imageDataUrl}

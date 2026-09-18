@@ -59,9 +59,6 @@ export interface CommandSnippet {
 /** Input for creating a new snippet */
 export type CreateSnippetInput = Omit<CommandSnippet, 'id' | 'created_at' | 'updated_at'>;
 
-/** Input for updating an existing snippet */
-export type UpdateSnippetInput = Partial<CreateSnippetInput>;
-
 // =============================================================================
 // Recording Types
 // =============================================================================

@@ -18,17 +18,6 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock('@gsap/react', () => ({
-  useGSAP: vi.fn(),
-}));
-
-vi.mock('gsap', () => ({
-  default: {
-    registerPlugin: vi.fn(),
-    fromTo: vi.fn(),
-  },
-}));
-
 vi.mock('../../stores/serverStore', () => ({
   useServerStore: () => ({
     servers: [],
@@ -64,7 +53,7 @@ vi.mock('../../stores/runtimeCapabilitiesStore', () => ({
 }));
 
 vi.mock('../CodingAgentLauncher', () => ({
-  CodingAgentLauncher: () => <button type="button">Launch agent</button>,
+  CodingAgentLauncher: () => <button type="button" className="connection-card">Launch agent</button>,
 }));
 
 function DialogHarness({ renderVersion = 0 }: { renderVersion?: number }) {
@@ -85,9 +74,27 @@ function DialogHarness({ renderVersion = 0 }: { renderVersion?: number }) {
   );
 }
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe('SelectServerDialog agent focus lifecycle', () => {
+  it.each([false, true])('honors reduced motion=%s and cancels native animations', (reduceMotion) => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: reduceMotion })));
+    const cancel = vi.fn();
+    const animate = vi.fn(() => ({ cancel }));
+    const prior = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate');
+    Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate });
+    try {
+      const { unmount } = render(<DialogHarness />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open agent launcher' }));
+      expect(animate.mock.calls.length > 0).toBe(!reduceMotion);
+      unmount();
+      expect(cancel.mock.calls.length > 0).toBe(!reduceMotion);
+    } finally {
+      if (prior) Object.defineProperty(HTMLElement.prototype, 'animate', prior);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'animate');
+    }
+  });
+
   it('traps focus and restores it to the trigger on close', async () => {
     const { rerender } = render(<DialogHarness />);
 

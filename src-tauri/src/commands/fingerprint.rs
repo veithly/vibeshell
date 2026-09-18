@@ -8,7 +8,10 @@ use std::path::Path;
 use std::sync::Arc;
 use tauri::State;
 
-use crate::ssh::{FingerprintStore, FingerprintVerificationResult, StoredFingerprint};
+use crate::ssh::{
+    FingerprintStore, FingerprintVerificationResult, HostKeyCheck, HostKeyRejection, SshClient,
+    StoredFingerprint,
+};
 
 /// Request to get a fingerprint by host and port
 #[derive(Debug, Serialize, Deserialize)]
@@ -201,20 +204,103 @@ pub fn verify_fingerprint(
     result.into()
 }
 
-/// Update the last_verified_at timestamp for a host
-#[tauri::command]
-pub fn touch_fingerprint(
-    state: State<'_, FingerprintState>,
-    request: GetFingerprintRequest,
-) -> Result<(), String> {
-    state
-        .store
-        .touch(&request.host, request.port)
-        .map_err(|e| e.to_string())
-}
-
 /// Clear all stored fingerprints (for testing/reset purposes)
 #[tauri::command]
 pub fn clear_fingerprints(state: State<'_, FingerprintState>) -> Result<(), String> {
     state.store.clear().map_err(|e| e.to_string())
+}
+
+/// Request for a handshake-only host-key probe (no credentials are sent).
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeHostKeyRequest {
+    pub host: String,
+    pub port: u16,
+}
+
+/// Result of a handshake-only host-key probe.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeHostKeyResponse {
+    /// "known" (trusted), "unknown" (first contact), or "changed" (potential MITM)
+    pub status: String,
+    /// Presented key's SHA256 fingerprint (always present on success)
+    pub fingerprint: Option<String>,
+    /// Presented key's algorithm, e.g. "ssh-ed25519"
+    pub key_type: Option<String>,
+    /// Previously stored fingerprint ("changed" only)
+    pub stored_fingerprint: Option<String>,
+    /// Previously stored key type ("changed" only)
+    pub stored_key_type: Option<String>,
+    /// When the stored key was first trusted, Unix seconds ("changed" only)
+    pub stored_at: Option<i64>,
+}
+
+/// Probe a server's host key by performing an SSH transport handshake only —
+/// no authentication, so no credentials ever reach the wire. The frontend
+/// calls this before `session_connect` to drive the TOFU approval dialogs;
+/// the backend still enforces the same policy in `check_server_key`.
+#[tauri::command]
+pub async fn probe_host_key(
+    state: State<'_, FingerprintState>,
+    request: ProbeHostKeyRequest,
+) -> Result<ProbeHostKeyResponse, String> {
+    let (output_tx, _output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
+    let mut client = SshClient::new(output_tx);
+    client.set_host_key_check(HostKeyCheck::new(
+        state.store.clone(),
+        request.host.clone(),
+        request.port,
+    ));
+
+    match client.connect_handshake(&request.host, request.port).await {
+        Ok(key) => {
+            // Trusted: refresh the last-verified timestamp (best effort).
+            let _ = state.store.touch(&request.host, request.port);
+            Ok(ProbeHostKeyResponse {
+                status: "known".to_string(),
+                fingerprint: Some(key.fingerprint),
+                key_type: Some(key.algorithm),
+                stored_fingerprint: None,
+                stored_key_type: None,
+                stored_at: None,
+            })
+        }
+        Err(err) => {
+            // The handshake was aborted by the host-key policy (or failed for
+            // a network reason). Map the structured rejection to the response.
+            match client.take_host_key_rejection().await {
+                Some(HostKeyRejection::Unknown {
+                    fingerprint,
+                    algorithm,
+                }) => Ok(ProbeHostKeyResponse {
+                    status: "unknown".to_string(),
+                    fingerprint: Some(fingerprint),
+                    key_type: Some(algorithm),
+                    stored_fingerprint: None,
+                    stored_key_type: None,
+                    stored_at: None,
+                }),
+                Some(HostKeyRejection::Changed {
+                    stored_fingerprint,
+                    stored_algorithm,
+                    stored_at,
+                    fingerprint,
+                    algorithm,
+                }) => Ok(ProbeHostKeyResponse {
+                    status: "changed".to_string(),
+                    fingerprint: Some(fingerprint),
+                    key_type: Some(algorithm),
+                    stored_fingerprint: Some(stored_fingerprint),
+                    stored_key_type: Some(stored_algorithm),
+                    stored_at: Some(stored_at),
+                }),
+                Some(rejection) => Err(rejection.error_message(&request.host, request.port)),
+                None => Err(format!(
+                    "Failed to reach {}:{}: {}",
+                    request.host, request.port, err
+                )),
+            }
+        }
+    }
 }

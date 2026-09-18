@@ -10,7 +10,16 @@ use vibeshell_core::ipc::{IpcClient, IpcEndpointStatus, IpcMessage};
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run_foreground() -> Result<()> {
-    run_foreground_with(vibeshell_core::IpcServer::new)
+    run_foreground_with(|| {
+        let database =
+            Arc::new(vibeshell_core::Database::new().context("Failed to open database")?);
+        let session_manager = Arc::new(vibeshell_core::SessionManager::new(database.clone()));
+        session_manager.set_tunnel_manager(Arc::new(vibeshell_core::tunnel::TunnelManager::new()));
+        session_manager.set_session_logger(Arc::new(vibeshell_core::logging::SessionLogger::new(
+            database.clone(),
+        )));
+        Ok(vibeshell_core::IpcServer::new(database, session_manager))
+    })
 }
 
 trait HeadlessDaemon {
@@ -25,14 +34,13 @@ impl HeadlessDaemon for vibeshell_core::IpcServer {
 
 fn run_foreground_with<F, S>(build_server: F) -> Result<()>
 where
-    F: FnOnce(Arc<vibeshell_core::Database>, Arc<vibeshell_core::SessionManager>) -> S,
+    F: FnOnce() -> Result<S>,
     S: HeadlessDaemon,
 {
-    let database = Arc::new(vibeshell_core::Database::new().context("Failed to open database")?);
-    let session_manager = Arc::new(vibeshell_core::SessionManager::new(database.clone()));
-
+    // Keep real data initialization inside the production factory, never in
+    // the lifecycle helper exercised by tests.
     eprintln!("Starting VibeShell headless daemon...");
-    let server = build_server(database, session_manager);
+    let server = build_server()?;
     server.run()
 }
 
@@ -212,8 +220,10 @@ mod tests {
     #[test]
     fn run_foreground_returns_error_instead_of_panicking_when_server_setup_fails() {
         let result = std::panic::catch_unwind(|| {
-            run_foreground_with(|_, _| FailingServer {
-                _runtime: tokio::runtime::Runtime::new().expect("create nested runtime"),
+            run_foreground_with(|| {
+                Ok(FailingServer {
+                    _runtime: tokio::runtime::Runtime::new().expect("create nested runtime"),
+                })
             })
         });
         assert!(result.is_ok(), "run_foreground should not panic");

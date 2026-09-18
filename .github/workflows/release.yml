@@ -2,273 +2,137 @@ name: Release
 
 on:
   push:
-    branches:
-      - master
-      - main
-    paths:
-      - 'src/**'
-      - 'src-tauri/**'
-      - 'cli/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'tsconfig*.json'
-      - 'vite.config.ts'
-      - 'tailwind.config.js'
-      - 'postcss.config.js'
-      - 'scripts/**'
-      - 'skills/**'
-      - '.claude-plugin/**'
-      - '.codex-plugin/**'
-      - '.claude/skills/**'
-      - '.codex/skills/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/release.yml'
-    tags:
-      - 'v*'
+    tags: ['v*']
   workflow_dispatch:
     inputs:
-      bump:
-        description: 'Version bump type'
-        required: false
-        default: 'patch'
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
+      tag:
+        description: Existing vX.Y.Z tag on main (no automatic version bump)
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: release
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  bump-and-release:
-    name: Bump Version & Create Release
+  prepare:
+    name: Validate release and create draft
     runs-on: ubuntu-latest
-    if: "!contains(github.event.head_commit.message, '[skip ci]') && !contains(github.event.head_commit.message, 'chore: bump version')"
+    permissions:
+      contents: write
+      checks: read
     outputs:
-      release_id: ${{ steps.create_release.outputs.id }}
-      version: ${{ steps.bump.outputs.new_version }}
-      tag_name: ${{ steps.bump.outputs.tag_name }}
-      should_build: ${{ steps.bump.outputs.should_build }}
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      sha: ${{ steps.metadata.outputs.sha }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Install Rust stable
+      - name: Validate immutable tag on main
+        id: metadata
         shell: bash
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-
-      - name: Bump version
-        id: bump
-        run: |
-          CURRENT=$(jq -r .version src-tauri/tauri.conf.json)
-          echo "Current version: $CURRENT"
-
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            NEW_VERSION="${GITHUB_REF#refs/tags/v}"
-            echo "Tag push: using version $NEW_VERSION"
-          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            BUMP="${{ github.event.inputs.bump }}"
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-            case "$BUMP" in
-              major) NEW_VERSION="$((MAJOR+1)).0.0" ;;
-              minor) NEW_VERSION="${MAJOR}.$((MINOR+1)).0" ;;
-              patch) NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH+1))" ;;
-            esac
-          else
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH+1))"
-            echo "Branch push: auto bumping patch $CURRENT → $NEW_VERSION"
-          fi
-
-          TAG_NAME="v${NEW_VERSION}"
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
-          echo "should_build=true" >> $GITHUB_OUTPUT
-
-          # Update version in config files (only for non-tag pushes)
-          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
-            jq --arg v "$NEW_VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
-            npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version
-            sed -i "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
-            cargo update -p vibeshell-desktop -p vshell
-          fi
-
-      - name: Commit version bump
-        if: "!startsWith(github.ref, 'refs/tags/')"
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet; then
-            echo "No version changes to commit"
-          else
-            git add src-tauri/tauri.conf.json package.json package-lock.json Cargo.toml Cargo.lock
-            git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
-            git push origin HEAD:${{ github.ref_name }}
-          fi
-
-      - name: Create release
-        id: create_release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ steps.bump.outputs.tag_name }}
-        run: |
-          cat > release-notes.md <<'EOF'
-          ## VibeShell ${{ steps.bump.outputs.tag_name }}
-
-          ### Downloads
-          | Platform | Installer |
-          |----------|-----------|
-          | Windows x64 | `.exe` / `.msi` |
-          | macOS (Apple Silicon) | `.dmg` |
-          | macOS (Intel) | `.dmg` |
-          | Linux x64 | `.deb` / `.AppImage` |
-          | Headless servers | Native `VibeShell-CLI-*` archive for each platform |
-
-          > **Note:** Desktop installers contain the native `vibeshell` command and automatically configure the bundled Skill for detected Coding Agents. Headless archives contain the same CLI, Skill, and a user-level installer; Node.js is not required.
-
-          See [commit history](https://github.com/${{ github.repository }}/commits/${{ steps.bump.outputs.tag_name }}) for full changes.
-          EOF
-
-          if gh release view "$TAG_NAME" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release edit "$TAG_NAME" \
-              --repo "${{ github.repository }}" \
-              --title "VibeShell $TAG_NAME" \
-              --notes-file release-notes.md \
-              --latest
-          else
-            gh release create "$TAG_NAME" \
-              --repo "${{ github.repository }}" \
-              --target "$(git rev-parse HEAD)" \
-              --title "VibeShell $TAG_NAME" \
-              --notes-file release-notes.md \
-              --latest
-          fi
-
-          RELEASE_ID="$(gh api "repos/${{ github.repository }}/releases/tags/$TAG_NAME" --jq .id)"
-          echo "id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
-
-  validate-updater-signing:
-    name: Validate updater signing key
-    needs: bump-and-release
-    if: needs.bump-and-release.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.bump-and-release.outputs.tag_name }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected an existing vX.Y.Z tag'; exit 1; }
+          git fetch origin main --tags
+          SHA=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
+          git merge-base --is-ancestor "$SHA" origin/main
+          git checkout --detach "$SHA"
+          node scripts/check-release.mjs "$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?per_page=100" > "$RUNNER_TEMP/checks.json"
+          node - "$RUNNER_TEMP/checks.json" <<'NODE'
+          const fs = require('node:fs');
+          const checks = JSON.parse(fs.readFileSync(process.argv[2])).check_runs;
+          for (const name of ['Frontend Check', 'Clippy Lint', 'Rust Check (ubuntu-22.04)', 'Rust Check (windows-latest)', 'Rust Check (macos-latest)']) {
+            if (!checks.some(c => c.name === name && c.app.slug === 'github-actions' && c.conclusion === 'success')) {
+              throw new Error(`Required CI has not passed for the tagged commit: ${name}`);
+            }
+          }
+          NODE
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Validate updater key can sign artifacts
-        shell: bash
+      - run: npm ci
+      - name: Validate updater key cryptographically
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY is not configured."
-            exit 1
+          set -euo pipefail
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          printf 'VibeShell updater signing preflight\n' > "$RUNNER_TEMP/signing-probe.txt"
+          npx --no-install tauri signer sign --private-key "$TAURI_SIGNING_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$RUNNER_TEMP/signing-probe.txt"
+          python3 scripts/verify-updater.py "$RUNNER_TEMP/signing-probe.txt"
+      - name: Create or resume draft only
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --json isDraft > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            node -e 'if (!JSON.parse(require("node:fs").readFileSync(process.argv[1])).isDraft) throw new Error("Refusing to overwrite a published release")' "$RUNNER_TEMP/release.json"
+          else
+            gh release create "$TAG" --draft --verify-tag --title "VibeShell ${TAG#v}" --notes-file CHANGELOG.md
           fi
 
-          workdir="$(mktemp -d)"
-          cp package.json "${workdir}/package.json"
-          CI=true npx tauri signer sign \
-            -k "${TAURI_SIGNING_PRIVATE_KEY}" \
-            -p "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD-}" \
-            "${workdir}/package.json"
-          test -f "${workdir}/package.json.sig"
-
-  build-tauri:
-    name: Build (${{ matrix.name }})
-    needs:
-      - bump-and-release
-      - validate-updater-signing
-    if: needs.bump-and-release.outputs.should_build == 'true'
+  build:
+    name: Build ${{ matrix.target }}
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: windows-latest
-            name: Windows x64
-            args: ''
+          - os: windows-latest
             target: x86_64-pc-windows-msvc
-          - platform: macos-latest
-            name: macOS ARM64
-            args: '--target aarch64-apple-darwin'
+            bundles: nsis,msi
+          - os: macos-latest
             target: aarch64-apple-darwin
-          - platform: macos-latest
-            name: macOS x64
-            args: '--target x86_64-apple-darwin'
+            bundles: app,dmg
+          - os: macos-latest
             target: x86_64-apple-darwin
-          - platform: ubuntu-22.04
-            name: Linux x64
-            args: ''
+            bundles: app,dmg
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-
-    runs-on: ${{ matrix.platform }}
+            bundles: appimage,deb
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      BUNDLES: ${{ matrix.bundles }}
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.bump-and-release.outputs.tag_name }}
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+          ref: ${{ needs.prepare.outputs.sha }}
+      - name: Linux prerequisites
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf \
-            libssl-dev \
-            libxdo-dev
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+          sudo apt-get install -y build-essential curl wget file libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev libxdo-dev
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-
-      - name: Install Rust stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rust toolchain
         shell: bash
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-          if [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
-            rustup target add aarch64-apple-darwin x86_64-apple-darwin
-          fi
-
-      - name: Install frontend dependencies
-        run: npm ci
-
-      - name: Build Tauri app
+          rustup target add "$TARGET"
+      - run: npm ci
+      - name: Build native CLI and desktop
         shell: bash
         env:
           VIBESHELL_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -277,249 +141,122 @@ jobs:
           VIBESHELL_APPLE_ID: ${{ secrets.APPLE_ID }}
           VIBESHELL_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           VIBESHELL_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          VIBESHELL_APPLE_PROVIDER_SHORT_NAME: ${{ secrets.APPLE_PROVIDER_SHORT_NAME }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if [[ -n "${VIBESHELL_APPLE_CERTIFICATE:-}" ]]; then
-            export APPLE_CERTIFICATE="$VIBESHELL_APPLE_CERTIFICATE"
-          fi
-          if [[ -n "${VIBESHELL_APPLE_CERTIFICATE_PASSWORD:-}" ]]; then
-            export APPLE_CERTIFICATE_PASSWORD="$VIBESHELL_APPLE_CERTIFICATE_PASSWORD"
-          fi
-          if [[ -n "${VIBESHELL_APPLE_SIGNING_IDENTITY:-}" ]]; then
-            export APPLE_SIGNING_IDENTITY="$VIBESHELL_APPLE_SIGNING_IDENTITY"
-          fi
-          if [[ -n "${VIBESHELL_APPLE_ID:-}" ]]; then
-            export APPLE_ID="$VIBESHELL_APPLE_ID"
-          fi
-          if [[ -n "${VIBESHELL_APPLE_PASSWORD:-}" ]]; then
-            export APPLE_PASSWORD="$VIBESHELL_APPLE_PASSWORD"
-          fi
-          if [[ -n "${VIBESHELL_APPLE_TEAM_ID:-}" ]]; then
-            export APPLE_TEAM_ID="$VIBESHELL_APPLE_TEAM_ID"
-          fi
-          if [[ -n "${VIBESHELL_APPLE_PROVIDER_SHORT_NAME:-}" ]]; then
-            export APPLE_PROVIDER_SHORT_NAME="$VIBESHELL_APPLE_PROVIDER_SHORT_NAME"
-          fi
-
-          node scripts/prepare-sidecar.mjs --target "${{ matrix.target }}"
-          npx tauri build ${{ matrix.args }} --config src-tauri/tauri.sidecar.conf.json
-
-      - name: Repair unsigned macOS app bundle
-        if: matrix.platform == 'macos-latest'
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            indirect="VIBESHELL_$name"
+            if [[ -n "${!indirect:-}" ]]; then export "$name=${!indirect}"; fi
+          done
+          node scripts/prepare-sidecar.mjs --target "$TARGET"
+          npx --no-install tauri build --ci --target "$TARGET" --bundles "$BUNDLES" --config src-tauri/tauri.sidecar.conf.json -- --locked
+      - name: Finalize macOS resources and updater archive
+        if: runner.os == 'macOS'
         shell: bash
         env:
-          VIBESHELL_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          VIBESHELL_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          VERSION: ${{ needs.bump-and-release.outputs.version }}
-          TARGET: ${{ matrix.target }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if [[ -n "${VIBESHELL_APPLE_CERTIFICATE:-}" || -n "${VIBESHELL_APPLE_SIGNING_IDENTITY:-}" ]]; then
-            echo "Apple signing is configured; keeping Tauri's signed and notarized bundles."
-            exit 0
+          set -euo pipefail
+          bundle="target/$TARGET/release/bundle"
+          app="$bundle/macos/VibeShell.app"
+          if [[ -z "$APPLE_CERTIFICATE" && -z "$APPLE_SIGNING_IDENTITY" ]]; then
+            codesign --force --sign - "$app/Contents/MacOS/vibeshell"
+            codesign --force --sign - "$app"
+            staging=$(mktemp -d)
+            ditto "$app" "$staging/VibeShell.app"
+            ln -s /Applications "$staging/Applications"
+            for dmg in "$bundle"/dmg/*.dmg; do
+              hdiutil create -volname VibeShell -srcfolder "$staging" -ov -format UDZO "$dmg"
+            done
           fi
-
-          app_candidates=(
-            "target/${TARGET}/release/bundle/macos/VibeShell.app"
-            "target/release/bundle/macos/VibeShell.app"
-          )
-          APP_PATH=""
-          for candidate in "${app_candidates[@]}"; do
-            if [ -d "$candidate" ]; then
-              APP_PATH="$candidate"
-              break
-            fi
-          done
-
-          if [ -z "$APP_PATH" ]; then
-            echo "VibeShell.app not found. Checked:"
-            printf '  %s\n' "${app_candidates[@]}"
-            exit 1
-          fi
-
-          codesign --force --deep --sign - "$APP_PATH"
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-
-          bundle_root="$(dirname "$(dirname "$APP_PATH")")"
-          dmg_dir="${bundle_root}/dmg"
-          mkdir -p "$dmg_dir"
-          find "$dmg_dir" -maxdepth 1 -type f -name "*.dmg" -delete
-
-          arch="x64"
-          if [[ "$TARGET" == *"aarch64"* ]]; then
-            arch="aarch64"
-          fi
-
-          staging_dir="$(mktemp -d)"
-          ditto "$APP_PATH" "${staging_dir}/VibeShell.app"
-          ln -s /Applications "${staging_dir}/Applications"
-          hdiutil create \
-            -volname "VibeShell" \
-            -srcfolder "$staging_dir" \
-            -ov \
-            -format UDZO \
-            "${dmg_dir}/VibeShell_${VERSION}_${arch}.dmg"
-
-      - name: Collect and upload release assets
+          codesign --verify --deep --strict --verbose=2 "$app"
+          archive="$bundle/macos/VibeShell.app.tar.gz"
+          tar -czf "$archive" -C "$bundle/macos" VibeShell.app
+          npx --no-install tauri signer sign --private-key "$TAURI_SIGNING_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$archive"
+      - name: Collect artifacts and licensed CLI archive
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ needs.bump-and-release.outputs.version }}"
-          TAG_NAME="${{ needs.bump-and-release.outputs.tag_name }}"
-          TARGET="${{ matrix.target }}"
-          bundle_dirs=(
-            "target/${TARGET}/release/bundle"
-            "target/release/bundle"
-          )
-          uploads=()
-          for bundle_dir in "${bundle_dirs[@]}"; do
-            if [ ! -d "$bundle_dir" ]; then
-              continue
-            fi
+        run: python scripts/collect-release.py "$TARGET"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: target/release-assets/*
+          if-no-files-found: error
+          retention-days: 7
 
-            while IFS= read -r -d '' file; do
-              upload="$file"
-
-              if [[ "${{ matrix.platform }}" == "macos-latest" && "$file" == *.dmg ]]; then
-                if [[ "${{ matrix.args }}" == *"aarch64"* ]]; then
-                  upload="VibeShell-${VERSION}-macos-arm64.dmg"
-                else
-                  upload="VibeShell-${VERSION}-macos-x64.dmg"
-                fi
-                cp "$file" "$upload"
-              fi
-
-              if [[ "${{ matrix.platform }}" == "macos-latest" && "$file" == *.app.tar.gz ]]; then
-                if [[ "${{ matrix.args }}" == *"aarch64"* ]]; then
-                  upload="VibeShell-${VERSION}-macos-arm64.app.tar.gz"
-                else
-                  upload="VibeShell-${VERSION}-macos-x64.app.tar.gz"
-                fi
-                cp "$file" "$upload"
-              fi
-
-              if [[ "${{ matrix.platform }}" == "macos-latest" && "$file" == *.app.tar.gz.sig ]]; then
-                if [[ "${{ matrix.args }}" == *"aarch64"* ]]; then
-                  upload="VibeShell-${VERSION}-macos-arm64.app.tar.gz.sig"
-                else
-                  upload="VibeShell-${VERSION}-macos-x64.app.tar.gz.sig"
-                fi
-                cp "$file" "$upload"
-              fi
-
-              uploads+=("$upload")
-            done < <(find "$bundle_dir" -type f \( \
-              -name "*.AppImage" -o \
-              -name "*.deb" -o \
-              -name "*.dmg" -o \
-              -name "*.exe" -o \
-              -name "*.msi" -o \
-              -name "*.rpm" -o \
-              -name "*.tar.gz" -o \
-              -name "*.zip" -o \
-              -name "*.sig" \
-            \) -print0)
-          done
-
-          if [ "${#uploads[@]}" -lt 1 ]; then
-            echo "No desktop installer artifacts found. Checked bundle dirs:"
-            printf '  %s\n' "${bundle_dirs[@]}"
-            find target -maxdepth 5 -type f 2>/dev/null | sort || true
-            exit 1
-          fi
-
-          case "$TARGET" in
-            x86_64-pc-windows-msvc)
-              cli_slug="windows-x64"
-              cli_binary="target/${TARGET}/release/vibeshell.exe"
-              cli_archive="VibeShell-CLI-${VERSION}-${cli_slug}.zip"
-              ;;
-            aarch64-apple-darwin)
-              cli_slug="macos-arm64"
-              cli_binary="target/${TARGET}/release/vibeshell"
-              cli_archive="VibeShell-CLI-${VERSION}-${cli_slug}.tar.gz"
-              ;;
-            x86_64-apple-darwin)
-              cli_slug="macos-x64"
-              cli_binary="target/${TARGET}/release/vibeshell"
-              cli_archive="VibeShell-CLI-${VERSION}-${cli_slug}.tar.gz"
-              ;;
-            x86_64-unknown-linux-gnu)
-              cli_slug="linux-x64"
-              cli_binary="target/${TARGET}/release/vibeshell"
-              cli_archive="VibeShell-CLI-${VERSION}-${cli_slug}.tar.gz"
-              ;;
-            *)
-              echo "Unsupported CLI archive target: $TARGET"
-              exit 1
-              ;;
-          esac
-
-          if [ ! -f "$cli_binary" ]; then
-            echo "Native CLI binary not found: $cli_binary"
-            exit 1
-          fi
-
-          cli_dir="VibeShell-CLI-${VERSION}-${cli_slug}"
-          rm -rf "$cli_dir" "$cli_archive"
-          mkdir -p "$cli_dir/skills/vibeshell"
-          cp cli/README.md "$cli_dir/README.md"
-          cp skills/vibeshell/SKILL.md "$cli_dir/skills/vibeshell/SKILL.md"
-
-          if [[ "$TARGET" == *"windows"* ]]; then
-            cp "$cli_binary" "$cli_dir/vibeshell.exe"
-            cp scripts/install-cli.ps1 "$cli_dir/install.ps1"
-            7z a -tzip "$cli_archive" "$cli_dir" >/dev/null
-          else
-            cp "$cli_binary" "$cli_dir/vibeshell"
-            cp scripts/install-cli.sh "$cli_dir/install.sh"
-            chmod 755 "$cli_dir/vibeshell" "$cli_dir/install.sh"
-            tar -czf "$cli_archive" "$cli_dir"
-          fi
-          uploads+=("$cli_archive")
-
-          printf 'Uploading release assets:\n'
-          printf '  %s\n' "${uploads[@]}"
-          gh release upload "$TAG_NAME" "${uploads[@]}" --repo "${{ github.repository }}" --clobber
-
-  publish-updater-manifest:
-    name: Publish updater manifest
-    needs:
-      - bump-and-release
-      - build-tauri
-    if: needs.bump-and-release.outputs.should_build == 'true'
+  source:
+    name: Corresponding source materials
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.bump-and-release.outputs.tag_name }}
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: python scripts/package-source.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: target/release-assets/*
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Download release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ needs.bump-and-release.outputs.tag_name }}
+  publish:
+    name: Verify all assets and publish
+    needs: [prepare, build, source]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' || secrets.APPLE_SIGNING_IDENTITY != '' }}
+      HAS_APPLE_NOTARIZATION: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: assets
+          merge-multiple: true
+      - name: Verify and generate updater manifest
         run: |
-          mkdir -p release-assets
-          gh release download "$TAG_NAME" \
-            --repo "${{ github.repository }}" \
-            --dir release-assets \
-            --clobber
-
-      - name: Generate latest.json
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          python3 scripts/verify-updater.py assets
+          node scripts/generate-latest-json.js assets "$VERSION" "$TAG" "$GITHUB_REPOSITORY"
+          test -s "assets/VibeShell-Source-$VERSION.tar.gz"
+          cp LICENSE NOTICE assets/
+          cp licenses/legacy-MIT.txt assets/legacy-MIT.txt
+          (cd assets && sha256sum ./* > SHA256SUMS.txt)
+      - name: Publish only after all required jobs succeed
         run: |
-          node scripts/generate-latest-json.js \
-            release-assets \
-            "${{ needs.bump-and-release.outputs.version }}" \
-            "${{ needs.bump-and-release.outputs.tag_name }}" \
-            "${{ github.repository }}"
-
-      - name: Upload latest.json
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ needs.bump-and-release.outputs.tag_name }}
-        run: |
-          gh release upload "$TAG_NAME" release-assets/latest.json \
-            --repo "${{ github.repository }}" \
-            --clobber
+          set -euo pipefail
+          gh release view "$TAG" --json isDraft > "$RUNNER_TEMP/release.json"
+          node -e 'if (!JSON.parse(require("node:fs").readFileSync(process.argv[1])).isDraft) throw new Error("Release is no longer a draft")' "$RUNNER_TEMP/release.json"
+          cp CHANGELOG.md "$RUNNER_TEMP/notes.md"
+          printf '\n## Downloads and source\n\nDesktop and native CLI assets are accompanied by VibeShell-Source-%s.tar.gz and SHA256SUMS.txt. The source bundle contains the exact tagged tree, vendored Rust dependencies, locked npm archives, build scripts and license notices.\n' "$VERSION" >> "$RUNNER_TEMP/notes.md"
+          if [[ "$HAS_APPLE_SIGNING" != 'true' ]]; then
+            printf '\nmacOS builds use ad-hoc signatures, not Developer ID signatures or Apple notarization.\n' >> "$RUNNER_TEMP/notes.md"
+          elif [[ "$HAS_APPLE_NOTARIZATION" != 'true' ]]; then
+            printf '\nApple signing is configured; Apple notarization credentials were not configured for this build.\n' >> "$RUNNER_TEMP/notes.md"
+          else
+            printf '\nApple signing and notarization were configured; successful bundling completed before publication.\n' >> "$RUNNER_TEMP/notes.md"
+          fi
+          gh release upload "$TAG" assets/* --clobber
+          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --draft=false --latest

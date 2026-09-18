@@ -1,12 +1,13 @@
 use anyhow::{anyhow, Context, Result};
-use async_trait::async_trait;
 use log::{debug, error, info, warn};
+use russh::keys::{decode_secret_key, key::PrivateKeyWithHashAlg, HashAlg, PublicKeyOrCertificate};
 use russh::*;
-use russh_keys::*;
 use russh_sftp::client::SftpSession;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
+
+use super::fingerprint::{evaluate_host_key, HostKeyCheck, HostKeyRejection};
 
 /// Captured server key information from the SSH handshake
 #[derive(Debug, Clone)]
@@ -17,23 +18,64 @@ pub struct ServerKeyInfo {
     pub algorithm: String,
 }
 
+/// A missing exit status stays unknown instead of being reported as success.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandResult {
+    pub output: String,
+    pub exit_code: i32,
+}
+
+/// TCP connect timeout for regular (authenticated) connections.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(300);
+/// TCP connect timeout for the handshake-only host-key probe.
+const PROBE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Default)]
+struct ShellReader(StdMutex<Option<tokio::task::JoinHandle<()>>>);
+impl ShellReader {
+    fn abort(&self) {
+        if let Ok(mut task) = self.0.lock() {
+            if let Some(task) = task.take() {
+                task.abort();
+            }
+        }
+    }
+}
+impl Drop for ShellReader {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
 #[derive(Clone)]
 pub struct SshClient {
+    shell_reader: Arc<ShellReader>,
+    remote_forwards: crate::tunnel::remote_forward::RemoteForwardRegistry,
     session: Arc<Mutex<Option<client::Handle<ClientHandler>>>>,
-    channel: Arc<Mutex<Option<Channel<client::Msg>>>>,
+    channel: Arc<Mutex<Option<ChannelWriteHalf<client::Msg>>>>,
     output_tx: mpsc::Sender<Vec<u8>>,
     /// The channel ID of the shell channel - only data from this channel should go to the terminal
     shell_channel_id: Arc<Mutex<Option<ChannelId>>>,
     /// Captured server key from the most recent connection attempt
     server_key: Arc<Mutex<Option<ServerKeyInfo>>>,
+    /// Host-key verification policy (TOFU). None = fail closed.
+    host_key_check: Option<HostKeyCheck>,
+    /// Rejection recorded by `check_server_key` when the presented host key
+    /// was not trusted. Shared with the handler so the connect wrapper can
+    /// convert the handshake abort into a typed, machine-parseable error.
+    /// Reset at the start of every connect attempt.
+    host_key_rejection: Arc<StdMutex<Option<HostKeyRejection>>>,
 }
 
 pub struct ClientHandler {
-    output_tx: mpsc::Sender<Vec<u8>>,
-    /// Reference to the shell channel ID - only forward data from this channel
-    shell_channel_id: Arc<Mutex<Option<ChannelId>>>,
+    remote_forwards: crate::tunnel::remote_forward::RemoteForwardRegistry,
     /// Storage for the captured server key
     server_key: Arc<Mutex<Option<ServerKeyInfo>>>,
+    /// Host-key verification policy; when absent the handshake fails closed.
+    host_key_check: Option<HostKeyCheck>,
+    /// Shared slot where host-key rejections are recorded before aborting.
+    host_key_rejection: Arc<StdMutex<Option<HostKeyRejection>>>,
 }
 
 /// PTY configuration for terminal sessions
@@ -46,13 +88,38 @@ pub struct PtyConfig {
     pub pix_height: u32,
 }
 
-#[async_trait]
 impl client::Handler for ClientHandler {
     type Error = anyhow::Error;
 
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let sender = self.remote_forwards.lock().ok().and_then(|routes| {
+            routes
+                .get(&(connected_address.to_string(), connected_port))
+                .cloned()
+        });
+        if let Some(permit) = sender.and_then(|sender| sender.try_reserve_owned().ok()) {
+            reply.accept().await;
+            permit.send(channel);
+        } else {
+            reply
+                .reject(ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+        }
+        Ok(())
+    }
+
     async fn check_server_key(
         &mut self,
-        server_public_key: &key::PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         // Extract and store the server's fingerprint for later verification
         let (fingerprint, algorithm) = crate::ssh::extract_fingerprint_from_key(server_public_key);
@@ -62,48 +129,54 @@ impl client::Handler for ClientHandler {
             algorithm, fingerprint
         );
 
-        // Store the captured key info
+        // Store the captured key info (also used by the handshake-only probe).
         let key_info = ServerKeyInfo {
-            fingerprint,
-            algorithm,
+            fingerprint: fingerprint.clone(),
+            algorithm: algorithm.clone(),
         };
 
         let mut server_key_guard = self.server_key.lock().await;
         *server_key_guard = Some(key_info);
+        drop(server_key_guard);
 
-        // Always accept the key during handshake - verification happens after
-        // The caller is responsible for checking the fingerprint before proceeding
-        Ok(true)
-    }
+        // TOFU enforcement. This runs during the SSH handshake, BEFORE any
+        // credentials are transmitted, so a rejection can never leak the
+        // password/key to a machine-in-the-middle. Returning `false` aborts
+        // the handshake; the structured reason is recorded in the shared
+        // rejection slot and surfaced by the connect wrapper.
+        let Some(check) = &self.host_key_check else {
+            warn!("[SSH] No host-key verifier configured; refusing host key (fail closed)");
+            record_host_key_rejection(&self.host_key_rejection, HostKeyRejection::Unconfigured);
+            return Ok(false);
+        };
 
-    async fn data(
-        &mut self,
-        channel: ChannelId,
-        data: &[u8],
-        _session: &mut client::Session,
-    ) -> Result<(), Self::Error> {
-        // Only forward data from the shell channel to the terminal
-        // Data from exec channels (used for SFTP) should NOT go to the terminal
-        let shell_id = self.shell_channel_id.lock().await;
-        if let Some(shell_channel_id) = *shell_id {
-            if channel == shell_channel_id {
-                let _ = self.output_tx.send(data.to_vec()).await;
-            } else {
+        // The GUI and daemon may be separate processes. Re-read persisted
+        // approvals/revocations and fail closed if the trust store is damaged.
+        check.refresh()?;
+        let verdict = evaluate_host_key(&check.verify(&fingerprint, &algorithm));
+        match verdict {
+            Ok(()) => {
                 debug!(
-                    "[SSH] Ignoring data from non-shell channel {:?} ({} bytes)",
-                    channel,
-                    data.len()
+                    "[SSH] Host key trusted for {}:{}",
+                    check.host(),
+                    check.port()
                 );
+                Ok(true)
             }
-        } else {
-            // Shell not opened yet - this shouldn't happen but log it
-            debug!(
-                "[SSH] Received data before shell opened, channel {:?}",
-                channel
-            );
+            Err(rejection) => {
+                warn!(
+                    "[SSH] Host key REJECTED for {}:{} - aborting handshake before authentication",
+                    check.host(),
+                    check.port()
+                );
+                record_host_key_rejection(&self.host_key_rejection, rejection);
+                Ok(false)
+            }
         }
-        Ok(())
     }
+
+    // PTY output is consumed by its channel reader rather than this global
+    // callback, so terminal backpressure cannot block exec/SFTP callbacks.
 }
 
 impl Default for PtyConfig {
@@ -118,6 +191,18 @@ impl Default for PtyConfig {
     }
 }
 
+/// Record a host-key rejection in the shared slot so the connect wrapper can
+/// surface the typed reason after the handshake aborts. Best-effort: a
+/// poisoned lock must not panic inside the russh handler.
+fn record_host_key_rejection(
+    slot: &StdMutex<Option<HostKeyRejection>>,
+    rejection: HostKeyRejection,
+) {
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(rejection);
+    }
+}
+
 impl SshClient {
     const EXEC_COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
     const EXEC_CLOSE_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -125,12 +210,38 @@ impl SshClient {
 
     pub fn new(output_tx: mpsc::Sender<Vec<u8>>) -> Self {
         Self {
+            shell_reader: Arc::new(ShellReader::default()),
+            remote_forwards: Default::default(),
             session: Arc::new(Mutex::new(None)),
             channel: Arc::new(Mutex::new(None)),
             output_tx,
             shell_channel_id: Arc::new(Mutex::new(None)),
             server_key: Arc::new(Mutex::new(None)),
+            host_key_check: None,
+            host_key_rejection: Arc::new(StdMutex::new(None)),
         }
+    }
+
+    pub(crate) fn remote_forward_registry(
+        &self,
+    ) -> crate::tunnel::remote_forward::RemoteForwardRegistry {
+        self.remote_forwards.clone()
+    }
+
+    /// Attach the host-key verification policy (which store to consult and
+    /// under which host:port identity). Must be called before connecting;
+    /// without it the handshake fails closed.
+    pub fn set_host_key_check(&mut self, check: HostKeyCheck) {
+        self.host_key_check = Some(check);
+    }
+
+    /// Take the host-key rejection recorded by the most recent connect
+    /// attempt, if the handshake was aborted by the verification policy.
+    pub async fn take_host_key_rejection(&self) -> Option<HostKeyRejection> {
+        self.host_key_rejection
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
     }
 
     /// Get the server key info captured during the last connection attempt
@@ -146,8 +257,122 @@ impl SshClient {
         *guard = None;
     }
 
+    /// Perform the SSH transport handshake (key exchange + host-key
+    /// verification) without authenticating. Returns the established session
+    /// handle, or a typed host-key error when the verification policy refused
+    /// the server's key.
+    ///
+    /// Shared by `connect_password`, `connect_key` and `connect_handshake` so
+    /// every connection path enforces the exact same TOFU policy.
+    async fn establish_connection(
+        &self,
+        host: &str,
+        port: u16,
+        tcp_timeout: Duration,
+    ) -> Result<client::Handle<ClientHandler>> {
+        // Reset per-attempt host-key state so retries start clean.
+        if let Ok(mut slot) = self.host_key_rejection.lock() {
+            *slot = None;
+        }
+        self.clear_server_key().await;
+
+        // Configure SSH client with proper timeout and keepalive settings
+        // Without these, connections may be dropped during the handshake phase
+        let config = Arc::new(client::Config {
+            inactivity_timeout: Some(Duration::from_secs(60)),
+            keepalive_interval: Some(Duration::from_secs(10)),
+            keepalive_max: 5,
+            ..Default::default()
+        });
+        debug!("[SSH] Config: inactivity_timeout=60s, keepalive_interval=10s, keepalive_max=5");
+
+        let handler = ClientHandler {
+            remote_forwards: self.remote_forwards.clone(),
+            server_key: self.server_key.clone(),
+            host_key_check: self.host_key_check.clone(),
+            host_key_rejection: self.host_key_rejection.clone(),
+        };
+
+        info!(
+            "[SSH] Attempting TCP connection to {}:{} (timeout: {}s)...",
+            host,
+            port,
+            tcp_timeout.as_secs()
+        );
+        match tokio::time::timeout(tcp_timeout, client::connect(config, (host, port), handler))
+            .await
+        {
+            Err(_) => Err(anyhow!(
+                "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
+                host,
+                port,
+                tcp_timeout.as_secs()
+            )),
+            Ok(Err(err)) => {
+                // The handshake failed: if the host-key policy aborted it,
+                // surface the structured HOST_KEY_* error instead of the
+                // generic russh failure. A jump bridge's TCP endpoint is not
+                // the identity whose host key the user needs to approve.
+                if let Some(rejection) = self.host_key_rejection() {
+                    return Err(self.host_key_error(&rejection, host, port));
+                }
+                Err(err).with_context(|| format!("Failed to connect to {}:{}", host, port))
+            }
+            Ok(Ok(session)) => {
+                // Belt and braces: never hand out a session whose key was
+                // rejected (or unverified), even if russh returned Ok.
+                if let Some(rejection) = self.host_key_rejection() {
+                    return Err(self.host_key_error(&rejection, host, port));
+                }
+                Ok(session)
+            }
+        }
+    }
+
+    fn host_key_error(&self, rejection: &HostKeyRejection, host: &str, port: u16) -> anyhow::Error {
+        let (host, port) = self
+            .host_key_check
+            .as_ref()
+            .map(|check| (check.host(), check.port()))
+            .unwrap_or((host, port));
+        anyhow!(rejection.error_message(host, port))
+    }
+
+    /// Peek (without consuming) the recorded host-key rejection.
+    fn host_key_rejection(&self) -> Option<HostKeyRejection> {
+        self.host_key_rejection
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
+    }
+
+    /// Perform a handshake-only connection (key exchange + host-key check,
+    /// NO authentication) to learn whether the server's host key is trusted.
+    /// Used by the TOFU probe before any credentials are sent. The connection
+    /// is closed immediately afterwards.
+    pub async fn connect_handshake(&mut self, host: &str, port: u16) -> Result<ServerKeyInfo> {
+        let session = self
+            .establish_connection(host, port, PROBE_CONNECT_TIMEOUT)
+            .await?;
+
+        let key_info = self.get_server_key().await.ok_or_else(|| {
+            anyhow!(
+                "Host key was not captured during the handshake with {}:{}",
+                host,
+                port
+            )
+        })?;
+
+        // Probe complete: close the connection without authenticating.
+        let _ = session
+            .disconnect(Disconnect::ByApplication, "", "en")
+            .await;
+
+        Ok(key_info)
+    }
+
     /// Get a clone of the channel Arc for sharing with other tasks
-    pub fn channel_handle(&self) -> Arc<Mutex<Option<Channel<client::Msg>>>> {
+    pub fn channel_handle(&self) -> Arc<Mutex<Option<ChannelWriteHalf<client::Msg>>>> {
         self.channel.clone()
     }
 
@@ -176,49 +401,45 @@ impl SshClient {
         // Clear any previously captured server key
         self.clear_server_key().await;
 
-        // Configure SSH client with proper timeout and keepalive settings
-        // Without these, connections may be dropped during the handshake phase
-        let config = Arc::new(client::Config {
-            inactivity_timeout: Some(std::time::Duration::from_secs(60)),
-            keepalive_interval: Some(std::time::Duration::from_secs(10)),
-            keepalive_max: 5,
-            ..Default::default()
-        });
-        debug!("[SSH] Config: inactivity_timeout=60s, keepalive_interval=10s, keepalive_max=5");
-
-        let handler = ClientHandler {
-            output_tx: self.output_tx.clone(),
-            shell_channel_id: self.shell_channel_id.clone(),
-            server_key: self.server_key.clone(),
-        };
-
-        let tcp_timeout = tokio::time::Duration::from_secs(300);
-        info!(
-            "[SSH] Attempting TCP connection to {}:{} (timeout: {}s)...",
-            host,
-            port,
-            tcp_timeout.as_secs()
-        );
-        let mut session =
-            tokio::time::timeout(tcp_timeout, client::connect(config, (host, port), handler))
-                .await
-                .map_err(|_| {
-                    anyhow!(
-                "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
-                host,
-                port,
-                tcp_timeout.as_secs()
-            )
-                })?
-                .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
+        // Perform the SSH transport handshake (host-key verification happens
+        // here, before any authentication material is sent).
+        let mut session = self
+            .establish_connection(host, port, CONNECT_TIMEOUT)
+            .await?;
 
         info!("[SSH] TCP connection established, starting password authentication...");
-        let auth_result = session
-            .authenticate_password(username, password)
-            .await
-            .with_context(|| format!("Password authentication failed for user '{}'", username))?;
+        let authenticated = tokio::time::timeout(Duration::from_secs(60), async {
+            if session.authenticate_password(username, password).await?.success() {
+                return Ok::<bool, anyhow::Error>(true);
+            }
+            // PAM servers commonly expose a password via keyboard-interactive.
+            // Only answer a single hidden password prompt; never submit a saved
+            // password as an OTP, an echoed response, or a password-change answer.
+            use client::KeyboardInteractiveAuthResponse as Response;
+            let mut response = session.authenticate_keyboard_interactive_start(username, None).await?;
+            let mut sent_password = false;
+            for _ in 0..4 {
+                response = match response {
+                    Response::Success => return Ok(true),
+                    Response::Failure { .. } => return Ok(false),
+                    Response::InfoRequest { prompts, .. } if prompts.is_empty() => {
+                        session.authenticate_keyboard_interactive_respond(Vec::new()).await?
+                    }
+                    Response::InfoRequest { prompts, .. } if !sent_password
+                        && prompts.len() == 1 && !prompts[0].echo
+                        && prompts[0].prompt.to_ascii_lowercase().contains("password") => {
+                        sent_password = true;
+                        session.authenticate_keyboard_interactive_respond(vec![password.to_string()]).await?
+                    }
+                    Response::InfoRequest { .. } => {
+                        return Err(anyhow!("Server requires interactive authentication not supported by saved-password login"));
+                    }
+                };
+            }
+            Err(anyhow!("Too many keyboard-interactive authentication rounds"))
+        }).await.context("SSH authentication timed out after 60s")??;
 
-        if !auth_result {
+        if !authenticated {
             error!(
                 "[SSH] Authentication rejected by server for user '{}'",
                 username
@@ -259,41 +480,11 @@ impl SshClient {
         // Clear any previously captured server key
         self.clear_server_key().await;
 
-        // Configure SSH client with proper timeout and keepalive settings
-        // Without these, connections may be dropped during the handshake phase
-        let config = Arc::new(client::Config {
-            inactivity_timeout: Some(std::time::Duration::from_secs(60)),
-            keepalive_interval: Some(std::time::Duration::from_secs(10)),
-            keepalive_max: 5,
-            ..Default::default()
-        });
-        debug!("[SSH] Config: inactivity_timeout=60s, keepalive_interval=10s, keepalive_max=5");
-
-        let handler = ClientHandler {
-            output_tx: self.output_tx.clone(),
-            shell_channel_id: self.shell_channel_id.clone(),
-            server_key: self.server_key.clone(),
-        };
-
-        let tcp_timeout = tokio::time::Duration::from_secs(300);
-        info!(
-            "[SSH] Attempting TCP connection to {}:{} (timeout: {}s)...",
-            host,
-            port,
-            tcp_timeout.as_secs()
-        );
-        let mut session =
-            tokio::time::timeout(tcp_timeout, client::connect(config, (host, port), handler))
-                .await
-                .map_err(|_| {
-                    anyhow!(
-                "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
-                host,
-                port,
-                tcp_timeout.as_secs()
-            )
-                })?
-                .with_context(|| format!("Failed to connect to {}:{}", host, port))?;
+        // Perform the SSH transport handshake (host-key verification happens
+        // here, before any authentication material is sent).
+        let mut session = self
+            .establish_connection(host, port, CONNECT_TIMEOUT)
+            .await?;
 
         info!("[SSH] TCP connection established, parsing private key...");
         // Normalize empty passphrases from any caller (saved credentials, IPC,
@@ -312,12 +503,23 @@ impl SshClient {
             "[SSH] Starting public key authentication for user '{}'...",
             username
         );
-        let auth_result = session
-            .authenticate_publickey(username, Arc::new(key_pair))
-            .await
-            .with_context(|| format!("Public key authentication failed for user '{}'", username))?;
+        let hash = session
+            .best_supported_rsa_hash()
+            .await?
+            .flatten()
+            .or(Some(HashAlg::Sha512));
+        let auth_result = tokio::time::timeout(
+            Duration::from_secs(60),
+            session.authenticate_publickey(
+                username,
+                PrivateKeyWithHashAlg::new(Arc::new(key_pair), hash),
+            ),
+        )
+        .await
+        .context("SSH key authentication timed out after 60s")?
+        .with_context(|| format!("Public key authentication failed for user '{}'", username))?;
 
-        if !auth_result {
+        if !auth_result.success() {
             error!(
                 "[SSH] Authentication rejected by server for user '{}'",
                 username
@@ -341,6 +543,7 @@ impl SshClient {
 
     pub async fn disconnect(&mut self) -> Result<()> {
         info!("[SSH] Disconnecting...");
+        self.shell_reader.abort();
         // Clear the shell channel ID first
         {
             let mut shell_id_guard = self.shell_channel_id.lock().await;
@@ -353,6 +556,7 @@ impl SshClient {
             if let Some(channel) = channel_guard.take() {
                 debug!("[SSH] Closing channel with EOF");
                 let _ = channel.eof().await;
+                let _ = channel.close().await;
             }
         }
 
@@ -371,65 +575,105 @@ impl SshClient {
 
     pub async fn is_connected(&self) -> bool {
         let session_guard = self.session.lock().await;
-        session_guard.is_some()
+        session_guard
+            .as_ref()
+            .is_some_and(|session| !session.is_closed())
     }
 
-    /// Open a shell channel with PTY
+    pub async fn is_shell_open(&self) -> bool {
+        self.shell_channel_id.lock().await.is_some() && self.is_connected().await
+    }
+
+    async fn session_channel(&self) -> Result<Channel<client::Msg>> {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let guard = self.session.lock().await;
+            guard
+                .as_ref()
+                .ok_or_else(|| anyhow!("SSH client not connected"))?
+                .channel_open_session()
+                .await
+                .map_err(anyhow::Error::from)
+        })
+        .await
+        .context("SSH channel open timed out")?
+    }
+
+    async fn channel_accepted(channel: &mut Channel<client::Msg>, operation: &str) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                match channel.wait().await {
+                    Some(ChannelMsg::Success) => return Ok(()),
+                    Some(ChannelMsg::Failure | ChannelMsg::Close) | None => {
+                        return Err(anyhow!("Server rejected {operation}"))
+                    }
+                    // Window adjustments may arrive before the request reply.
+                    Some(_) => (),
+                }
+            }
+        })
+        .await
+        .with_context(|| format!("Server did not acknowledge {operation}"))?
+    }
+
+    /// Split the PTY into a writer and a continuously consumed message stream.
     pub async fn open_shell(&mut self, pty_config: Option<PtyConfig>) -> Result<()> {
-        info!("[SSH] Opening shell channel...");
-        let session_guard = self.session.lock().await;
-        let session = session_guard.as_ref().ok_or_else(|| {
-            error!("[SSH] Cannot open shell: not connected");
-            anyhow!("Not connected")
-        })?;
-
-        info!("[SSH] Opening session channel...");
-        let channel = session
-            .channel_open_session()
+        anyhow::ensure!(self.channel.lock().await.is_none(), "Shell already opened");
+        let mut channel = self
+            .session_channel()
             .await
-            .with_context(|| "Failed to open session channel")?;
-
-        // Store the shell channel ID BEFORE any data might come in
-        // This ensures the handler knows which channel is the shell
-        let channel_id = channel.id();
-        {
-            let mut shell_id_guard = self.shell_channel_id.lock().await;
-            *shell_id_guard = Some(channel_id);
-            info!("[SSH] Shell channel ID set to {:?}", channel_id);
-        }
-
+            .context("Failed to open shell channel")?;
         let pty = pty_config.unwrap_or_default();
-        info!(
-            "[SSH] Requesting PTY (term={}, cols={}, rows={})",
-            pty.term, pty.cols, pty.rows
-        );
-
-        // Request a pseudo-terminal
-        channel
-            .request_pty(
-                false, // want_reply
-                &pty.term,
-                pty.cols,
-                pty.rows,
-                pty.pix_width,
-                pty.pix_height,
-                &[], // No special terminal modes
-            )
-            .await
-            .with_context(|| "Failed to request PTY")?;
-
-        info!("[SSH] Requesting shell...");
-        // Request a shell
-        channel
-            .request_shell(false)
-            .await
-            .with_context(|| "Failed to request shell")?;
-
-        // Store the channel
-        let mut channel_guard = self.channel.lock().await;
-        *channel_guard = Some(channel);
-
-        info!("[SSH] Shell opened successfully");
+        let setup = async {
+            channel
+                .request_pty(
+                    true,
+                    &pty.term,
+                    pty.cols,
+                    pty.rows,
+                    pty.pix_width,
+                    pty.pix_height,
+                    &[],
+                )
+                .await?;
+            Self::channel_accepted(&mut channel, "PTY request").await?;
+            channel.request_shell(true).await?;
+            Self::channel_accepted(&mut channel, "shell request").await
+        }
+        .await;
+        if let Err(error) = setup {
+            let _ = channel.close().await;
+            return Err(error);
+        }
+        let channel_id = channel.id();
+        *self.shell_channel_id.lock().await = Some(channel_id);
+        let (mut reader, writer) = channel.split();
+        *self.channel.lock().await = Some(writer);
+        let output = self.output_tx.clone();
+        let identity = self.shell_channel_id.clone();
+        let channel_state = self.channel.clone();
+        let task = tokio::spawn(async move {
+            while let Some(message) = reader.wait().await {
+                match message {
+                    ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                        if output.send(data.to_vec()).await.is_err() {
+                            break;
+                        }
+                    }
+                    ChannelMsg::Close => break,
+                    _ => (),
+                }
+            }
+            let mut current = identity.lock().await;
+            if *current == Some(channel_id) {
+                *channel_state.lock().await = None;
+                *current = None;
+            }
+        });
+        *self
+            .shell_reader
+            .0
+            .lock()
+            .map_err(|_| anyhow!("Shell reader state unavailable"))? = Some(task);
         Ok(())
     }
 
@@ -470,18 +714,10 @@ impl SshClient {
     pub async fn open_sftp_session(&self) -> Result<SftpSession> {
         info!("[SSH] Opening SFTP subsystem channel...");
 
-        let channel = {
-            let session_guard = self.session.lock().await;
-            let session = session_guard.as_ref().ok_or_else(|| {
-                error!("[SSH] Cannot open SFTP: not connected");
-                anyhow!("Not connected")
-            })?;
-
-            session
-                .channel_open_session()
-                .await
-                .with_context(|| "Failed to open SFTP channel")?
-        };
+        let mut channel = self
+            .session_channel()
+            .await
+            .context("Failed to open SFTP channel")?;
 
         channel
             .request_subsystem(true, "sftp")
@@ -490,9 +726,14 @@ impl SshClient {
 
         info!("[SSH] SFTP subsystem requested, initializing session...");
 
-        let sftp = SftpSession::new(channel.into_stream())
-            .await
-            .map_err(|e| anyhow!("Failed to initialize SFTP session: {}", e))?;
+        Self::channel_accepted(&mut channel, "SFTP subsystem").await?;
+        let sftp = tokio::time::timeout(
+            Duration::from_secs(15),
+            SftpSession::new(channel.into_stream()),
+        )
+        .await
+        .context("SFTP initialization timed out")?
+        .map_err(|e| anyhow!("Failed to initialize SFTP session: {}", e))?;
 
         info!("[SSH] SFTP session initialized successfully");
         Ok(sftp)
@@ -512,44 +753,74 @@ impl SshClient {
         command: &str,
         stdin_data: Option<&str>,
     ) -> Result<String> {
-        debug!("[SSH] Executing command via exec channel: {}", command);
+        let result = self.exec_command_result(command, stdin_data).await?;
+        // Some appliances omit exit-status entirely. Preserve their output,
+        // but never hide an explicitly reported failure from legacy callers.
+        if result.exit_code > 0 {
+            let detail: String = result.output.chars().take(4096).collect();
+            return Err(anyhow!(
+                "Remote command exited with status {}: {}",
+                result.exit_code,
+                detail
+            ));
+        }
+        Ok(result.output)
+    }
+
+    pub async fn exec_command_result(
+        &self,
+        command: &str,
+        stdin_data: Option<&str>,
+    ) -> Result<CommandResult> {
+        self.exec_command_result_with_limits(
+            command,
+            stdin_data,
+            Self::EXEC_COMMAND_TIMEOUT,
+            8 * 1024 * 1024,
+        )
+        .await
+    }
+
+    pub(crate) async fn exec_command_result_with_limits(
+        &self,
+        command: &str,
+        stdin_data: Option<&str>,
+        timeout: Duration,
+        max_output: usize,
+    ) -> Result<CommandResult> {
+        // Commands and their output can contain credentials; only log sizes.
+        debug!(
+            "[SSH] Executing command via exec channel ({} bytes)",
+            command.len()
+        );
 
         // Open the channel while holding the russh handle lock, then release it.
         // The returned Channel owns its own sender/receiver, so command execution
         // must not block unrelated SFTP/tunnel/session operations from opening
         // their own channels.
-        let mut channel = {
-            let session_guard = self.session.lock().await;
-            let session = session_guard.as_ref().ok_or_else(|| {
-                error!("[SSH] Cannot exec: not connected");
-                anyhow!("Not connected")
-            })?;
-
-            session
-                .channel_open_session()
-                .await
-                .with_context(|| "Failed to open exec channel")?
-        };
+        let mut channel = self
+            .session_channel()
+            .await
+            .context("Failed to open exec channel")?;
 
         // Execute the command (not a shell, just exec)
         if let Err(error) = channel.exec(true, command).await {
             let _ = channel.close().await;
-            return Err(error).with_context(|| format!("Failed to exec command: {}", command));
+            return Err(error).context("Failed to send exec request");
         }
 
-        // Feed stdin (e.g. a sudo password) and close our side so the remote
-        // process can proceed. Failures here are non-fatal: the command still
-        // runs, it just won't receive the password.
-        if let Some(data) = stdin_data {
-            if !data.is_empty() {
-                let payload = format!("{data}\n");
-                if let Err(error) = channel.data(payload.as_bytes()).await {
-                    debug!("[SSH] Failed to write plugin stdin: {}", error);
-                }
+        // This is a non-interactive exec channel. Even without supplied input,
+        // signal EOF so commands reading stdin do not wait until the timeout.
+        if let Some(data) = stdin_data.filter(|data| !data.is_empty()) {
+            let payload = format!("{data}\n");
+            if let Err(error) = channel.data(payload.as_bytes()).await {
+                let _ = channel.close().await;
+                return Err(error).context("Failed to write command stdin");
             }
-            if let Err(error) = channel.eof().await {
-                debug!("[SSH] Failed to signal EOF after stdin: {}", error);
-            }
+        }
+        if let Err(error) = channel.eof().await {
+            let _ = channel.close().await;
+            return Err(error).context("Failed to finish command stdin");
         }
 
         // Collect output
@@ -559,37 +830,41 @@ impl SshClient {
         let mut remote_closed = false;
         let mut timed_out = false;
         let mut last_message_at = start;
-        let mut received_eof = false;
 
         loop {
             let elapsed = start.elapsed();
-            if elapsed >= Self::EXEC_COMMAND_TIMEOUT {
+            if elapsed >= timeout {
                 timed_out = true;
-                warn!(
-                    "[SSH] Command execution timed out after {:?}",
-                    Self::EXEC_COMMAND_TIMEOUT
-                );
+                warn!("[SSH] Command execution timed out after {:?}", timeout);
                 break;
             }
 
-            let remaining = Self::EXEC_COMMAND_TIMEOUT.saturating_sub(elapsed);
+            let remaining = timeout.saturating_sub(elapsed);
             let wait_for = remaining.min(Self::EXEC_WAIT_TICK);
 
             match tokio::time::timeout(wait_for, channel.wait()).await {
                 Ok(Some(msg)) => {
                     last_message_at = tokio::time::Instant::now();
                     match msg {
-                        ChannelMsg::Data { data } => {
+                        ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. } => {
+                            // Protect the app and IPC peers from unbounded output.
+                            if output.len().saturating_add(data.len()) > max_output {
+                                let _ = channel.close().await;
+                                return Err(anyhow!(
+                                    "Command output exceeded the {} MiB limit",
+                                    max_output / (1024 * 1024)
+                                ));
+                            }
                             output.extend_from_slice(&data);
                         }
-                        ChannelMsg::ExtendedData { data, .. } => {
-                            // stderr - also capture it
-                            output.extend_from_slice(&data);
+                        ChannelMsg::Failure => {
+                            let _ = channel.close().await;
+                            return Err(anyhow!("Server rejected the exec request"));
                         }
                         ChannelMsg::Eof => {
                             debug!("[SSH] Received EOF from exec channel");
-                            received_eof = true;
-                            // Keep draining until Close/None so russh can retire the channel.
+                            // EOF only closes stdout/stderr, not the process.
+                            // Await its exit status or close, bounded by timeout.
                         }
                         ChannelMsg::ExitStatus {
                             exit_status: status,
@@ -597,6 +872,9 @@ impl SshClient {
                             debug!("[SSH] Command exit status: {}", status);
                             // Continue to collect any remaining output and wait for Close.
                             exit_status = Some(status);
+                        }
+                        ChannelMsg::ExitSignal { .. } => {
+                            exit_status = Some(255);
                         }
                         ChannelMsg::Close => {
                             debug!("[SSH] Exec channel closed");
@@ -612,7 +890,7 @@ impl SshClient {
                     break;
                 }
                 Err(_) => {
-                    if (exit_status.is_some() || received_eof)
+                    if exit_status.is_some()
                         && last_message_at.elapsed() >= Self::EXEC_CLOSE_DRAIN_TIMEOUT
                     {
                         debug!(
@@ -633,23 +911,17 @@ impl SshClient {
         }
 
         if timed_out {
-            return Err(anyhow!(
-                "Command timed out after {}s",
-                Self::EXEC_COMMAND_TIMEOUT.as_secs()
-            ));
+            return Err(anyhow!("Command timed out after {}s", timeout.as_secs()));
         }
 
         let output_str = String::from_utf8_lossy(&output).to_string();
-        debug!(
-            "[SSH] Command output ({} bytes): {:?}",
-            output_str.len(),
-            if output_str.len() > 100 {
-                &output_str[..100]
-            } else {
-                &output_str
-            }
-        );
+        debug!("[SSH] Command output received ({} bytes)", output_str.len());
 
-        Ok(output_str)
+        Ok(CommandResult {
+            output: output_str,
+            exit_code: exit_status
+                .and_then(|code| i32::try_from(code).ok())
+                .unwrap_or(-1),
+        })
     }
 }

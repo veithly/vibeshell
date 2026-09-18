@@ -1,1 +1,1 @@
-export { AgentActivityPanel } from './AgentActivityPanel';
+export { AgentActivityPanel, AgentActivityNotice } from './AgentActivityPanel';
