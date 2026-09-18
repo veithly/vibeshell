@@ -34,6 +34,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Preserve annotated tag objects instead of an event-synthesized tag.
+          ref: main
           fetch-depth: 0
       - name: Validate immutable tag on main
         id: metadata
