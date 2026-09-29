@@ -2,31 +2,56 @@
 
 ## Branch contract
 
-`dev` is the default branch for all normal PRs. `main` receives only release promotions from this repository's `dev`. `master` is historical. Branch protection requires the PR-target check and CI; force pushes and branch deletion are disallowed on active branches.
+`dev` is the default branch for all normal PRs. `main` receives only release promotions from this repository's `dev`. `master` is historical. Branch protection still requires PR Target, Frontend Check, Clippy Lint and all three Rust Check jobs; force pushes and branch deletion are disallowed on active branches.
 
-A release is an explicit maintainer action, not an automatic side effect of a documentation or source push. There is no auto-increment bot commit.
+**Both CI compilation and release packaging/publication are manual-only.** A push, PR or version tag starts neither workflow. The metadata-only PR Target workflow remains automatic. There is no auto-increment bot commit, and no workflow automatically dispatches another workflow.
+
+Manual CI uses two small reporting jobs to bridge GitHub's PR-check event restriction: initialize the existing required commit statuses as pending, then publish results from actual jobs on the same SHA and run attempt. Builds have no status-write permission. Missing/skipped/failed evidence cannot become green, and superseded runs stop reporting. Branch protection still requires all five CI contexts from GitHub Actions plus PR Target; there is no administrator bypass. See [GitHub's required-check documentation](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated).
 
 ## Prepare and promote
 
 Update the workspace version, npm manifest and lockfile, the three local Cargo.lock packages, Tauri version, Codex plugin version and Claude marketplace versions in one PR to `dev`. Independent built-in plugin versions are not the application version and should change only when that plugin changes.
 
-Run `node scripts/check-release.mjs`, regenerate/check plugin references, run frontend build/tests, strict Clippy and all workspace tests. Use the loopback SSH fixture for transport changes. Review dependency advisories, licensing and compatibility; do not hide failed scans in release notes.
+Run `node scripts/check-release.mjs`, `node --test scripts/tests/*.test.mjs`, regenerate/check plugin references, run frontend build/tests, strict Clippy and all workspace tests. Use the loopback SSH fixture for transport changes. Review dependency advisories, licensing and compatibility; do not hide failed scans in release notes.
 
-Open the promotion PR with `gh pr create --base main --head dev`. Wait for required checks. Merge using a merge commit so the tested integration ancestry is preserved. No feature PR goes directly to `main`.
+After reviewing a normal PR, run **Actions → CI → Run workflow**, selecting its head branch, or `gh workflow run ci.yml --ref <head-branch>`. New commits require a fresh manual run. Required checks are not waived just because there is no automatic trigger. See [CONTRIBUTING](../CONTRIBUTING.md#manual-github-checks) for fork PRs.
 
-## Tag and publish
+Open the promotion PR with `gh pr create --base main --head dev`, then explicitly run `gh workflow run ci.yml --ref dev`. Wait for all required checks and merge using a merge commit so integration ancestry is preserved. No feature PR goes directly to `main`. Because that merge creates a new commit, its release validation must run on the resulting `main` commit, not merely on the earlier PR head.
+
+## Tag, verify and build a draft
 
 ```bash
 git fetch origin
 git switch main
 git merge --ff-only origin/main
-git tag -a v1.1.0 -m 'VibeShell 1.1.0'
-git push origin v1.1.0
+# The version must already have been prepared and promoted above.
+TAG="v$(node -p 'require("./package.json").version')"
+git tag -a "$TAG" -m "VibeShell ${TAG#v}"
+git push origin "$TAG"
+
+# Pushing the tag does nothing else. Explicitly test that exact commit:
+gh workflow run ci.yml --ref "$TAG"
 ```
 
-Use the actual prepared version instead of copying this example for a different release. Tags are immutable: never move a published tag to a different commit. A failed workflow can be rerun for the same tag through **Release → Run workflow**, specifying that existing tag and running the workflow from `main`.
+Never move or recreate an existing tag. After the tag's manual CI run has succeeded, run **Actions → Release → Run workflow**, select branch **main**, enter the existing tag and leave **publish** unchecked. The CLI equivalent is:
 
-The release workflow validates that the tag resolves to a commit on `main` and its version matches every application manifest. It validates updater signing, creates/retains a draft, builds desktop and native CLI packages for Windows x64, macOS arm64/x64 and Linux x64, and assembles matching source materials. Only after all platforms and source packaging succeed does it publish `latest.json`, checksums and the release.
+```bash
+gh workflow run release.yml --ref main -f tag="$TAG" -f publish=false
+```
+
+The workflow only accepts dispatches from `main`. It validates that the tag resolves to a commit on `main` and that its version matches every application manifest. The latest manual CI run for that exact commit must have succeeded in this repository's CI workflow, including frontend, Clippy and Linux/Windows/macOS Rust jobs. An old successful check, an automatic run, a skipped platform or a newer failed attempt is insufficient. CI run/job validation uses the current gate from `main`, even when a selected tag predates that helper.
+
+Release validates updater signing, creates/retains a draft, builds desktop and native CLI packages for Windows x64, macOS arm64/x64 and Linux x64, and assembles matching source materials. Only after every platform, source bundle, signature and checksum check succeeds are the complete assets uploaded. With the default `publish=false`, the release stays a draft and is not marked latest.
+
+## Publish explicitly
+
+To authorize publication, explicitly select **publish** in a manual Release run from `main`, or:
+
+```bash
+gh workflow run release.yml --ref main -f tag="$TAG" -f publish=true
+```
+
+This is a full verified build-and-publish run, not a shortcut that publishes unchecked files from an earlier draft. A separate draft build is optional; a maintainer may choose `publish=true` on the first authorized run. Pushing a tag, running CI, or completing a draft build never publishes on its own.
 
 A failed or partial run must remain a draft. Do not mark it latest or overwrite a previously published release to work around failures. Publishing has no automatic rollback: a regression requires a new version with a tested fix.
 

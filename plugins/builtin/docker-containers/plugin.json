@@ -3,7 +3,7 @@
   "id": "docker-containers",
   "name": "Docker Containers",
   "description": "Inspect and manage containers, images, live resource usage and recent container logs through the remote Docker CLI.",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": "VibeShell",
   "category": "containers",
   "icon": "box",
@@ -18,6 +18,53 @@
   "entry": {
     "type": "commands",
     "actions": [
+      {
+        "id": "running-containers",
+        "name": "Running containers",
+        "description": "List running containers with full IDs; paused and restarting containers are not shell-ready.",
+        "program": "docker",
+        "args": [
+          "ps",
+          "--filter",
+          "status=running",
+          "--no-trunc",
+          "--format",
+          "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Ports}}"
+        ],
+        "allowSudo": true,
+        "output": {
+          "kind": "table",
+          "columns": ["ID", "Name", "Image", "State", "Status", "Ports"]
+        }
+      },
+      {
+        "id": "exited-containers",
+        "name": "Exited containers",
+        "description": "Inspect exited containers separately without starting or restarting them.",
+        "program": "docker",
+        "args": [
+          "ps",
+          "--all",
+          "--filter",
+          "status=exited",
+          "--no-trunc",
+          "--format",
+          "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Ports}}"
+        ],
+        "allowSudo": true,
+        "output": {
+          "kind": "table",
+          "columns": ["ID", "Name", "Image", "State", "Status", "Ports"]
+        }
+      },
+      {
+        "id": "container-inventory",
+        "name": "Container inventory (JSON Lines)",
+        "description": "Read all container states and full IDs as one JSON object per line, not a JSON array. This does not create a container session.",
+        "program": "docker",
+        "args": ["ps", "--all", "--no-trunc", "--format", "{{json .}}"],
+        "allowSudo": true
+      },
       {
         "id": "containers",
         "name": "Containers",
@@ -94,6 +141,7 @@
           "logs",
           "--tail",
           "200",
+          "--",
           "{{input.container}}"
         ],
         "inputs": [
@@ -113,6 +161,9 @@
         "program": "docker",
         "args": [
           "inspect",
+          "--type",
+          "container",
+          "--",
           "{{input.container}}"
         ],
         "inputs": [
@@ -128,10 +179,11 @@
       {
         "id": "exec-command",
         "name": "Run in container",
-        "description": "Run one non-interactive shell command inside a container.",
+        "description": "Run one non-interactive shell command inside a container. This does not create a persistent container session or change the host session.",
         "program": "docker",
         "args": [
           "exec",
+          "--",
           "{{input.container}}",
           "sh",
           "-lc",
@@ -161,6 +213,7 @@
         "program": "docker",
         "args": [
           "start",
+          "--",
           "{{input.container}}"
         ],
         "inputs": [
@@ -181,6 +234,7 @@
         "program": "docker",
         "args": [
           "stop",
+          "--",
           "{{input.container}}"
         ],
         "inputs": [
@@ -201,6 +255,7 @@
         "program": "docker",
         "args": [
           "restart",
+          "--",
           "{{input.container}}"
         ],
         "inputs": [
