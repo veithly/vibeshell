@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:1421; img-src 'self' data: blob:; font-src 'self' data:;" />
+    <title>VibeShell · isolated documentation demo</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="demo-label" style="position:fixed;bottom:8px;right:12px;z-index:100;pointer-events:none;padding:4px 8px;border:1px solid var(--tokyo-bg-hl);border-radius:4px;background:var(--tokyo-bg-dark);color:var(--tokyo-fg-dark);font:10px/1.4 monospace;">DEMO · synthetic data · no server connection</div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

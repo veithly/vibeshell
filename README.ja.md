@@ -1,8 +1,8 @@
 <div align="center">
   <img src="app-icon.svg" width="96" alt="VibeShell" />
   <h1>VibeShell</h1>
-  <p><strong>あなたのターミナルと Agent を、同じワークスペースに。</strong></p>
-  <p>人とコーディング Agent のためのローカルファーストな SSH/SFTP ワークスペース。操作を可視化し、セッション、ファイル、プラグインをつなぎます。</p>
+  <p><strong>サーバーも、ファイルも、AI との作業も、同じ場所に。</strong></p>
+  <p>自分で使いやすく、Agent と一緒に使っても作業を見失わない SSH ワークスペース。</p>
 
   [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
@@ -10,67 +10,94 @@
   [![Release](https://img.shields.io/github/v/release/veithly/vibeshell)](https://github.com/veithly/vibeshell/releases)
   [![GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-  [ダウンロード](https://github.com/veithly/vibeshell/releases) · [1.1 の変更点](CHANGELOG.md) · [Agent ガイド](skills/vibeshell/SKILL.md) · [開発への参加](CONTRIBUTING.md)
+  [ダウンロード](https://github.com/veithly/vibeshell/releases) · [Agent / CLI ガイド](skills/vibeshell/SKILL.md) · [変更履歴](CHANGELOG.md) · [開発への参加](CONTRIBUTING.md)
 </div>
 
-![ターミナルワークスペース](docs/assets/screenshots/terminal-workspace.png)
+![ターミナル、ホストの状態、Agent の操作履歴をまとめたワークスペース](docs/assets/screenshots/tour-collaboration.png)
 
-## SSH の周辺作業を、一つの場所で
+*実際の VibeShell コンポーネントに、架空の Northstar プロジェクトのデータを入れた画面です。隔離したブラウザで表示しており、実サーバー接続、認証情報の読み出し、モデル呼び出し、サービス再起動は行っていません。Agent の会話や実行結果も説明用の例で、実際の Agent 実行の記録ではありません。[再現方法](scripts/readme-demo/README.md)。*
 
-暗号化通信、認証、転送、リモート実行は SSH 自体の機能です。VibeShell はプロトコルを置き換えたり、ネットワーク速度の向上を約束したりするものではありません。**作業中のセッション、編集中のファイル、Agent が実行した操作**を同じ画面とデータモデルで扱います。
+## ツール間で説明し直す時間を減らす
 
-| コマンドラインだけでは個別に調整する作業 | VibeShell |
+サーバーの調査は、コマンドを数個打つだけでは終わりません。ログを見て、設定を探し、エディタで修正し、Agent に相談する。そのたびに「どのマシンの、どのセッションか」を確認する必要があります。
+
+VibeShell は SSH、ローカルターミナル、コーディング Agent、リモートファイル、Git の差分、運用パネルを同じタブ付きワークスペースにまとめます。普通のターミナルとして使い、必要な場面だけ AI を加えられます。通常の端末・ファイル操作にモデルの契約は必要ありません。
+
+新しい SSH プロトコルでも、通信速度を上げる仕組みでもありません。OpenSSH、tmux、エディタ、スクリプトでも多くの同じ作業はできます。VibeShell が減らしたいのは、その間の設定、コピー、ウィンドウ切り替えです。
+
+## Agent に任せても、何をしているか分かる
+
+### コマンドと対象セッションを見える場所に
+
+GUI、ネイティブ CLI、MCP は保存済みサーバーを共有し、既存セッションを発見できます。Agent の操作は通知と履歴に現れ、コマンド、セッション、時刻、状態を確認できます。同じコマンドの再実行は別の記録として残り、複数行の内容も確認できます。
+
+同じプロンプトで一緒に作業するときは共有ターミナルへ入力し、人の作業を邪魔せず調査するときは独立した実行を使えます。どちらも履歴に表示されますが、**入力送信とコマンドの正常終了は区別されます。**
+
+Agent が別のセッションを作ると新しいタブに反映されます。人が選んだタブのフォーカスは奪いません。同じサーバーへの複数接続もセッションとして別々に管理し、履歴はページ送りや UI 再起動後の読み出しに対応します。
+
+### 承認するのは、曖昧な依頼ではなく具体的な操作
+
+承認画面には、実行予定のコマンドと確認が必要な理由を表示します。その一回を許可するか、拒否するかを判断でき、あとからログで再起動を知る必要はありません。CLI と MCP のプラグイン操作にも権限と確認のチェックがあります。
+
+![実行予定のコマンドと確認理由を示す Agent 承認画面](docs/assets/screenshots/tour-agent-approval.png)
+
+*画像はデモの承認要求です。再起動は実行していません。コマンド分類と承認はサンドボックスではなく、あらゆるリスクを自動検知する保証でもありません。*
+
+## いつものコーディング Agent と、隣にある差分
+
+別途インストールした **Claude Code、Codex、OpenCode、Pi** などを、実際のローカルターミナルで起動できます。作業ディレクトリと最初の依頼を設定し、選択したツールが対応する新規・直前の続き・過去のセッション選択を使えます。アクセスモードも起動前に明示されます。
+
+![作業ディレクトリ、セッションとアクセスモード、最初の依頼を設定する画面](docs/assets/screenshots/tour-agent-launcher.png)
+
+Agent の説明だけで変更を判断する必要はありません。**Workspace changes** を開くと、ブランチ、変更ファイル、行ごとの差分をターミナルの隣で確認できます。ローカル開発とリモート作業を隣り合うタブに置きつつ、実行環境まで同じものとして扱うことはありません。
+
+![説明用 Agent 出力の隣に表示した実際の Git 変更一覧と差分](docs/assets/screenshots/tour-agent-review.png)
+
+*各 Agent のインストール、ログイン、モデル契約は別途必要です。VibeShell が提供するのは起動と作業環境の統合であり、モデルの利用権や実行済み成果の保証ではありません。*
+
+## 小さな操作は、AI なしでも快適に
+
+オプションを一つ忘れただけなら、チャットを開く必要はありません。内蔵の補完はコマンド、サブコマンド、オプションを説明付きで提案し、履歴も候補に使います。行内の候補とキーボード操作可能なリストをカーソルの近くに表示します。定型コマンドはスニペットに、短い調査は **Quick Cmd** に任せれば、対話中のプロンプトを占有せず結果を見られます。
+
+追加の支援が欲しい場合は、自分の OpenAI 互換または Claude エンドポイントとモデルを設定して **AI コマンド予測** を有効化できます。入力中の後半を提案する機能で、自動実行はしません。コーディング Agent を起動する機能とは別です。
+
+**予測は初期状態で無効です。** 有効にすると、現在の入力、最近のコマンド履歴、ローカル補完候補を設定先へ送信します。外部に出せない作業では無効のまま使ってください。通常の補完はモデル API に依存しません。
+
+ターミナルは xterm.js を使用し、利用可能なら WebGL で描画します。入出力のバッチ処理も UI の負荷を減らすためのもので、SSH 回線が速くなるという主張ではありません。
+
+## IP アドレスより先に、作業先を見つける
+
+接続ランチャーは **SSH、ローカル Shell、コーディング Agent** の共通入口です。サーバー検索、リスト/カード表示、グループやタグによる整理に対応します。既存セッションの表示と新規接続用の操作を分け、前の作業に戻る場合と別接続を作る場合を区別できます。
+
+![グループと既存セッションを確認できる接続カード](docs/assets/screenshots/tour-connections.png)
+
+OpenSSH、PuTTY、Tabby の設定をプレビューしてから取り込み、プライベートな接続先には踏み台を設定できます。他製品に保存されたパスワードはコピーしません。PuTTY `.ppk` は OpenSSH 形式への変換が必要です。
+
+パスワード、秘密鍵、パスフレーズを変えるためにサーバーを作り直す必要もありません。変更しない値を保ち、既存の秘密情報は編集フォームへ読み戻さず、接続情報と認証情報をまとめて保存またはロールバックします。対象は **VibeShell の保存済みログイン情報**であり、リモート OS のパスワードそのものではありません。
+
+## コマンドの隣に、必要なファイルを
+
+SFTP でリモート設定を開いたり、**⌘/Ctrl+O** でローカルファイルを開いたりできます。ローカル文書のために SSH 接続を作る必要はなく、最後のターミナルを閉じても文書タブは残ります。
+
+テキスト/コード編集、構文強調、Markdown のソース・プレビュー・左右比較に対応します。SFTP にはカラム/アイコン表示、複数選択、パスコピー、転送進捗、対応する画像・PDF・メディア・アーカイブの表示機能があります。手順書、ログ、設定を別々のアプリで探し直す手間を減らせます。
+
+ファイルとターミナルを分割・移動し、文書を別ウィンドウに出しても、未保存の編集内容を保持します。ローカルテキストの保存は外部変更を検出すると黙って上書きせず、途中までしか読めていない内容を完全なファイルとして保存することもありません。
+
+フォルダ転送も整合性を重視します。有界チャンク、ローカル書き込みを待つ完了処理、同サイズの内容変更の検出、不要ファイル削除時の除外パスとネストした `.gitignore` の保護を備えます。内容比較は追加のリモート読み出しを伴う場合があり、帯域削減の保証ではありません。
+
+[ローカルファイルと Markdown の対応範囲](docs/local-files-and-css-themes.md)
+
+## コマンドが便利なときも、一覧で見たいときも
+
+コンテナや CPU、データベースを確認するたびに、生の出力を読みたいとは限りません。別ツールでサーバーを登録し直す代わりに、使用中のセッションでプラグインを開けます。
+
+| 作業 | 内蔵の表示とツール |
 | --- | --- |
-| 人と Agent が別々の端末を使う | GUI、ネイティブ CLI、MCP から保存済みの接続先とセッションを共有 |
-| Agent の直前の操作を確認する | コマンド、対象、状態を通知と永続履歴で確認 |
-| Agent の新しい接続を見つける | 新規セッションを別タブとして表示し、現在のタブのフォーカスを保持 |
-| ファイルやトンネルのためにツールを切り替える | ファイル、SFTP、転送、プラグインをターミナルの隣で操作 |
-| 自動化にプラグインの使い方を教える | アクションの入力スキーマと最新の参照文書を取得 |
-| 同じサイズの変更を同期で見落とす | 内容を比較し、削除時には除外パスを保護 |
+| ホストの遅延や異常 | Server Performance、Process Explorer、System Logs、Network Inspector、Disk Usage |
+| サービスと基盤 | Docker Containers、Kubernetes Pods、Cron Scheduler、Systemd Services |
+| データと開発 | Database Inspector、Redis Inspector、Git Workspace |
 
-OpenSSH、tmux、エディタ、スクリプトでも同様の環境は構築できます。VibeShell は、その連携を最初から使えるワークフローとして提供します。
-
-## 1.1 のワークフロー
-
-### Agent の作業を見失わない
-
-CLI と MCP の操作履歴には、コマンド、セッション、時刻、開始・成功・失敗の状態が残ります。同じコマンドを複数回実行しても別の記録として保持し、複数行コマンド、ページ送り、UI の再起動後の読み出しに対応します。履歴はローカルで暗号化され、クラウド同期には含まれません。
-
-同じシェルで作業する場合は共有ターミナルを使い、人のプロンプトに干渉したくない確認作業には独立した exec を使えます。exec も履歴に表示されます。**入力送信の成功は、リモートコマンドの正常終了を意味しません。**
-
-Agent の新規セッションは自動的にタブへ反映されますが、人が選択中のタブを切り替えません。同じサーバーへの複数接続もセッション ID で区別します。接続は所有プロセスに依存します。daemon 所有のセッションは GUI 終了後も継続できますが、GUI 所有の接続はその GUI プロセス終了後には維持できません。
-
-### ウィンドウより、作業内容に集中
-
-検索可能な接続ランチャーに SSH、ローカルシェル、Agent の起動入口をまとめています。リスト/カード表示、キーボードのフォーカス管理、明暗テーマ、動きを減らす設定に対応します。カードのアニメーションはブラウザ標準 API を使います。
-
-ターミナルとファイルを分割したり、別ウィンドウに移したりできます。レイアウト変更時にも未保存の編集を保持し、コマンド履歴、スニペット、コンテキスト操作、明確なエラー表示で作業の引き継ぎを助けます。
-
-![接続ランチャー](docs/assets/screenshots/server-launcher.png)
-
-### ファイルと接続を切り離さない
-
-SFTP のカラム/アイコン表示、複数選択、パスのコピー、転送進捗に対応します。ローカル/リモートファイルをタブで開き、テキスト、コード、画像、PDF、メディア、アーカイブを確認できます。
-
-転送は有界のチャンクを使い、ダウンロードはローカル書き込みの完了を待って成功を返します。同期は同サイズの内容変更も検出し、不要ファイルの削除では除外設定とネストした `.gitignore` を保護します。ローカル同期では転送元/転送先の重複を拒否します。内容比較はリモート読み出しを増やす場合があり、帯域削減の保証ではありません。
-
-![SFTP ワークフロー](docs/assets/screenshots/sftp-workflow.png)
-
-### 保存済み認証情報を安全に編集
-
-サーバーを作り直さずにパスワード、秘密鍵ファイル/内容、鍵のパスフレーズを更新できます。変更しない項目は保持し、既存の秘密情報は編集フォームへ読み戻しません。サーバー情報、名前変更、認証情報の保存は一つのトランザクションで成功またはロールバックします。
-
-変更対象は **VibeShell に保存されたログイン情報**であり、リモート OS のアカウントパスワードそのものではありません。正しい秘密鍵があっても、未知/変更されたホスト鍵の確認は省略できません。
-
-### ネイティブ CLI と共有セッション
-
-Rust の `vibeshell` バイナリは Node.js やデスクトップウィンドウなしで動作し、必要に応じて daemon を起動します。既存 daemon の接続を GUI が見つけた場合、使用中の socket を置き換えず、ターミナル、SFTP、トンネル、録画、DB 検出を実際の所有プロセスへ振り分けます。
-
-Claude Code、Codex、OpenCode、Pi などを実際の PTY で起動し、リポジトリ状態と差分も確認できます。各 Agent は別途インストールと設定が必要で、モデルの契約や認証情報は付属しません。
-
-### Agent が直接発見できるプラグイン
-
-内蔵プラグインと対応する宣言型インポートプラグインは、インストール状態、権限、アクションの入力仕様、最新の使い方を公開します。主 Skill は索引に留め、詳細は必要なプラグインの参照文書から取得します。
+**12 個の内蔵プラグイン**は人が押すボタンだけではありません。Agent はインストール状態、入力仕様、現在の使い方を取得し、CLI または MCP から利用できます。
 
 ```bash
 vibeshell plugins list --installed --json
@@ -79,73 +106,60 @@ vibeshell plugins docs server-performance
 vibeshell plugins run server-performance status --session SESSION_ID --inputs '{}'
 ```
 
-プラグインがインストール/有効化されていることを確認し、`SESSION_ID` を実在する値に置き換えます。`describe` は機械可読の入力スキーマ、`docs` は現在の検証済み manifest に対応した Markdown を返します。
+有効な既存セッションを指定し、インストール/有効化状態を確認してください。主 Skill は索引にとどめ、詳細は `references/<plugin-id>.md` に置きます。対応する宣言型のインポートプラグインも同じ発見インターフェースを持ち、文書は現在の検証済み manifest から生成します。
 
-| 分野 | 12 個の内蔵プラグイン |
-| --- | --- |
-| ホスト管理 | Performance、Process、System Logs、Network、Disk Usage |
-| サービス/基盤 | Docker、Kubernetes、Cron、Systemd |
-| データ/開発 | Database、Redis、Git Workspace |
+文書を読むだけで権限が付いたり、必要なソフトウェアがインストールされたりすることはありません。Docker、Kubernetes、データベースの利用には対象環境と権限が必要です。ホストのリモート性能収集は現在 Linux `/proc` を前提とします。
 
-CLI と MCP は共通の状態/権限/入力検証を使います。使用例を読んだだけではインストール、権限付与、sudo は実行しません。MCP の承認は人の確認経路を通し、モデル自身の承認フラグを信用しません。対象マシンには対応ツールと権限が必要です。
+[プラグイン仕様](docs/plugin-spec.md) · [Agent とプラグインの索引](skills/vibeshell/SKILL.md#plugin-discovery-and-references)
 
-[プラグイン仕様](docs/plugin-spec.md) · [共同作業と API](docs/AGENT_COLLABORATION.md) · [参照文書の索引](skills/vibeshell/SKILL.md#plugin-discovery-and-references)
+## 自分の作業に合わせて整える
 
-## インストールと最初の接続
+**ウィンドウの山ではなく、作業のまとまりを。** ターミナル、文書、プラグインを分割・並べ替え・別ウィンドウ化し、レイアウトを保存できます。レイアウトの復元は、所有プロセスを終了したネットワーク接続の継続を保証するものではありません。
 
-[Releases](https://github.com/veithly/vibeshell/releases) から公開済みの対応パッケージを選びます。未完成のドラフトは使用しません。
+**長時間でも使いやすく。** 明暗テーマ、システム外観への追従、端末フォントとカーソル、キーボード操作、動きを減らす設定に対応します。アプリ UI は英語と簡体字中国語です。この日本語 README は文書の翻訳であり、日本語 UI 対応を意味しません。
 
-| プラットフォーム | デスクトップ | 独立 CLI |
+**色のプリセットだけで終わらない。** カスタム CSS はライブプレビュー、適用保存、インポート/エクスポート、ローカル背景画像に対応し、余白、角丸、文書の文字組みも調整できます。テーマが操作部を隠した場合は **⌘/Ctrl+Shift+F12** またはネイティブの *Disable Custom CSS* メニューで無効にできます。CSS の外部 URL は通信を発生させるため、信頼するテーマだけを適用してください。
+
+[CSS と復旧方法](docs/local-files-and-css-themes.md) · [スターターテーマ](themes/vibecode-starter.css)
+
+## SSH の基本機能も、そのまま
+
+ローカル転送、SOCKS5、リバース転送、セッションの記録と再生に対応します。トンネル設定を保存し、セッション終了時には関連トンネルと記録も終了します。loopback の外へ公開する前に bind アドレスを確認してください。
+
+任意の **Gist / WebDAV 暗号化同期**で、サーバーメタデータ、グループ、スニペット、プラグイン導入情報を自分の環境間で共有できます。VibeShell のホスト型 SSH 中継ではありません。認証情報、ホスト鍵の信頼情報、実行中ターミナル、Agent 履歴は同期対象外です。提供元のトークン、復旧材料、エクスポート内容は慎重に管理してください。
+
+SSH は認証前にホストを検証し、踏み台経由でも実際の接続先を確認します。認証情報と Agent 履歴はローカル暗号化保存ですが、OS Keychain 保管や侵害済みローカルアカウントからの保護ではありません。正しい秘密鍵があっても、想定外のホスト指紋を無条件で許可してはいけません。
+
+## いつものサーバーから始める
+
+[Releases](https://github.com/veithly/vibeshell/releases) から対応するデスクトップまたは CLI を取得できます。
+
+| プラットフォーム | デスクトップ | ネイティブ CLI |
 | --- | --- | --- |
 | macOS Apple Silicon / Intel | アーキテクチャ別 `.dmg` | `.tar.gz` |
 | Windows x64 | `.exe` / `.msi` | `.zip` |
 | Linux x64 | `.AppImage` / `.deb` | `.tar.gz` |
 
-Apple Developer ID 署名と公証の有無はリリースノートを確認してください。ad-hoc 署名は Apple の公証ではありません。モバイル対応は実験的で、デスクトップと同じ機能範囲ではありません。
-
-CLI アーカイブの `install.sh` / `install.ps1` は内容を確認して実行してください。[CLI ガイド](cli/README.md) に詳細があります。デスクトップには CLI が同梱され、Skill インストーラーが主文書とプラグイン参照文書を対応 Agent ディレクトリに配置します。
+デスクトップは CLI を同梱します。独立 CLI の `install.sh` / `install.ps1` は内容を読んでから実行してください。Rust の CLI 自体は Node.js に依存しません。[CLI インストール](cli/README.md)
 
 ```bash
-vibeshell version
-vibeshell import auto --dry-run
-# プレビューを確認してからインポートします。
-vibeshell import auto
+vibeshell import auto --dry-run    # 確認後に --dry-run を外して取り込みます。
 vibeshell servers
 vibeshell ssh my-server
-```
-
-`my-server` は保存済みの名前に置き換えます。OpenSSH、PuTTY、Tabby のプロファイルを取り込めますが、他製品に保存されたパスワードはコピーしません。PuTTY `.ppk` は OpenSSH 形式に変換してください。GUI からも追加/編集できます。CLI のサーバー作成/削除と Teleport は 1.1.0 に含まれません。
-
-```bash
 vibeshell ssh my-server -- uname -a
 vibeshell sessions
-# 実際に返された別名を使用します。必ずしも 001 ではありません。
-vibeshell ssh-session 001 -- pwd
 vibeshell sftp my-server ls /srv/app
-vibeshell sftp my-server get /srv/app/config.toml ./config.toml
 ```
 
-複雑な引用符や複数行コマンドは `--command-file ./remote-command.sh` / `--command-stdin` を使います。`--new` は別の接続が必要な場合だけ指定し、秘密情報は引数やプロンプトに書かないでください。
+`my-server` は保存済み名に置き換えます。`sessions` に表示された別名で `vibeshell ssh-session ALIAS -- pwd` を実行し、別接続が必要な場合だけ `--new` を使います。複雑な引用符には `--command-file` / `--command-stdin` を使用し、秘密情報を引数や Agent の依頼文に入れないでください。
 
-## 転送、記録、任意の暗号化同期
+CLI は必要に応じて daemon を起動し、GUI は既存セッションに接続できます。接続の所有プロセスは生きている必要があります。daemon 所有の接続は GUI 終了後も継続できますが、GUI 所有の接続はその終了で切れます。デスクトップと CLI は一緒に更新し、再起動前に作業を保存してください。
 
-ローカル転送、SOCKS5、リバース転送はリスナー準備、キャンセル、半閉鎖を扱い、セッション終了時に関連トンネルと記録も終了します。loopback 以外へ公開する前に bind アドレスを確認してください。
+Apple 署名/公証の状況は各リリースノートを参照してください。ad-hoc 署名は Apple 公証ではありません。モバイルは実験的で、全 MFA、ハードウェアトークン、SSH 実装への対応を保証しません。提案中の CLI サーバー作成/削除と Teleport は現在の 1.1.0 には含まれません。
 
-任意の Gist/WebDAV 同期はサーバーメタデータ、グループ、スニペット、プラグイン導入情報を暗号化します。VibeShell のホスト型 SSH 中継はありません。ログイン認証情報、ホスト鍵の信頼情報、稼働中セッション、Agent 履歴は同期対象外です。トークン、復旧材料、ローカルエクスポートを保護し、プラグイン設定にも機密情報があり得ることに注意してください。
+## 動かす、開発する、実装を読む
 
-## 安全性と対応範囲
-
-認証前にホスト鍵を確認し、踏み台経由でも実際の宛先を検証します。ローカル認証情報は暗号化され、Unix ではファイル権限を制限します。OS Keychain 保存や、侵害されたユーザーアカウントからの保護を保証するものではありません。
-
-隔離 OpenSSH テストは一般的なパスワード、鍵、PAM keyboard-interactive、PTY、SFTP、転送を対象とします。全 MFA、ハードウェアトークン、ネットワーク機器、SSH 実装の互換性を示すものではありません。リモート性能収集は Linux `/proc` を前提とします。
-
-危険なコマンドの分類はサンドボックスではありません。`send-secret` は本当の機密入力を履歴から除外できますが、サーバー側のエコーは防げず、コマンドを隠すために使ってはいけません。不明な応答消失後に変更操作を自動再実行しないでください。
-
-問題は [非公開のセキュリティ報告](https://github.com/veithly/vibeshell/security/advisories/new) へ。秘密鍵や本番環境の機密情報を公開 Issue に投稿しないでください。
-
-## 開発と貢献
-
-機能、修正、文書の **PR はすべて `dev` 宛て**です。`main` は安定版で、本リポジトリの `dev` からのリリース昇格を受け付けます。`master` は履歴用です。
+Tauri 2、Rust、React、TypeScript、xterm.js で構成しています。Node.js 22.12+、stable Rust、OS ごとの [Tauri 前提条件](https://v2.tauri.app/start/prerequisites/) が必要です。
 
 ```bash
 git clone --branch dev https://github.com/veithly/vibeshell.git
@@ -154,25 +168,14 @@ npm ci
 npm run tauri -- dev
 ```
 
-Node.js 22.12+、stable Rust（manifest の最小要件は 1.89）、OS ごとの [Tauri 前提条件](https://v2.tauri.app/start/prerequisites/) が必要です。
+PR 前に `node scripts/check-release.mjs`、`npm test`、`npm run build`、`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked` を実行します。SSH 変更には loopback 限定の Docker テスト `bash scripts/test-ssh-compatibility.sh` もあります。本物の認証情報ストアをテストに使わないでください。
 
-```bash
-node scripts/check-release.mjs
-npm test
-npm run build
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
-# 任意の Docker / loopback 専用テスト
-bash scripts/test-ssh-compatibility.sh
-```
+**通常の PR は `dev` 宛てです。** `main` は本リポジトリの `dev` からの検証済みリリース昇格を受け付け、`master` は履歴用です。ビルド操作は使用中アプリの置換や SSH 切断を許可するものではありません。
 
-CLI: `cargo build --release --locked -p vshell --bin vibeshell`。デスクトップ: `npm run build:desktop`。ビルドは使用中アプリの上書きや SSH の切断を許可する操作ではありません。
+[貢献ガイド](CONTRIBUTING.md) · [アーキテクチャ](AGENTS.md) · [リリース手順](docs/RELEASING.md) · [共同作業 API](docs/AGENT_COLLABORATION.md)
 
-[貢献ガイド](CONTRIBUTING.md) · [リリース手順](docs/RELEASING.md) · [アーキテクチャ](AGENTS.md)
+セキュリティ上の問題は [非公開報告](https://github.com/veithly/vibeshell/security/advisories/new) へ。承認はサンドボックスではなく、保護された入力もリモートプログラムのエコーを防げません。応答消失後に変更操作を自動で再実行しないでください。
 
 ## ライセンス
 
-1.1.0 以降の VibeShell 全体は **GNU GPL バージョン 3 のみ（`GPL-3.0-only`）**です。[LICENSE](LICENSE) と [NOTICE](NOTICE) を参照してください。以前の MIT リリースに付与済みの権利は取り消しません。[旧 MIT 通知](licenses/legacy-MIT.txt) は該当部分について保持し、第三者コンポーネントは各自のライセンスと著作権表示に従います。
-
-リリースには対応するソースとライセンス通知を用意します。法律が認める範囲で、本ソフトウェアは無保証です。
+VibeShell 1.1.0 以降の全体は **GPL-3.0-only** です。[LICENSE](LICENSE)、[NOTICE](NOTICE)、[保存された MIT 通知](licenses/legacy-MIT.txt) を参照してください。既存の MIT 許諾は取り消さず、第三者はそれぞれのライセンスを保持します。リリースには対応ソースと通知を用意し、法律で許される範囲で無保証とします。
