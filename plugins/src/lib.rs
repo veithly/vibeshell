@@ -848,6 +848,9 @@ mod tests {
         assert_eq!(
             action_ids,
             HashSet::from([
+                "running-containers",
+                "exited-containers",
+                "container-inventory",
                 "containers",
                 "stats",
                 "images",
@@ -890,6 +893,82 @@ mod tests {
         assert!(render_command(containers, &inputs, true, false)
             .unwrap()
             .starts_with("sudo -n docker ps"));
+    }
+
+    #[test]
+    fn docker_inventory_is_read_only_and_keeps_full_container_identity() {
+        let catalog = builtin_catalog().unwrap();
+        let docker = catalog
+            .iter()
+            .find(|p| p.id == "docker-containers")
+            .unwrap();
+        let PluginEntry::Commands { actions } = &docker.entry else {
+            panic!("expected Docker command actions");
+        };
+        assert_eq!(actions[0].id, "running-containers");
+        for (id, state) in [
+            ("running-containers", Some("status=running")),
+            ("exited-containers", Some("status=exited")),
+            ("container-inventory", None),
+        ] {
+            let action = actions.iter().find(|a| a.id == id).unwrap();
+            assert_eq!(action.program, "docker");
+            assert_eq!(action.args[0], "ps");
+            assert!(action.args.iter().any(|arg| arg == "--no-trunc"));
+            assert!(!action.requires_confirmation);
+            assert!(!action.elevate);
+            if let Some(state) = state {
+                assert!(action
+                    .args
+                    .windows(2)
+                    .any(|pair| pair == ["--filter", state]));
+                assert_eq!(action.output.kind, PluginOutputKind::Table);
+                assert_eq!(action.output.columns.len(), 6);
+            } else {
+                assert!(action.args.iter().any(|arg| arg == "{{json .}}"));
+            }
+            assert_eq!(
+                action.args.iter().any(|arg| arg == "--all"),
+                id != "running-containers"
+            );
+            assert!(render_command(action, &BTreeMap::new(), false, false).is_ok());
+        }
+    }
+
+    #[test]
+    fn docker_container_operands_cannot_be_interpreted_as_options() {
+        let catalog = builtin_catalog().unwrap();
+        let docker = catalog
+            .iter()
+            .find(|p| p.id == "docker-containers")
+            .unwrap();
+        let PluginEntry::Commands { actions } = &docker.entry else {
+            panic!("expected Docker command actions");
+        };
+        for id in [
+            "logs",
+            "inspect",
+            "exec-command",
+            "start-container",
+            "stop-container",
+            "restart-container",
+        ] {
+            let action = actions.iter().find(|a| a.id == id).unwrap();
+            assert!(action
+                .args
+                .windows(2)
+                .any(|pair| pair == ["--", "{{input.container}}"]));
+            let mut inputs =
+                BTreeMap::from([("container".to_string(), serde_json::json!("--privileged"))]);
+            if id == "exec-command" {
+                inputs.insert("command".to_string(), serde_json::json!("id"));
+            }
+            let rendered = render_command(action, &inputs, false, false).unwrap();
+            assert!(rendered.contains(" -- --privileged"));
+            if id == "exec-command" || id.ends_with("-container") {
+                assert!(action.requires_confirmation);
+            }
+        }
     }
 
     #[test]

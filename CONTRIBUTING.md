@@ -26,6 +26,7 @@ Use Node.js 22.12+ and current stable Rust, with Tauri's platform prerequisites 
 npm ci
 cargo run --locked -p vibeshell-plugins --example export_references -- --check
 node scripts/check-release.mjs
+node --test scripts/tests/*.test.mjs
 npm test
 npm run build
 cargo fmt --all -- --check
@@ -36,6 +37,16 @@ cargo test --workspace --locked
 For SSH transport changes, run `bash scripts/test-ssh-compatibility.sh` with Docker available. It creates a loopback-only OpenSSH fixture and generated test keys, not a connection to a production server. Database/credential tests must use injected temporary directories or in-memory stores. Never initialize the user's real database from a unit test.
 
 A successful build is not proof of UI correctness or universal server compatibility. For UI changes, exercise focus, keyboard navigation, reduced motion, resize and unsaved-edit handling. Include sanitized screenshots when useful. Never publish real server details, tokens, private keys or session recordings in fixtures or test logs.
+
+## Manual GitHub checks
+
+Pushing code or opening a PR does **not** compile the project. After reviewing the diff, a maintainer explicitly runs **Actions → CI → Run workflow** on the PR's head branch, or:
+
+```bash
+gh workflow run ci.yml --ref fix/short-description
+```
+
+All existing required checks remain in branch protection; making them manual does not waive them. A new commit needs a new manual run. Do not use `--admin`, fabricate check results, or remove required checks to merge a pending PR. The small, metadata-only **PR Target** check remains automatic and never checks out contributor code. For a fork PR, use a reviewed same-repository branch with the exact head SHA (or a separate integration PR after resolving conflicts); do not run unreviewed fork code with release secrets.
 
 ## Plugin and documentation changes
 
@@ -63,4 +74,4 @@ Report exploitable vulnerabilities through the repository's private security rep
 
 ## Releases
 
-Version changes go through `dev`, then a tested promotion to `main`. Do not bump a version automatically on every branch push. Only an explicit matching `vX.Y.Z` tag on `main` starts publication. See [RELEASING](docs/RELEASING.md).
+Version changes go through `dev`, then a tested promotion to `main`. Pushing a `vX.Y.Z` tag does **not** build or publish anything. Run CI manually on the exact tagged commit, then run Release from `main` with that existing tag. Release defaults to a draft; only an explicit `publish=true` run publishes after every verification/build succeeds. See [RELEASING](docs/RELEASING.md).

@@ -1,35 +1,40 @@
 name: Release
+run-name: Manual release · ${{ inputs.tag }} · publish=${{ inputs.publish }}
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
         description: Existing vX.Y.Z tag on main (no automatic version bump)
         required: true
         type: string
+      publish:
+        description: Publish after verification (false builds and uploads a draft only)
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   prepare:
     name: Validate release and create draft
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      checks: read
+      actions: read
     outputs:
       tag: ${{ steps.metadata.outputs.tag }}
       version: ${{ steps.metadata.outputs.version }}
       sha: ${{ steps.metadata.outputs.sha }}
     env:
-      TAG: ${{ inputs.tag || github.ref_name }}
+      TAG: ${{ inputs.tag }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -46,21 +51,17 @@ jobs:
           git fetch origin main --tags
           SHA=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
           git merge-base --is-ancestor "$SHA" origin/main
+          # Keep the current gate even when the selected tag predates it.
+          cp scripts/check-release-ci.mjs "$RUNNER_TEMP/check-release-ci.mjs"
           git checkout --detach "$SHA"
           node scripts/check-release.mjs "$TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?per_page=100" > "$RUNNER_TEMP/checks.json"
-          node - "$RUNNER_TEMP/checks.json" <<'NODE'
-          const fs = require('node:fs');
-          const checks = JSON.parse(fs.readFileSync(process.argv[2])).check_runs;
-          for (const name of ['Frontend Check', 'Clippy Lint', 'Rust Check (ubuntu-22.04)', 'Rust Check (windows-latest)', 'Rust Check (macos-latest)']) {
-            if (!checks.some(c => c.name === name && c.app.slug === 'github-actions' && c.conclusion === 'success')) {
-              throw new Error(`Required CI has not passed for the tagged commit: ${name}`);
-            }
-          }
-          NODE
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=workflow_dispatch&head_sha=$SHA&per_page=100" > "$RUNNER_TEMP/ci-runs.json"
+          RUN_ID=$(node "$RUNNER_TEMP/check-release-ci.mjs" run "$RUNNER_TEMP/ci-runs.json" "$SHA" "$GITHUB_REPOSITORY")
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" > "$RUNNER_TEMP/ci-jobs.json"
+          node "$RUNNER_TEMP/check-release-ci.mjs" jobs "$RUNNER_TEMP/ci-jobs.json"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -212,7 +213,7 @@ jobs:
           retention-days: 7
 
   publish:
-    name: Verify all assets and publish
+    name: Verify assets and finalize draft or publication
     needs: [prepare, build, source]
     runs-on: ubuntu-latest
     permissions:
@@ -221,6 +222,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
+      PUBLISH_RELEASE: ${{ inputs.publish }}
       HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' || secrets.APPLE_SIGNING_IDENTITY != '' }}
       HAS_APPLE_NOTARIZATION: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
     steps:
@@ -246,7 +248,7 @@ jobs:
           cp LICENSE NOTICE assets/
           cp licenses/legacy-MIT.txt assets/legacy-MIT.txt
           (cd assets && sha256sum ./* > SHA256SUMS.txt)
-      - name: Publish only after all required jobs succeed
+      - name: Upload verified assets; publish only when explicitly requested
         run: |
           set -euo pipefail
           gh release view "$TAG" --json isDraft > "$RUNNER_TEMP/release.json"
@@ -261,4 +263,10 @@ jobs:
             printf '\nApple signing and notarization were configured; successful bundling completed before publication.\n' >> "$RUNNER_TEMP/notes.md"
           fi
           gh release upload "$TAG" assets/* --clobber
-          gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --draft=false --latest
+          if [[ "$PUBLISH_RELEASE" == 'true' ]]; then
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --draft=false --latest
+            echo "Published verified release $TAG." >> "$GITHUB_STEP_SUMMARY"
+          else
+            gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+            echo "Built and uploaded $TAG as a draft. Nothing was published or marked latest." >> "$GITHUB_STEP_SUMMARY"
+          fi

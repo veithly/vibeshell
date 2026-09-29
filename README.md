@@ -6,7 +6,7 @@
 
   [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
-  [![CI](https://github.com/veithly/vibeshell/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/veithly/vibeshell/actions/workflows/ci.yml)
+  [![Manual CI](https://github.com/veithly/vibeshell/actions/workflows/ci.yml/badge.svg?branch=dev&event=workflow_dispatch)](https://github.com/veithly/vibeshell/actions/workflows/ci.yml)
   [![Release](https://img.shields.io/github/v/release/veithly/vibeshell)](https://github.com/veithly/vibeshell/releases)
   [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
@@ -171,6 +171,10 @@ npm run tauri -- dev
 Before a PR: `node scripts/check-release.mjs`, `npm test`, `npm run build`, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo test --workspace --locked`. SSH changes also have a loopback-only Docker fixture: `bash scripts/test-ssh-compatibility.sh`. Never run credential tests against a real saved-server store.
 
 **All normal PRs target `dev`.** `main` receives tested release promotions from this repository's `dev`; `master` is historical. Build commands do not authorize replacing an installed app or ending someone's SSH sessions.
+
+CI builds and releases are **manual-only**. Maintainers run CI on the PR head before merging; pushing code or a version tag does not compile or publish. Release runs from `main` and defaults to a draft unless publication is explicitly selected. Required checks, signatures and complete-source validation remain in place.
+
+Docker inventory improvements and the remaining container-session/proxy work are tracked in the [September issue review](docs/ISSUE_TRIAGE_2026-09.md). A Docker plugin command is not a persistent container session; an SSH SOCKS forwarding listener is not an outbound proxy setting.
 
 [Contributing](CONTRIBUTING.md) · [Architecture](AGENTS.md) · [Release process](docs/RELEASING.md) · [Collaboration API](docs/AGENT_COLLABORATION.md)
 

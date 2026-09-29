@@ -6,7 +6,7 @@
 
   [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
-  [![CI](https://github.com/veithly/vibeshell/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/veithly/vibeshell/actions/workflows/ci.yml)
+  [![手动 CI](https://github.com/veithly/vibeshell/actions/workflows/ci.yml/badge.svg?branch=dev&event=workflow_dispatch)](https://github.com/veithly/vibeshell/actions/workflows/ci.yml)
   [![Release](https://img.shields.io/github/v/release/veithly/vibeshell)](https://github.com/veithly/vibeshell/releases)
   [![GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
@@ -171,6 +171,10 @@ npm run tauri -- dev
 提交前运行 `node scripts/check-release.mjs`、`npm test`、`npm run build`、`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings` 和 `cargo test --workspace --locked`。SSH 变更还可运行仅绑定回环地址的 Docker 夹具：`bash scripts/test-ssh-compatibility.sh`，不要拿自己的真实凭据库做回归测试。
 
 **普通 PR 一律先到 `dev`。** `main` 只接受本仓库 `dev` 的发布晋级，`master` 保留历史。构建代码不等于允许覆盖正在使用的应用或结束别人的 SSH 会话。
+
+CI 构建和发版都改为**手动触发**：维护者在合并前对 PR 的最新提交手动运行 CI，推送代码或版本标签不会编译或发布。Release 必须从 `main` 运行，默认只生成草稿，明确勾选发布才会公开。必需检查、签名和完整源码校验仍然保留。
+
+Docker 清单改进以及容器独立会话、出站代理的剩余工作见[九月 issue 审查](docs/ISSUE_TRIAGE_2026-09.md)。Docker 插件执行命令不等于持久容器会话，SSH 的 SOCKS 转发监听也不等于出站代理配置。
 
 [贡献指南](CONTRIBUTING.md) · [架构](AGENTS.md) · [发布流程](docs/RELEASING.md) · [协作接口](docs/AGENT_COLLABORATION.md)
 
