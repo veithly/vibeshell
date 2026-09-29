@@ -6,6 +6,8 @@
 
 **Both CI compilation and release packaging/publication are manual-only.** A push, PR or version tag starts neither workflow. The metadata-only PR Target workflow remains automatic. There is no auto-increment bot commit, and no workflow automatically dispatches another workflow.
 
+Manual CI uses two small reporting jobs to bridge GitHub's PR-check event restriction: initialize the existing required commit statuses as pending, then publish results from actual jobs on the same SHA and run attempt. Builds have no status-write permission. Missing/skipped/failed evidence cannot become green, and superseded runs stop reporting. Branch protection still requires all five CI contexts from GitHub Actions plus PR Target; there is no administrator bypass. See [GitHub's required-check documentation](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated).
+
 ## Prepare and promote
 
 Update the workspace version, npm manifest and lockfile, the three local Cargo.lock packages, Tauri version, Codex plugin version and Claude marketplace versions in one PR to `dev`. Independent built-in plugin versions are not the application version and should change only when that plugin changes.

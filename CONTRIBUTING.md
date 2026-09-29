@@ -48,6 +48,8 @@ gh workflow run ci.yml --ref fix/short-description
 
 All existing required checks remain in branch protection; making them manual does not waive them. A new commit needs a new manual run. Do not use `--admin`, fabricate check results, or remove required checks to merge a pending PR. The small, metadata-only **PR Target** check remains automatic and never checks out contributor code. For a fork PR, use a reviewed same-repository branch with the exact head SHA (or a separate integration PR after resolving conflicts); do not run unreviewed fork code with release secrets.
 
+GitHub does not count `workflow_dispatch` job checks directly toward PR requirements. The manual workflow first marks the five required commit statuses pending, then reports each actual job's result using the GitHub Actions token. Missing, failed, cancelled, skipped or incomplete evidence never produces success; a superseded run cannot intentionally replace a newer run's results. Only the two status-reporting jobs have `statuses: write`; build/test jobs remain read-only. Each status links to its real run. This reporting is not an override and does not start CI automatically.
+
 ## Plugin and documentation changes
 
 The validated manifests in `plugins/builtin/` define the built-in plugin catalog. Each plugin must expose machine-readable actions and current reference documentation. Details belong in `references/<id>.md`, not in the main Skill.

@@ -14,8 +14,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  status-start:
+    name: Initialize required CI statuses
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/report-ci-status.mjs start
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   check-frontend:
     name: Frontend Check
+    needs: status-start
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +53,7 @@ jobs:
 
   check-backend:
     name: Rust Check (${{ matrix.platform }})
+    needs: status-start
     strategy:
       fail-fast: false
       matrix:
@@ -68,6 +89,7 @@ jobs:
 
   check-clippy:
     name: Clippy Lint
+    needs: status-start
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -88,3 +110,24 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Isolated OpenSSH compatibility
         run: bash scripts/test-ssh-compatibility.sh
+
+  status-finish:
+    name: Report verified CI statuses
+    needs: [status-start, check-frontend, check-backend, check-clippy]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/report-ci-status.mjs finish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

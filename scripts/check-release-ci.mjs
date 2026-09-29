@@ -11,7 +11,7 @@ export const REQUIRED_JOBS = [
   'Rust Check (macos-latest)',
 ];
 
-export function selectManualCiRun(payload, sha, repository) {
+export function latestManualCiRun(payload, sha, repository) {
   if (!Array.isArray(payload.workflow_runs)) throw new Error('Invalid CI workflow response');
   const runs = payload.workflow_runs.filter(run =>
     run.head_sha === sha && run.event === 'workflow_dispatch'
@@ -22,8 +22,15 @@ export function selectManualCiRun(payload, sha, repository) {
   if (!latest) {
     throw new Error('Run CI manually on the exact release tag/commit before releasing');
   }
-  if (!Number.isSafeInteger(latest.id) || latest.id <= 0
-      || latest.status !== 'completed' || latest.conclusion !== 'success') {
+  if (!Number.isSafeInteger(latest.id) || latest.id <= 0) {
+    throw new Error('The latest manual CI run for this commit has not completed successfully');
+  }
+  return latest;
+}
+
+export function selectManualCiRun(payload, sha, repository) {
+  const latest = latestManualCiRun(payload, sha, repository);
+  if (latest.status !== 'completed' || latest.conclusion !== 'success') {
     throw new Error('The latest manual CI run for this commit has not completed successfully');
   }
   return latest.id;

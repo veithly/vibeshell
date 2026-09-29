@@ -79,3 +79,16 @@ test('release is restricted to main and defaults to an unpublished draft', () =>
   assert.match(text, /if \[\[ "\$PUBLISH_RELEASE" == 'true' \]\]; then\s+gh release edit[^\n]*--draft=false --latest/);
   assert.doesNotMatch(text, /inputs\.tag \|\| github\.ref_name/);
 });
+
+test('manual CI reports evidence-backed statuses without granting write access to builds', () => {
+  const text = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  for (const id of ['check-frontend', 'check-backend', 'check-clippy']) {
+    const section = text.split(`  ${id}:\n`)[1]?.split(/^  [a-z-]+:\n/m)[0];
+    assert.ok(section, id);
+    assert.match(section, /needs: status-start/);
+    assert.doesNotMatch(section, /statuses: write/);
+  }
+  assert.match(text, /needs: \[status-start, check-frontend, check-backend, check-clippy\]\s+if: always\(\)/);
+  assert.match(text, /node scripts\/report-ci-status\.mjs start/);
+  assert.match(text, /node scripts\/report-ci-status\.mjs finish/);
+});
