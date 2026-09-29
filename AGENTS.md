@@ -5,7 +5,7 @@ VibeShell is a modern SSH/SFTP desktop terminal built with **Tauri 2** (Rust bac
 
 ## Branch and release workflow
 
-All feature, fix and documentation PRs target `dev`, the default integration branch. `main` accepts release promotions from the same repository's `dev`; `master` is historical. See CONTRIBUTING.md. Version tags are explicit; ordinary pushes must not auto-bump or publish releases. VibeShell 1.1.0 is GPL-3.0-only; preserve NOTICE and third-party attribution.
+All feature, fix and documentation PRs target `dev`, the default integration branch. `main` accepts release promotions from the same repository's `dev`; `master` is historical. See CONTRIBUTING.md. CI compilation and release packaging/publication are **manual-only** (`workflow_dispatch`); neither pushes, PRs nor tags trigger them. PR Target remains automatic and all existing required CI checks remain enforced: a maintainer runs CI on the PR head before merging. Release runs from `main`, requires successful manual CI on the exact tagged commit, and defaults to an unpublished draft unless `publish=true` is explicitly selected. Do not auto-bump versions or dispatch publication without authorization. VibeShell 1.1.0 is GPL-3.0-only; preserve NOTICE and third-party attribution.
 
 ## Architecture
 

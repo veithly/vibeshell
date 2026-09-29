@@ -6,7 +6,7 @@
 
   [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
-  [![CI](https://github.com/veithly/vibeshell/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/veithly/vibeshell/actions/workflows/ci.yml)
+  [![Manual CI](https://github.com/veithly/vibeshell/actions/workflows/ci.yml/badge.svg?branch=dev&event=workflow_dispatch)](https://github.com/veithly/vibeshell/actions/workflows/ci.yml)
   [![Release](https://img.shields.io/github/v/release/veithly/vibeshell)](https://github.com/veithly/vibeshell/releases)
   [![GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
@@ -171,6 +171,10 @@ npm run tauri -- dev
 PR 前に `node scripts/check-release.mjs`、`npm test`、`npm run build`、`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked` を実行します。SSH 変更には loopback 限定の Docker テスト `bash scripts/test-ssh-compatibility.sh` もあります。本物の認証情報ストアをテストに使わないでください。
 
 **通常の PR は `dev` 宛てです。** `main` は本リポジトリの `dev` からの検証済みリリース昇格を受け付け、`master` は履歴用です。ビルド操作は使用中アプリの置換や SSH 切断を許可するものではありません。
+
+CI ビルドとリリースは**手動実行のみ**です。マージ前に PR の最新コミットで CI を実行してください。push やタグ作成ではビルドも公開も始まりません。Release は `main` から実行し、明示的に公開を選択しない限りドラフトのままです。必須チェック、署名、対応ソースの検証は維持されます。
+
+Docker の一覧改善と、独立コンテナーセッション・送信プロキシの残作業は [9 月の issue レビュー](docs/ISSUE_TRIAGE_2026-09.md) にまとめています。Docker プラグインのコマンド実行は永続セッションではなく、SSH の SOCKS 転送リスナーは送信プロキシ設定ではありません。
 
 [貢献ガイド](CONTRIBUTING.md) · [アーキテクチャ](AGENTS.md) · [リリース手順](docs/RELEASING.md) · [共同作業 API](docs/AGENT_COLLABORATION.md)
 

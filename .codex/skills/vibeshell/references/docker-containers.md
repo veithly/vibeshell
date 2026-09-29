@@ -1,6 +1,6 @@
 # Docker Containers — docker-containers
 
-Plugin `docker-containers` version `1.4.0`.
+Plugin `docker-containers` version `1.5.0`.
 
 Inspect and manage containers, images, live resource usage and recent container logs through the remote Docker CLI.
 
@@ -17,6 +17,116 @@ vibeshell plugins docs docker-containers
 Required permissions: `["remote_exec","local_exec"]`. Session types: `["ssh","local"]`.
 
 `describe` returns machine-readable action input schemas. `docs` regenerates the current reference, including imported plugins. `run` reuses the selected session. `--confirm` is only for an action the user has explicitly approved; `--sudo` is opt-in and also needs confirmation. No operation bypasses installation, enablement, permission or input checks. Output is bounded and carries timing/truncation metadata. Local targets require a running GUI-owned local session.
+
+## `running-containers`
+
+List running containers with full IDs; paused and restarting containers are not shell-ready.
+
+```sh
+vibeshell plugins run docker-containers running-containers --session SESSION_ID --inputs '{}'
+```
+
+Replace SESSION_ID and supply all fields marked required below. Do not execute placeholder values. Append `--confirm` only after consent for this exact action.
+
+```json
+{
+  "allowSudo": true,
+  "description": "List running containers with full IDs; paused and restarting containers are not shell-ready.",
+  "elevate": false,
+  "id": "running-containers",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+  },
+  "name": "Running containers",
+  "output": {
+    "columns": [
+      "ID",
+      "Name",
+      "Image",
+      "State",
+      "Status",
+      "Ports"
+    ],
+    "delimiter": "\t",
+    "kind": "table"
+  },
+  "requiresConfirmation": false
+}
+```
+
+## `exited-containers`
+
+Inspect exited containers separately without starting or restarting them.
+
+```sh
+vibeshell plugins run docker-containers exited-containers --session SESSION_ID --inputs '{}'
+```
+
+Replace SESSION_ID and supply all fields marked required below. Do not execute placeholder values. Append `--confirm` only after consent for this exact action.
+
+```json
+{
+  "allowSudo": true,
+  "description": "Inspect exited containers separately without starting or restarting them.",
+  "elevate": false,
+  "id": "exited-containers",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+  },
+  "name": "Exited containers",
+  "output": {
+    "columns": [
+      "ID",
+      "Name",
+      "Image",
+      "State",
+      "Status",
+      "Ports"
+    ],
+    "delimiter": "\t",
+    "kind": "table"
+  },
+  "requiresConfirmation": false
+}
+```
+
+## `container-inventory`
+
+Read all container states and full IDs as one JSON object per line, not a JSON array. This does not create a container session.
+
+```sh
+vibeshell plugins run docker-containers container-inventory --session SESSION_ID --inputs '{}'
+```
+
+Replace SESSION_ID and supply all fields marked required below. Do not execute placeholder values. Append `--confirm` only after consent for this exact action.
+
+```json
+{
+  "allowSudo": true,
+  "description": "Read all container states and full IDs as one JSON object per line, not a JSON array. This does not create a container session.",
+  "elevate": false,
+  "id": "container-inventory",
+  "inputSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "required": [],
+    "type": "object"
+  },
+  "name": "Container inventory (JSON Lines)",
+  "output": {
+    "columns": [],
+    "delimiter": "\t",
+    "kind": "text"
+  },
+  "requiresConfirmation": false
+}
+```
 
 ## `containers`
 
@@ -215,7 +325,7 @@ Replace SESSION_ID and supply all fields marked required below. Do not execute p
 
 ## `exec-command`
 
-Run one non-interactive shell command inside a container.
+Run one non-interactive shell command inside a container. This does not create a persistent container session or change the host session.
 
 ```sh
 vibeshell plugins run docker-containers exec-command --session SESSION_ID --inputs '{}'
@@ -226,7 +336,7 @@ Replace SESSION_ID and supply all fields marked required below. Do not execute p
 ```json
 {
   "allowSudo": true,
-  "description": "Run one non-interactive shell command inside a container.",
+  "description": "Run one non-interactive shell command inside a container. This does not create a persistent container session or change the host session.",
   "elevate": false,
   "id": "exec-command",
   "inputSchema": {
