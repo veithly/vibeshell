@@ -39,6 +39,16 @@ const SOCKET_NAME_ENV: &str = "VIBESHELL_IPC_NAME";
 const SESSION_IDLE_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 const SESSION_REAPER_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
+// Attribution is presentation metadata, never authorization. Old clients keep
+// their wire format and their requests are not guessed to be CLI operations.
+#[derive(Serialize, Deserialize)]
+struct WireRequest<T> {
+    #[serde(default)]
+    cli: bool,
+    #[serde(flatten)]
+    message: T,
+}
+
 /// Server metadata returned to CLI for `vibeshell servers`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcServerInfo {
@@ -151,6 +161,10 @@ pub enum IpcMessage {
     },
     /// Attach to an existing session (starts streaming output)
     AttachSession {
+        session_id: String,
+    },
+    /// Command observer: subscribe before submitting, without printing historical output.
+    AttachSessionLive {
         session_id: String,
     },
     /// Detach from a session (keeps it running)
@@ -297,6 +311,10 @@ pub enum IpcMessage {
     SessionOutput {
         session_id: String,
         data: Vec<u8>,
+    },
+    CliTyping {
+        session_id: String,
+        text: String,
     },
     /// Session has ended (sent during streaming attach)
     SessionEnded {
@@ -893,23 +911,34 @@ impl IpcServer {
             .read_line(&mut line)
             .context("Failed to read IPC message")?;
 
-        let message: IpcMessage =
+        let WireRequest { cli, message }: WireRequest<IpcMessage> =
             serde_json::from_str(line.trim()).context("Failed to parse IPC message")?;
 
         log::debug!("[IPC] Received: {:?}", redact_for_log(&message));
 
         // Check for streaming attach — handled specially (keeps connection alive)
-        if let IpcMessage::AttachSession { ref session_id } = message {
+        let replay = matches!(&message, IpcMessage::AttachSession { .. });
+        if let IpcMessage::AttachSession { ref session_id }
+        | IpcMessage::AttachSessionLive { ref session_id } = message
+        {
             let sid = session_id.clone();
             // Release borrows on `stream` so it can be moved into handle_streaming_attach
             drop(reader);
             let _ = writer;
-            return Self::handle_streaming_attach(stream, sid, session_manager, &rt_handle);
+            return Self::handle_streaming_attach(
+                stream,
+                sid,
+                session_manager,
+                &rt_handle,
+                cli.then_some(&database),
+                replay,
+            );
         }
 
         // Handle normal request-response
         let response = Self::handle_message(
             message,
+            cli,
             database,
             session_manager,
             sftp_contexts,
@@ -938,11 +967,35 @@ impl IpcServer {
         session_id: String,
         session_manager: Arc<SessionManager>,
         rt_handle: &tokio::runtime::Handle,
+        cli_database: Option<&Database>,
+        replay: bool,
     ) -> Result<()> {
-        let session = rt_handle
-            .block_on(session_manager.get(&session_id))
-            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
-        rt_handle.block_on(session.attach());
+        let session = rt_handle.block_on(session_manager.get(&session_id));
+        if let Some(db) = cli_database {
+            db.record_history_action(
+                "cli",
+                "session_attach",
+                &session_id,
+                "Attach to session",
+                session.is_some(),
+            )?;
+        }
+        let Some(session) = session else {
+            writeln!(
+                &stream,
+                "{}",
+                serde_json::to_string(&IpcMessage::Error {
+                    message: format!("Session not found: {session_id}")
+                })?
+            )?;
+            return Ok(());
+        };
+        let (backlog, mut receiver) = if replay {
+            rt_handle.block_on(session.subscribe_with_replay())
+        } else {
+            (Vec::new(), session.subscribe())
+        };
+        let mut typing = session.subscribe_cli_typing();
 
         // Send initial Ok acknowledgment
         let mut writer = &stream;
@@ -951,9 +1004,18 @@ impl IpcServer {
         writer.write_all(ok_json.as_bytes())?;
         writer.flush()?;
 
+        // An idle PTY may never write again. Detect the client closing the
+        // socket, rather than leaking an attachment or detaching another client.
+        let mut peer = interprocess::TryClone::try_clone(&stream)?;
+        let (closed_tx, mut closed_rx) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            let _ = std::io::Read::read(&mut peer, &mut [0]);
+            let _ = closed_tx.send(());
+        });
+        rt_handle.block_on(session.attach());
         log::info!("[IPC] Streaming attach started for session {}", session_id);
 
-        for data in rt_handle.block_on(session.replay_output()) {
+        for data in backlog {
             let msg = IpcMessage::SessionOutput {
                 session_id: session_id.clone(),
                 data,
@@ -966,17 +1028,22 @@ impl IpcServer {
             }
         }
 
-        // Subscribe to session output
-        let mut receiver = session.subscribe();
-
         // Stream output to the CLI until the session ends or the CLI disconnects
         loop {
-            match rt_handle.block_on(receiver.recv()) {
-                std::result::Result::Ok(data) => {
-                    let msg = IpcMessage::SessionOutput {
-                        session_id: session_id.clone(),
-                        data,
-                    };
+            let message = rt_handle.block_on(async {
+                tokio::select! { biased;
+                    _ = &mut closed_rx => None,
+                    shape = typing.recv(), if cli_database.is_none() => Some(shape.map(|text| IpcMessage::CliTyping {session_id: session_id.clone(), text})),
+                    bytes = receiver.recv() => Some(bytes.map(|data| IpcMessage::SessionOutput {session_id: session_id.clone(), data})),
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
+                        if session_manager.get(&session_id).await.is_none() {Some(Err(tokio::sync::broadcast::error::RecvError::Closed))} else {Some(Ok(IpcMessage::Ok))}
+                    }
+                }
+            });
+            let Some(message) = message else { break };
+            match message {
+                Ok(IpcMessage::Ok) => continue,
+                std::result::Result::Ok(msg) => {
                     let mut json = match serde_json::to_string(&msg) {
                         std::result::Result::Ok(j) => j,
                         Err(e) => {
@@ -1055,17 +1122,24 @@ impl IpcServer {
     /// Handle an IPC message and return a response
     fn handle_message(
         message: IpcMessage,
+        cli: bool,
         database: Arc<Database>,
         session_manager: Arc<SessionManager>,
         sftp_contexts: Arc<Mutex<std::collections::HashMap<String, SftpContext>>>,
         rt: &tokio::runtime::Handle,
     ) -> IpcMessage {
         use crate::mcp::server::{AgentActivityEvent, AgentActivityStatus};
-        let user_input = matches!(&message, IpcMessage::SendUserInput { .. });
+        if let IpcMessage::SendUserInput { session_id, data } = &message {
+            return match rt.block_on(session_manager.send_keyboard_input(session_id, data, cli)) {
+                Ok(()) => IpcMessage::Ok,
+                Err(error) => IpcMessage::Error {
+                    message: error.to_string(),
+                },
+            };
+        }
         let sensitive = matches!(&message, IpcMessage::SendSensitiveInput { .. });
         let message = match message {
-            IpcMessage::SendUserInput { session_id, data }
-            | IpcMessage::SendSensitiveInput { session_id, data } => {
+            IpcMessage::SendSensitiveInput { session_id, data } => {
                 IpcMessage::SendInput { session_id, data }
             }
             other => other,
@@ -1073,6 +1147,7 @@ impl IpcServer {
         let mut input_guard = None;
         let mut checkpoint = None;
         let mut denied = None;
+        let mut decorate = false;
         let mut descriptions: Vec<(String, Option<String>, String)> = Vec::new();
         match &message {
             IpcMessage::SendInput { session_id, data } => {
@@ -1089,8 +1164,9 @@ impl IpcServer {
                             sensitive,
                         ),
                 );
+                decorate = cli && !redact;
                 checkpoint = Some(saved);
-                if !user_input {
+                {
                     let config = crate::mcp::GuardConfig::from_stored_json(
                         database
                             .get_setting(crate::mcp::guard::GUARD_CONFIG_KEY)
@@ -1104,6 +1180,16 @@ impl IpcServer {
                                 String::from_utf8_lossy(data).chars().flat_map(|ch| ch.escape_debug()).collect()
                             }));
                     }
+                    // Preserve the original whitespace/newlines of a CLI submission when
+                    // all tracked lines agree. A mixed/edited/sensitive line must instead
+                    // use the guard's reconstruction or its explicit placeholder.
+                    let raw = String::from_utf8_lossy(data);
+                    let submitted = raw.strip_suffix('\n').or_else(||raw.strip_suffix('\r'));
+                    let complete = !redact && !commands.is_empty() && commands.iter().all(|c| c.is_verifiable)
+                        && submitted.is_some_and(|text| text.lines().map(str::trim).filter(|s| !s.is_empty()).eq(commands.iter().map(|c| c.command.as_str())));
+                    if let Some(text) = submitted.filter(|_| complete) {
+                        descriptions.push(("cli.input".into(), Some(session_id.clone()), text.to_owned()));
+                    }
                     for command in commands {
                         if config.enabled
                             && (!command.is_verifiable
@@ -1112,11 +1198,14 @@ impl IpcServer {
                         {
                             denied = Some("Terminal command requires approval in the VibeShell Agent Gateway; no input was sent".to_string());
                         }
+                        if complete { continue; }
                         descriptions.push((
                             "cli.input".into(),
                             Some(session_id.clone()),
                             if redact {
                                 "[sensitive input omitted]".into()
+                            } else if !command.is_verifiable {
+                                "Interactive input (final command unavailable)".into()
                             } else {
                                 command.command
                             },
@@ -1128,7 +1217,16 @@ impl IpcServer {
                 session_id,
                 command,
                 ..
-            } => descriptions.push(("cli.exec".into(), Some(session_id.clone()), command.clone())),
+            } | IpcMessage::ExecQuickCommand {session_id, command} => descriptions.push(("cli.exec".into(), Some(session_id.clone()), command.clone())),
+            IpcMessage::ListSessions if cli => descriptions.push(("cli.sessions".into(), None, "List sessions".into())),
+            IpcMessage::ListServers if cli => descriptions.push(("cli.servers".into(), None, "List servers".into())),
+            IpcMessage::PluginList { .. } if cli => descriptions.push(("cli.plugin_list".into(), None, "List plugins".into())),
+            IpcMessage::PluginDescribe { plugin_id, .. } if cli => descriptions.push(("cli.plugin_describe".into(), None, plugin_id.clone())),
+            IpcMessage::DetachSession {session_id} if cli => descriptions.push(("cli.session_detach".into(), Some(session_id.clone()), "Detach from session".into())),
+            IpcMessage::Resize {session_id, cols, rows} if cli => descriptions.push(("cli.resize".into(), Some(session_id.clone()), format!("{cols} × {rows}"))),
+            IpcMessage::SftpInit { session_id } if cli => descriptions.push(("cli.sftp_init".into(), Some(session_id.clone()), "Open SFTP".into())),
+            IpcMessage::SftpPwd { session_id } if cli => descriptions.push(("cli.sftp_pwd".into(), Some(session_id.clone()), "Print working directory".into())),
+            IpcMessage::SftpStat { session_id, path } if cli => descriptions.push(("cli.sftp_stat".into(), Some(session_id.clone()), path.clone())),
             IpcMessage::CreateSession { server_name }
             | IpcMessage::CreateSessionWithCredentials { server_name, .. } => {
                 descriptions.push(("cli.session_create".into(), None, server_name.clone()))
@@ -1163,7 +1261,11 @@ impl IpcServer {
             .into_iter()
             .map(|(tool, session_id, summary)| AgentActivityEvent {
                 id: uuid::Uuid::new_v4().to_string(),
-                tool,
+                tool: if cli {
+                    tool
+                } else {
+                    tool.replacen("cli.", "ipc.", 1)
+                },
                 session_id,
                 summary,
                 status: AgentActivityStatus::Started,
@@ -1171,7 +1273,7 @@ impl IpcServer {
             })
             .collect();
         for event in &events {
-            if let Err(error) = database.agent_activity_record(event) {
+            if let Err(error) = database.activity_record_origin(event, cli.then_some("cli")) {
                 if let Some(saved) = checkpoint {
                     rt.block_on(session_manager.agent_input_tracker.restore(saved));
                 }
@@ -1181,6 +1283,13 @@ impl IpcServer {
         let response = if let Some(message) = denied {
             IpcMessage::Error { message }
         } else {
+            if decorate {
+                if let IpcMessage::SendInput { session_id, data } = &message {
+                    if let Some(session) = rt.block_on(session_manager.get(session_id)) {
+                        session.mark_cli_typing(data);
+                    }
+                }
+            }
             Self::dispatch_message(
                 message,
                 database.clone(),
@@ -1205,7 +1314,7 @@ impl IpcServer {
             if let IpcMessage::SessionCreated { session_id } = &response {
                 event.session_id = Some(session_id.clone());
             }
-            if let Err(error) = database.agent_activity_record(event) {
+            if let Err(error) = database.activity_record_origin(event, cli.then_some("cli")) {
                 log::error!("Operation completed but completion audit could not be saved: {error}");
             }
         }
@@ -2300,21 +2409,11 @@ impl IpcClient {
     /// This is the primary method for CLI-GUI communication.
     /// Returns an error if the GUI is not running.
     pub fn send(message: &IpcMessage) -> Result<IpcMessage> {
-        // Connect to the IPC server
-        let mut stream = Self::connect_stream()?;
+        Self::send_with_origin(message, false)
+    }
 
-        // Serialize the message as JSON with newline delimiter
-        let mut json = serde_json::to_string(message).context("Failed to serialize IPC message")?;
-        json.push('\n');
-
-        // Send the message
-        stream
-            .write_all(json.as_bytes())
-            .context("Failed to send IPC message")?;
-        stream.flush().context("Failed to flush IPC stream")?;
-
-        // Read the response (newline-delimited JSON)
-        let mut reader = BufReader::new(stream);
+    pub fn send_with_origin(message: &IpcMessage, cli: bool) -> Result<IpcMessage> {
+        let mut reader = Self::stream_with_origin(message, cli)?;
         let mut response_line = String::new();
         reader
             .read_line(&mut response_line)
@@ -2334,9 +2433,17 @@ impl IpcClient {
     pub fn connect_streaming(
         message: &IpcMessage,
     ) -> Result<BufReader<interprocess::local_socket::Stream>> {
+        Self::stream_with_origin(message, false)
+    }
+
+    pub fn stream_with_origin(
+        message: &IpcMessage,
+        cli: bool,
+    ) -> Result<BufReader<interprocess::local_socket::Stream>> {
         let mut stream = Self::connect_stream()?;
 
-        let mut json = serde_json::to_string(message).context("Failed to serialize IPC message")?;
+        let mut json = serde_json::to_string(&WireRequest { cli, message })
+            .context("Failed to serialize IPC message")?;
         json.push('\n');
         stream
             .write_all(json.as_bytes())
@@ -2399,6 +2506,7 @@ mod tests {
             IpcMessage::CreateSession {
                 server_name: "no-credentials".into(),
             },
+            true,
             database,
             manager.clone(),
             Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -2408,6 +2516,41 @@ mod tests {
             matches!(response, IpcMessage::Error { message } if message.contains("No saved credentials"))
         );
         assert!(runtime.block_on(manager.list()).is_empty());
+    }
+
+    #[test]
+    fn unmarked_ipc_and_gateway_audit_cannot_appear_as_cli_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::new_at(temp.path().join("roles.db")).unwrap());
+        let manager = Arc::new(SessionManager::new(db.clone()));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        for cli in [false, true] {
+            let msg = IpcMessage::ExecCommand {
+                session_id: "missing".into(),
+                command: "printf test".into(),
+                stdin: None,
+            };
+            let wire = if cli {
+                serde_json::to_string(&WireRequest { cli, message: &msg }).unwrap()
+            } else {
+                serde_json::to_string(&msg).unwrap()
+            };
+            let request: WireRequest<IpcMessage> = serde_json::from_str(&wire).unwrap();
+            assert_eq!(request.cli, cli);
+            IpcServer::handle_message(
+                request.message,
+                request.cli,
+                db.clone(),
+                manager.clone(),
+                Arc::new(Mutex::new(Default::default())),
+                runtime.handle(),
+            );
+        }
+        assert_eq!(db.agent_activity_list(None, None, 20).unwrap().len(), 4);
+        let events = db.activity_page(None, None, 20, true).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.origin.as_deref() == Some("cli")));
+        assert_eq!(events[0].event.id, events[1].event.id);
     }
 
     #[test]
@@ -2631,6 +2774,7 @@ mod tests {
         let send = |message| {
             IpcServer::handle_message(
                 message,
+                true,
                 db.clone(),
                 manager.clone(),
                 contexts.clone(),
@@ -2825,3 +2969,7 @@ mod tests {
         assert!(!is_recoverable_listener_error(&err));
     }
 }
+
+#[cfg(test)]
+#[path = "shared_session_test.rs"]
+mod shared_session_test;

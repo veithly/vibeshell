@@ -169,21 +169,19 @@ pub fn kill_all() -> Result<()> {
 
 /// Execute a command on an existing session.
 ///
-/// When other clients (e.g. GUI) are attached, uses a dedicated SSH exec
-/// channel to avoid injecting keystrokes into the shared PTY. Otherwise
-/// uses the PTY approach which supports interactive prompts.
+/// Use the shared PTY regardless of which client attached first.
 pub fn exec(session_id: &str, command: &[String]) -> Result<()> {
     let joined = command.join(" ");
 
-    if ipc_support::session_client_count(session_id) > 0 {
-        let output = ipc_support::exec_isolated(session_id, &joined)?;
-        print!("{}", output);
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-        return Ok(());
-    }
-
     match terminal::run_command_with_handoff(session_id, &joined)? {
-        CommandHandoff::Completed | CommandHandoff::SessionEnded => Ok(()),
+        CommandHandoff::Completed(Some(0)) | CommandHandoff::SessionEnded(Some(0)) => Ok(()),
+        CommandHandoff::Completed(Some(code)) | CommandHandoff::SessionEnded(Some(code)) => {
+            Err(terminal::RemoteCommandExit(code).into())
+        }
+        CommandHandoff::Completed(None) | CommandHandoff::SessionEnded(None) => {
+            eprintln!("Warning: remote shell did not report an exit status; command success is unverified.");
+            Ok(())
+        }
         CommandHandoff::AwaitingInput => {
             eprintln!();
             eprintln!("Session is waiting for input. Send a response:");
@@ -231,32 +229,7 @@ pub fn ssh_session(alias: &str, command: &[String]) -> Result<()> {
         return terminal::run_interactive(&session_id);
     }
 
-    let joined = command.join(" ");
-
-    if ipc_support::session_client_count(&session_id) > 0 {
-        let output = ipc_support::exec_isolated(&session_id, &joined)?;
-        print!("{}", output);
-        let _ = std::io::Write::flush(&mut std::io::stdout());
-        return Ok(());
-    }
-
-    match terminal::run_command_with_handoff(&session_id, &joined)? {
-        CommandHandoff::Completed | CommandHandoff::SessionEnded => Ok(()),
-        CommandHandoff::AwaitingInput => {
-            eprintln!();
-            eprintln!("Session is waiting for input. Send a response:");
-            eprintln!(
-                "  vibeshell send-key {} y enter   # send 'y' then Enter",
-                alias
-            );
-            eprintln!("  vibeshell send-key {} enter      # press Enter", alias);
-            eprintln!(
-                "  vibeshell ssh-session {}          # attach interactively",
-                alias
-            );
-            Ok(())
-        }
-    }
+    exec(&session_id, command)
 }
 
 /// Send raw keystrokes to a session's PTY.

@@ -40,8 +40,9 @@ use vibeshell_core::ipc::IpcMessage;
       vibeshell ssh prod-web -- uname -a\n\
       vibeshell ssh prod-web --command-file .\\remote-command.sh\n\
       vibeshell ssh-session 001 -- journalctl -u nginx -n 200\n\
-      vibeshell sftp prod-web ls /var/www\n\
-      vibeshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
+          vibeshell sftp prod-web ls /var/www\n\
+          vibeshell sftp --session 001 pwd\n\
+          vibeshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
       vibeshell sftp prod-web\n\
       vibeshell sessions\n\
       vibeshell daemon status"
@@ -119,6 +120,8 @@ enum Commands {
           vibeshell sftp prod-web put ./local-file /remote/file\n\
           vibeshell sftp prod-web put ./local-folder /remote/parent\n\
           vibeshell sftp prod-web sync ./dist /var/www --delete\n\n\
+          vibeshell sftp --session 001 pwd\n\
+          vibeshell sftp --session 001 ls /var/www\n\n\
         Or start the interactive prompt:\n\
           vibeshell sftp prod-web\n\n\
         Supported commands inside the prompt or direct mode:\n\
@@ -299,6 +302,39 @@ struct SftpArgs {
     args: Vec<String>,
 }
 
+impl SftpArgs {
+    fn target_and_command(&self) -> (Option<&str>, Vec<String>) {
+        let mut command = self.args.clone();
+        let mut server = self.server.as_deref();
+        // clap assigns the first positional word to `server`, even with
+        // --session. In that mode, a leading SFTP verb is the command instead.
+        if self.session.is_some()
+            && matches!(
+                server,
+                Some(
+                    "pwd"
+                        | "ls"
+                        | "cd"
+                        | "cat"
+                        | "get"
+                        | "put"
+                        | "sync"
+                        | "mkdir"
+                        | "rm"
+                        | "mv"
+                        | "help"
+                        | "quit"
+                        | "exit"
+                )
+            )
+        {
+            command.insert(0, server.expect("matched SFTP verb").to_string());
+            server = None;
+        }
+        (server, command)
+    }
+}
+
 #[derive(Args)]
 struct RemotePathArgs {
     /// Treat target as an existing session alias/UUID instead of a server name
@@ -473,7 +509,21 @@ struct UninstallArgs {
     tool: String,
 }
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error:#}");
+            let code = error
+                .downcast_ref::<terminal::RemoteCommandExit>()
+                .map(|status| status.0.clamp(1, 255) as u8)
+                .unwrap_or(1);
+            std::process::ExitCode::from(code)
+        }
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     // The native binary carries the canonical Skill. Keep agent directories
@@ -531,11 +581,8 @@ fn main() -> Result<()> {
                 .session
                 .as_ref()
                 .map(|id| session_alias::resolve(id).unwrap_or_else(|| id.clone()));
-            commands::sftp::connect(
-                args.server.as_deref(),
-                resolved_session.as_deref(),
-                &args.args,
-            )
+            let (server, command) = args.target_and_command();
+            commands::sftp::connect(server, resolved_session.as_deref(), &command)
         }
         Some(Commands::Rg(args)) => commands::file_tools::rg(
             &args.target,
@@ -735,6 +782,43 @@ mod tests {
     fn parses_sftp_session_command() {
         let parsed = Cli::try_parse_from(["vibeshell", "sftp", "--session", "abc-123"]);
         assert!(parsed.is_ok(), "vibeshell sftp --session <id> should parse");
+    }
+
+    #[test]
+    fn sftp_session_command_without_server_is_not_interactive() {
+        for words in [
+            vec!["vibeshell", "sftp", "--session", "001", "pwd"],
+            vec!["vibeshell", "sftp", "--session", "001", "ls", "/tmp"],
+        ] {
+            let parsed = Cli::try_parse_from(words).unwrap();
+            let Some(Commands::Sftp(args)) = parsed.command else {
+                panic!("expected sftp");
+            };
+            let (server, command) = args.target_and_command();
+            assert!(server.is_none());
+            assert!(!command.is_empty());
+            assert!(matches!(command[0].as_str(), "pwd" | "ls"));
+        }
+    }
+
+    #[test]
+    fn sftp_session_still_accepts_explicit_server_and_interactive_mode() {
+        let parsed =
+            Cli::try_parse_from(["vibeshell", "sftp", "TencentJP", "--session", "001", "pwd"])
+                .unwrap();
+        let Some(Commands::Sftp(args)) = parsed.command else {
+            panic!("expected sftp");
+        };
+        let (server, command) = args.target_and_command();
+        assert_eq!(server, Some("TencentJP"));
+        assert_eq!(command, ["pwd"]);
+
+        let parsed = Cli::try_parse_from(["vibeshell", "sftp", "--session", "001"]).unwrap();
+        let Some(Commands::Sftp(args)) = parsed.command else {
+            panic!("expected sftp");
+        };
+        let (server, command) = args.target_and_command();
+        assert!(server.is_none() && command.is_empty());
     }
 
     #[test]

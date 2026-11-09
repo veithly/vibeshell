@@ -12,19 +12,11 @@ import { MobileKeyBar } from './MobileKeyBar';
 import { useCompletion } from './useCompletion';
 import { applyTrackedInput, getClickedInputPosition, getCursorMoveSequence } from './inputCursor';
 import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
-import { fireAndForgetInvoke, flushInputBatch } from '../../lib/tauri';
+import { flushInputBatch } from '../../lib/tauri';
 
 type ConnectionStatus = 'initializing' | 'listening' | 'receiving' | 'error';
 
-interface AgentTerminalInputEvent {
-  id: string;
-  sessionId: string;
-  text: string;
-  kind: 'input' | 'typing' | 'exec';
-  timestamp: number;
-}
-
-const AGENT_NOTICE_LIFETIME_MS = 12_000;
+interface CliTypingEvent { sessionId: string; text: string }
 
 function fitTerminalIfRenderable(fitAddon: FitAddon, terminalElement: HTMLElement | null): boolean {
   if (!terminalElement?.isConnected) return false;
@@ -197,8 +189,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     const [terminalInitializationFor, setTerminalInitializationFor] = useState<string | null | undefined>(null);
     const [terminalReadyFor, setTerminalReadyFor] = useState<string | null | undefined>(null);
     const receivedDataRef = useRef(false);
-    const [agentNotices, setAgentNotices] = useState<AgentTerminalInputEvent[]>([]);
-    const agentNoticeTimersRef = useRef<Map<string, number>>(new Map());
     const agentInputColorRef = useRef(themes[0].colors.magenta);
 
     const inputBufferRef = useRef<string>('');
@@ -272,9 +262,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     }, [isCodingAgent]);
 
     const sessionIdRef = useRef(sessionId);
-    const serverIdRef = useRef(serverId);
     useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
-    useEffect(() => { serverIdRef.current = serverId; }, [serverId]);
 
     useImperativeHandle(ref, () => ({
       write: (data: string | Uint8Array) => {
@@ -307,11 +295,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         cursorPositionRef.current = 0;
         completionActionsRef.current.hideCompletions();
         completionActionsRef.current.clearGhostText();
-        if (!isLocalShell && !isCodingAgent && serverIdRef.current) {
-          fireAndForgetInvoke('history_record', {
-            input: { serverId: serverIdRef.current, command: normalized },
-          });
-        }
       },
     }), []);
 
@@ -529,31 +512,18 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
             }
           });
 
-          agentInputUnlisten = await listen<AgentTerminalInputEvent>(
-            'agent-terminal-input',
+          agentInputUnlisten = await listen<CliTypingEvent>(
+            'cli-terminal-typing',
             (event) => {
               const input = event.payload;
               if (input?.sessionId !== sessionId || !input.text) return;
-
-              if (input.kind !== 'typing') {
-                setAgentNotices((current) => [...current, input].slice(-3));
-                const existingTimer = agentNoticeTimersRef.current.get(input.id);
-                if (existingTimer !== undefined) {
-                  window.clearTimeout(existingTimer);
-                }
-                const timer = window.setTimeout(() => {
-                  setAgentNotices((current) => current.filter((item) => item.id !== input.id));
-                  agentNoticeTimersRef.current.delete(input.id);
-                }, AGENT_NOTICE_LIFETIME_MS);
-                agentNoticeTimersRef.current.set(input.id, timer);
-              }
 
               // Shared-shell input is echoed by the remote PTY. Decorating the
               // cells changes only their presentation, so terminal cursor state
               // stays synchronized with the server and the command is not shown
               // twice.
               const xterm = xtermRef.current;
-              if (input.kind === 'typing' && xterm) {
+              if (xterm) {
                 decorateAgentTyping(xterm, input.text, agentInputColorRef.current);
               }
             }
@@ -626,12 +596,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       detachLocalShellSession,
     ]);
 
-    useEffect(() => () => {
-      for (const timer of agentNoticeTimersRef.current.values()) {
-        window.clearTimeout(timer);
-      }
-      agentNoticeTimersRef.current.clear();
-    }, []);
 
     const getXtermTheme = useCallback(() => {
       const currentTheme = themes.find((t) => t.name === settings.appearance.theme);
@@ -868,11 +832,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           const command = previousBuffer.trim();
           if (command) {
             compActions.addToHistory(command);
-            if (!isLocalShell && !isCodingAgent && serverIdRef.current) {
-              fireAndForgetInvoke('history_record', {
-                input: { serverId: serverIdRef.current, command },
-              });
-            }
           }
           compActions.hideCompletions();
           compActions.clearGhostText();
@@ -1078,27 +1037,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
           style={{ backgroundColor: `var(--tokyo-bg, ${bgColor})` }}
           onContextMenu={handleContextMenu}
         />
-
-        {agentNotices.length > 0 && (
-          <div
-            className="pointer-events-none absolute right-3 top-3 z-20 flex max-w-[min(32rem,calc(100%-1.5rem))] flex-col items-end gap-1.5"
-            aria-live="polite"
-          >
-            {agentNotices.map((notice) => (
-              <div
-                key={notice.id}
-                className="flex max-w-full items-start gap-2 rounded-md border border-tokyo-magenta/40 bg-tokyo-bg-dark/95 px-2.5 py-1.5 shadow-lg"
-              >
-                <span className="mt-0.5 flex-shrink-0 rounded bg-tokyo-magenta/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-tokyo-magenta">
-                  AI · {notice.kind === 'input' ? 'Shell' : 'Exec'}
-                </span>
-                <code className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-xs text-tokyo-magenta">
-                  {notice.text}
-                </code>
-              </div>
-            ))}
-          </div>
-        )}
 
         <MobileKeyBar
           onSend={handleMobileKey}

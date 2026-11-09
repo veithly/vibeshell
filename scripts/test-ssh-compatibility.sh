@@ -33,3 +33,9 @@ if ! cargo test -p vibeshell-desktop --test ssh_integration_test -- --ignored --
   echo "Fixture server diagnostics: $fixture/sshd-failure.log" >&2
   exit 1
 fi
+
+# Exercise the actual CLI against the same PTY as the desktop IPC client.
+cargo build -p vshell
+export VIBESHELL_TEST_CLI="$PWD/target/debug/vibeshell"
+export VIBESHELL_IPC_NAME="test-shared-$$.sock"
+cargo test -p vibeshell-desktop --lib cli_and_desktop_share_one_shell_and_one_attributed_history -- --ignored --test-threads=1
