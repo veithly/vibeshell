@@ -48,6 +48,9 @@ pub struct SyncExchangeResponse {
     pub has_more: bool,
 }
 
+// async_trait generates boxed futures that are already #[must_use]; recent
+// Clippy versions flag the macro's redundant attribute on both trait methods.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait SyncTransport: Send + Sync {
     async fn initialize(
