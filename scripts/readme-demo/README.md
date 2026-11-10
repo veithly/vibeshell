@@ -25,7 +25,7 @@ Open `http://127.0.0.1:1421/scripts/readme-demo/index.html?scene=collaboration` 
 
 | Screenshot | Starting scene | Actual UI interaction |
 | --- | --- | --- |
-| `tour-collaboration.png` | `collaboration` | Open **Agent command history**. The terminal, host status and durable-activity components render fixture responses. |
+| `tour-collaboration.png` | `collaboration` | Open **History**. The terminal, host status and durable-activity components render fixture responses. |
 | `tour-agent-approval.png` | `collaboration` | Queue the demo request with `window.__VIBESHELL_DEMO__.approveDemo()`; wait for the real approval dialog. Do not present the request as executed. |
 | `tour-agent-review.png` | `coding` | **More actions → Workspace changes**; the first changed file opens in the real diff view. |
 | `tour-connections.png` | `coding` | **New Session → SSH → Icon view**. |
@@ -50,7 +50,6 @@ Feature descriptions in the three READMEs were traced to the actual implementati
 | Git status and line-by-line review | `src/components/WorkspaceChangesPanel/WorkspaceChangesPanel.tsx` |
 | Shared-session UI and operation history | `src/stores/sessionStore.ts`, `src/stores/agentActivityStore.ts`, `src/components/AgentActivityPanel/` |
 | Human approvals | `src/components/AgentApprovalDialog/`, `src-tauri/src/mcp/guard.rs` |
-| Quick command output | `src/components/QuickCommandDialog/` |
 | Local/remote file tabs, Markdown and draft preservation | `src/components/FileWorkspace/`, `src/stores/fileWorkspaceStore.ts` |
 | Custom CSS, preview and emergency recovery | `src/lib/customTheme.ts`, `src/components/Settings/CustomThemeEditor.tsx`, `docs/local-files-and-css-themes.md` |
 | SFTP, synchronization integrity and excluded paths | `src/components/SftpPanel/`, `src-tauri/src/sftp/sync.rs` |

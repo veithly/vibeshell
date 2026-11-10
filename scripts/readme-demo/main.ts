@@ -52,14 +52,13 @@ const files: Record<string, string> = {
   [`${root}/compose.yaml`]: 'services:\n  api:\n    image: northstar/api:preview\n    ports: ["127.0.0.1:8080:8080"]\n    restart: unless-stopped\n  worker:\n    image: northstar/worker:preview\n    environment:\n      QUEUE: jobs-preview\n',
 };
 const activity = [
-  ['mcp:session_exec', 'docker compose ps', 'demo-session-api'],
-  ['mcp:sftp_read_file', `Read ${root}/src/health.ts`, 'demo-session-api'],
-  ['cli:session_exec', 'curl -fsS http://127.0.0.1:8080/health', 'demo-session-api'],
-  ['mcp:plugin_execute', 'docker-containers · logs\ncontainer=api · tail=30', 'demo-session-api'],
-  ['cli:session_create', 'Opened a separate worker session', 'demo-session-worker'],
-  ['mcp:session_exec', 'git diff --stat\n# Inspect only; leave the shared prompt alone', 'demo-session-api'],
-].map(([tool, summary, sessionId], index) => ({ id: `demo-operation-${index}`, sequence: index + 1,
-  tool, summary, sessionId, status: 'succeeded' as const, timestamp: time - (6 - index) * 60000 }));
+  ['user', 'input', 'docker compose ps', 'demo-session-api'],
+  ['cli', 'cli.sftp_read', `${root}/src/health.ts`, 'demo-session-api'],
+  ['cli', 'cli.input', 'curl -fsS http://127.0.0.1:8080/health', 'demo-session-api'],
+  ['cli', 'cli.session_create', 'Northstar worker', 'demo-session-worker'],
+  ['user', 'input', 'git diff --stat', 'demo-session-api'],
+].map(([origin, tool, summary, sessionId], index) => ({ id: `demo-operation-${index}`, sequence: index + 1,
+  origin, tool, summary, sessionId, status: 'succeeded' as const, timestamp: time - (5 - index) * 60000 }));
 
 const settings = {
   terminal: { fontSize: 15, fontFamily: 'Monaco', cursorStyle: 'bar', cursorBlink: false, scrollbackLines: 10000 },
@@ -100,7 +99,7 @@ const ansi = { reset: '\x1b[0m', blue: '\x1b[38;5;75m', green: '\x1b[38;5;78m', 
 const prompt = `${ansi.green}demo@staging-api${ansi.reset} ${ansi.blue}${root}${ansi.reset} $ `;
 const terminalText = (id: string) => id === 'demo-session-agent'
   ? `${ansi.blue}Codex · Northstar workspace${ansi.reset}\r\n${ansi.dim}Synthetic agent transcript for documentation${ansi.reset}\r\n\r\n› Add a bounded retry to the health check.\r\n  Keep the last error and show me the diff.\r\n\r\n  Read src/health.ts\r\n  Read tests/health.test.ts\r\n\r\n  The request used to retry without a limit.\r\n  I changed it to three attempts with backoff.\r\n\r\n${ansi.green}✓${ansi.reset} Keep a 5-second timeout per request\r\n${ansi.green}✓${ansi.reset} Preserve the final error\r\n${ansi.green}✓${ansi.reset} Add failure and retry tests\r\n\r\n  src/health.ts          +9  -2\r\n  tests/health.test.ts   +8\r\n\r\n  Review the changes in the panel beside me.\r\n  No deployment or service restart was run.\r\n\r\n› `
-  : `${ansi.blue}NORTHSTAR / STAGING${ansi.reset}\r\n${ansi.dim}Documentation fixture · no live SSH connection${ansi.reset}\r\n\r\n${prompt}docker compose ps\r\nNAME          IMAGE                         STATUS\r\napi           northstar/api:preview          Up 2 hours\r\nworker        northstar/worker:preview       Up 2 hours\r\npostgres      postgres:16                   Up 6 days\r\nredis         redis:7                       Up 6 days\r\n\r\n${prompt}curl -fsS localhost:8080/health\r\n${ansi.green}{"status":"ready","queue":"ok","database":"ok"}${ansi.reset}\r\n\r\n${prompt}git diff --stat\r\n src/health.ts         | 11 +++++++++--\r\n tests/health.test.ts  |  8 ++++++++\r\n 2 files changed, 17 insertions(+), 2 deletions(-)\r\n\r\n${ansi.dim}The shared prompt stays yours.\r\nIndependent agent commands appear in activity history.${ansi.reset}\r\n\r\n${prompt}`;
+  : `${ansi.blue}NORTHSTAR / STAGING${ansi.reset}\r\n${ansi.dim}Documentation fixture · no live SSH connection${ansi.reset}\r\n\r\n${prompt}docker compose ps\r\nNAME          IMAGE                         STATUS\r\napi           northstar/api:preview          Up 2 hours\r\nworker        northstar/worker:preview       Up 2 hours\r\npostgres      postgres:16                   Up 6 days\r\nredis         redis:7                       Up 6 days\r\n\r\n${prompt}curl -fsS localhost:8080/health\r\n${ansi.green}{"status":"ready","queue":"ok","database":"ok"}${ansi.reset}\r\n\r\n${prompt}git diff --stat\r\n src/health.ts         | 11 +++++++++--\r\n tests/health.test.ts  |  8 ++++++++\r\n 2 files changed, 17 insertions(+), 2 deletions(-)\r\n\r\n${ansi.dim}One shared shell. Open History to see who sent each command.${ansi.reset}\r\n\r\n${prompt}`;
 const output = async (id: string, text: string) => emit('session-output', {
   session_id: id, data: btoa(String.fromCharCode(...new TextEncoder().encode(text))),
 });

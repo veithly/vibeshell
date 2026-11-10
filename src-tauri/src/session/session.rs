@@ -44,6 +44,8 @@ pub struct Session {
     // Broadcast channel for output to all clients
     output_tx: broadcast::Sender<Vec<u8>>,
 
+    cli_typing: broadcast::Sender<String>,
+
     // Buffered output replay so late listeners still receive the initial shell prompt.
     output_replay: Arc<Mutex<OutputReplayBuffer>>,
 
@@ -73,11 +75,36 @@ impl Session {
             ssh_client: Arc::new(Mutex::new(None)),
             input_tx,
             output_tx,
+            cli_typing: broadcast::channel(128).0,
             output_replay: Arc::new(Mutex::new(OutputReplayBuffer::default())),
             output_forwarder_started: Arc::new(Mutex::new(false)),
             client_count: Arc::new(RwLock::new(0)),
             last_activity: Arc::new(RwLock::new(Instant::now())),
         }
+    }
+
+    pub fn subscribe_cli_typing(&self) -> broadcast::Receiver<String> {
+        self.cli_typing.subscribe()
+    }
+
+    /// Decoration only: transmit line shape, never input contents/escape codes.
+    pub fn mark_cli_typing(&self, data: &[u8]) {
+        let Ok(text) = std::str::from_utf8(data) else {
+            return;
+        };
+        let text = text.trim_end_matches(['\r', '\n']);
+        if text.is_empty()
+            || text
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\r')
+        {
+            return;
+        }
+        let shape = text
+            .chars()
+            .map(|c| if c == '\r' || c == '\n' { c } else { ' ' })
+            .collect();
+        let _ = self.cli_typing.send(shape);
     }
 
     pub async fn mark_activity(&self) {
@@ -147,14 +174,21 @@ impl Session {
         replay.snapshot()
     }
 
+    /// Snapshot and subscribe under the publishing lock: no gap or duplicate
+    /// between buffered and live bytes when a second client attaches.
+    pub async fn subscribe_with_replay(&self) -> (Vec<Vec<u8>>, broadcast::Receiver<Vec<u8>>) {
+        let replay = self.output_replay.lock().await;
+        (replay.snapshot(), self.subscribe())
+    }
+
     pub async fn publish_output(&self, data: Vec<u8>) {
         {
             let mut replay = self.output_replay.lock().await;
             replay.push(&data);
+            let _ = self.output_tx.send(data);
         }
 
         self.mark_activity().await;
-        let _ = self.output_tx.send(data);
     }
 
     pub async fn try_start_output_forwarder(&self) -> bool {

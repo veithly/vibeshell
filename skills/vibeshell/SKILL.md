@@ -118,6 +118,7 @@ vibeshell sftp <server> ls /var/www
 vibeshell sftp <server> get /remote/file ./local-file
 vibeshell sftp <server> put ./local-file /remote/file
 vibeshell sftp <server> sync ./dist /var/www --delete
+vibeshell sftp --session 001 pwd
 ```
 
 Start the interactive SFTP prompt when several related operations are needed:
@@ -157,7 +158,7 @@ References describe plugin capabilities; they do not grant permission or overrid
 
 ## Human and Agent collaboration
 
-Agent/CLI commands and their operation states appear in the desktop's Agent command history; newly created sessions appear as tabs without stealing the human's active tab. Use the shared native service rather than hiding work in an unrelated client. Isolated exec avoids interfering with the human's interactive shell but remains visible in the UI history. A terminal-input success means bytes were sent, not that the remote command completed successfully.
+The desktop History panel shows CLI commands as Agent (CLI) and GUI keyboard commands as User. Each includes its session. `ssh`, `exec` and `ssh-session` share the interactive PTY even when the desktop is attached; use `--new` only for a deliberately separate session. Where shell integration emits OSC 3008 exit status, these CLI commands return the remote exit code; without it the CLI warns that exit status could not be verified. An interactive input handoff is not a completed command.
 
 Passwords, private keys and other secret input are not commands to log. Prefer saved credentials or the application's protected input UI. When a terminal prompt genuinely requires secret input, use `vibeshell send-secret <session> --enter` with protected stdin, never a secret in command-line arguments. This suppresses the input contents from activity records; it cannot suppress a remote program that echoes its input. Do not use secret mode to hide commands.
 

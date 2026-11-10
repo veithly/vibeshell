@@ -16,13 +16,6 @@ interface TestSession {
   agentId?: string;
 }
 
-interface TestMenuItem {
-  id: string;
-  label: string;
-  disabled?: boolean;
-  pressed?: boolean;
-  onSelect: () => void;
-}
 
 const testState = vi.hoisted(() => ({
   sessions: [] as TestSession[],
@@ -284,33 +277,15 @@ vi.mock('./components/SessionTabs', () => ({
   SessionTabs: ({ rightActions }: { rightActions: ReactNode }) => <div>{rightActions}</div>,
 }));
 
-vi.mock('./components/MobileWorkspaceActions', () => ({
-  MobileWorkspaceActions: ({ menuItems }: { menuItems: TestMenuItem[] }) => (
-    <div data-testid="mobile-workspace-actions">
-      {menuItems.map((item) => (
-        <button
-          key={item.id}
-          data-testid={`mobile-action-${item.id}`}
-          disabled={item.disabled}
-          aria-pressed={item.pressed}
-          onClick={item.onSelect}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
-  ),
-}));
 
 vi.mock('./components/TitleBar', () => ({ TitleBar: () => null }));
 vi.mock('./components/AddServerDialog', () => ({ AddServerDialog: () => null }));
 vi.mock('./components/EditServerDialog', () => ({ EditServerDialog: () => null }));
 vi.mock('./components/ConnectDialog', () => ({ ConnectDialog: () => null }));
 vi.mock('./components/SelectServerDialog', () => ({ SelectServerDialog: () => null }));
-vi.mock('./components/QuickCommandDialog', () => ({ QuickCommandDialog: () => null }));
 vi.mock('./components/ConfirmDialog', () => ({ ConfirmDialog: () => null }));
 vi.mock('./components/Notifications', () => ({ Notifications: () => null }));
-vi.mock('./components/AgentActivityPanel', () => ({ AgentActivityPanel: () => null, AgentActivityNotice: () => null }));
+vi.mock('./components/AgentActivityPanel', () => ({ AgentActivityPanel: () => null }));
 vi.mock('./components/AgentApprovalDialog', () => ({ AgentApprovalDialog: () => null }));
 vi.mock('./components/WorkspaceChangesPanel', () => ({ WorkspaceChangesPanel: () => null }));
 vi.mock('./components/SessionPluginDock', () => ({ SessionPluginDock: () => null }));
@@ -401,11 +376,11 @@ describe('App workspace actions', () => {
     render(<App />);
 
     // The toolbar launcher lists plugins compatible with the active session.
-    const launcher = await screen.findByRole('button', { name: 'plugins.openTabLauncher' });
+    const launcher = await screen.findByRole('button', { name: 'common.more' });
     expect(launcher).toBeEnabled();
     fireEvent.click(launcher);
 
-    const pluginItem = await screen.findByRole('menuitem');
+    const pluginItem = await screen.findByRole('menuitem', { name: 'plugins.catalog.docker-containers.name' });
     fireEvent.click(pluginItem);
 
     // The plugin takes over the workspace area and offers split controls.
@@ -431,34 +406,21 @@ describe('App workspace actions', () => {
     expect(within(pluginPane).getAllByText('Containers').length).toBeGreaterThan(0);
   });
 
-  it('keeps compact coding-agent, workspace-change, and gateway actions distinct', async () => {
+  it('exposes one history action independent of gateway availability', async () => {
     const { rerender } = render(<App />);
 
-    expect(await screen.findByTestId('mobile-action-coding-agent')).toHaveTextContent(
-      'codingAgent.start'
-    );
-    expect(screen.getByTestId('mobile-action-workspace-changes')).toHaveTextContent(
-      'workspaceChanges.title'
-    );
-    expect(screen.getByTestId('mobile-action-workspace-changes')).toBeEnabled();
-    expect(screen.getByTestId('mobile-action-agent-activity')).toHaveTextContent(
-      'agentActivity.title'
-    );
-
-    testState.sessions = [codingAgentSession({ cwd: undefined })];
+    expect(await screen.findByRole('button', {name: 'sidebar.history'})).toBeEnabled();
+    expect(screen.queryByRole('button', {name: 'sidebar.sftp'})).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name: 'common.more'}));
+    expect(screen.queryByRole('menuitem', {name: 'sidebar.history'})).not.toBeInTheDocument();
+    for (const name of ['codingAgent.start', 'agentActivity.title', 'sidebar.quickCmd']) {
+      expect(screen.queryByRole('menuitem', {name})).not.toBeInTheDocument();
+    }
+    expect(screen.getByRole('menuitem', {name: 'workspaceChanges.title'})).toBeEnabled();
+    testState.sessions = [codingAgentSession({cwd: undefined})];
+    testState.capabilities = {...testState.capabilities, localShell: false, agentGateway: false};
     rerender(<App />);
-    expect(screen.getByTestId('mobile-action-workspace-changes')).toBeDisabled();
-
-    testState.sessions = [codingAgentSession({ purpose: 'shell', cwd: '/workspace' })];
-    testState.capabilities = {
-      ...testState.capabilities,
-      localShell: false,
-      agentGateway: false,
-    };
-    rerender(<App />);
-
-    expect(screen.queryByTestId('mobile-action-coding-agent')).not.toBeInTheDocument();
-    expect(screen.getByTestId('mobile-action-workspace-changes')).toBeDisabled();
-    expect(screen.queryByTestId('mobile-action-agent-activity')).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', {name: 'workspaceChanges.title'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'sidebar.history'})).toBeEnabled();
   });
 });

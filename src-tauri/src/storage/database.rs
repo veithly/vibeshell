@@ -205,6 +205,7 @@ impl Database {
             let _ = conn.execute(sql, []);
         }
 
+        migrate_session_history(&mut conn)?;
         sync::initialize(&mut conn)?;
 
         migrate_plaintext_credentials(&conn)?;
@@ -723,8 +724,65 @@ fn migrate_plaintext_credentials(conn: &Connection) -> Result<()> {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct StoredAgentActivity {
     pub sequence: i64,
+    pub origin: Option<String>,
     #[serde(flatten)]
     pub event: crate::mcp::server::AgentActivityEvent,
+}
+
+fn migrate_session_history(conn: &mut Connection) -> Result<()> {
+    use crate::mcp::server::{AgentActivityEvent, AgentActivityStatus};
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('agent_activity') WHERE name='origin')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        tx.execute_batch("ALTER TABLE agent_activity ADD COLUMN origin TEXT; CREATE INDEX idx_history_sequence ON agent_activity(sequence) WHERE origin IS NOT NULL;")?;
+        // Previous GUI history was grouped by server/command. Preserve its
+        // known last occurrence, without inventing the earlier runs or a session ID.
+        let mut history = tx.prepare("SELECT h.id, s.name, h.command, h.last_used_at FROM command_history h JOIN servers s ON s.id=h.server_id ORDER BY h.last_used_at, h.id")?;
+        let mut rows = history.query([])?;
+        while let Some(row) = rows.next()? {
+            let event = AgentActivityEvent {
+                id: row.get(0)?,
+                tool: row.get(1)?,
+                summary: row.get(2)?,
+                status: AgentActivityStatus::Succeeded,
+                session_id: None,
+                timestamp: 1000 * row.get::<_, i64>(3)?,
+            };
+            tx.execute(
+                "INSERT INTO agent_activity(payload, origin) VALUES (?1,'user')",
+                [encrypt_credential_value(&serde_json::to_string(&event)?)?],
+            )?;
+        }
+        // Older IPC records did not distinguish desktop forwarding from CLI.
+        // Keep them accessible, but never label them Agent retroactively.
+        let mut previous = tx.prepare(
+            "SELECT sequence,payload FROM agent_activity WHERE origin IS NULL ORDER BY sequence",
+        )?;
+        let mut rows = previous.query([])?;
+        while let Some(row) = rows.next()? {
+            let payload: String = row.get(1)?;
+            // Leave an unreadable legacy row untouched; a stale key or corrupt
+            // audit entry must not prevent the user from opening their servers.
+            let Some(event) = decrypt_credential_value(&payload)
+                .ok()
+                .and_then(|plain| serde_json::from_str::<AgentActivityEvent>(&plain).ok())
+            else {
+                continue;
+            };
+            if event.tool.starts_with("cli.") {
+                tx.execute(
+                    "UPDATE agent_activity SET origin='legacy' WHERE sequence=?1",
+                    [row.get::<_, i64>(0)?],
+                )?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 /// Explicit credential patch. Never place secrets in server-list responses or logs.
@@ -743,13 +801,45 @@ impl Database {
         &self,
         event: &crate::mcp::server::AgentActivityEvent,
     ) -> Result<()> {
+        self.activity_record_origin(event, None)
+    }
+
+    pub fn record_history_action(
+        &self,
+        origin: &str,
+        tool: &str,
+        session_id: &str,
+        summary: &str,
+        succeeded: bool,
+    ) -> Result<()> {
+        use crate::mcp::server::{AgentActivityEvent, AgentActivityStatus};
+        let event = AgentActivityEvent {
+            id: Uuid::new_v4().to_string(),
+            tool: tool.into(),
+            summary: summary.into(),
+            status: if succeeded {
+                AgentActivityStatus::Succeeded
+            } else {
+                AgentActivityStatus::Failed
+            },
+            session_id: Some(session_id.into()),
+            timestamp: Utc::now().timestamp_millis(),
+        };
+        self.activity_record_origin(&event, Some(origin))
+    }
+
+    pub fn activity_record_origin(
+        &self,
+        event: &crate::mcp::server::AgentActivityEvent,
+        origin: Option<&str>,
+    ) -> Result<()> {
         if event.summary.len() > 256 * 1024 {
             anyhow::bail!("Agent command exceeds the 256 KiB audit limit");
         }
         let payload = encrypt_credential_value(&serde_json::to_string(event)?)?;
         self.conn.lock().unwrap().execute(
-            "INSERT INTO agent_activity (payload) VALUES (?1)",
-            [payload],
+            "INSERT INTO agent_activity (payload, origin) VALUES (?1, ?2)",
+            rusqlite::params![payload, origin],
         )?;
         Ok(())
     }
@@ -760,25 +850,47 @@ impl Database {
         before: Option<i64>,
         limit: u32,
     ) -> Result<Vec<StoredAgentActivity>> {
+        self.activity_page(after, before, limit, false)
+    }
+
+    pub fn activity_page(
+        &self,
+        after: Option<i64>,
+        before: Option<i64>,
+        limit: u32,
+        history_only: bool,
+    ) -> Result<Vec<StoredAgentActivity>> {
         let conn = self.conn.lock().unwrap();
         // Incremental reads are ascending so a busy agent cannot skip events
         // when one page fills; history pages read newest first.
         let order = if after.is_some() { "ASC" } else { "DESC" };
+        let filter = if history_only {
+            "AND origin IS NOT NULL"
+        } else {
+            ""
+        };
         let mut query = conn.prepare(&format!(
-            "SELECT sequence, payload FROM agent_activity
-             WHERE (?1 IS NULL OR sequence > ?1) AND (?2 IS NULL OR sequence < ?2)
+            "SELECT sequence, payload, origin FROM agent_activity
+             WHERE (?1 IS NULL OR sequence > ?1) AND (?2 IS NULL OR sequence < ?2) {filter}
              ORDER BY sequence {order} LIMIT ?3"
         ))?;
         let rows = query
             .query_map(
                 rusqlite::params![after, before, limit.clamp(1, 500)],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(sequence, payload)| {
+            .map(|(sequence, payload, origin)| {
                 Ok(StoredAgentActivity {
                     sequence,
+                    origin,
                     event: serde_json::from_str(&decrypt_credential_value(&payload)?)?,
                 })
             })

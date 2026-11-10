@@ -10,6 +10,7 @@
 //!   for each chunk of stdin data.
 //! - Resize: Terminal resize events are forwarded via `Resize` messages.
 
+use std::fmt;
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -26,9 +27,98 @@ const COMMAND_IDLE_TIMEOUT: Duration = Duration::from_millis(1200);
 const COMMAND_MAX_DURATION: Duration = Duration::from_secs(20);
 
 pub enum CommandHandoff {
-    Completed,
+    Completed(Option<i32>),
     AwaitingInput,
-    SessionEnded,
+    SessionEnded(Option<i32>),
+}
+
+#[derive(Debug)]
+pub struct RemoteCommandExit(pub i32);
+
+impl fmt::Display for RemoteCommandExit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Remote command exited with status {}", self.0)
+    }
+}
+
+impl std::error::Error for RemoteCommandExit {}
+
+/// Shell integration emits OSC 3008 start/end events with a matching command
+/// ID and an exit status. Track them across arbitrary streaming byte chunks;
+/// a prompt alone cannot tell us whether the command succeeded.
+#[derive(Default)]
+struct ShellCommandStatus {
+    escape: bool,
+    in_osc: bool,
+    osc: Vec<u8>,
+    command_id: Option<String>,
+    exit_code: Option<i32>,
+}
+
+impl ShellCommandStatus {
+    fn observe(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            if self.in_osc {
+                if byte == b'\x07' || (byte == b'\\' && self.osc.last() == Some(&b'\x1b')) {
+                    if byte == b'\\' {
+                        self.osc.pop();
+                    }
+                    self.finish_osc();
+                } else if self.osc.len() < 2048 {
+                    self.osc.push(byte);
+                } else {
+                    self.osc.clear();
+                    self.in_osc = false;
+                }
+            } else if self.escape && byte == b']' {
+                self.in_osc = true;
+                self.osc.clear();
+                self.escape = false;
+            } else {
+                self.escape = byte == b'\x1b';
+            }
+        }
+    }
+
+    fn finish_osc(&mut self) {
+        self.in_osc = false;
+        self.escape = false;
+        if let Ok(payload) = std::str::from_utf8(&self.osc) {
+            let mut parts = payload.split(';');
+            if parts.next() == Some("3008") {
+                let mut start = None;
+                let mut end = None;
+                let mut kind = None;
+                let mut outcome = None;
+                let mut status = None;
+                for part in parts {
+                    if let Some((key, value)) = part.split_once('=') {
+                        match key {
+                            "start" => start = Some(value),
+                            "end" => end = Some(value),
+                            "type" => kind = Some(value),
+                            "exit" => outcome = Some(value),
+                            "status" => status = value.parse::<i32>().ok(),
+                            _ => {}
+                        }
+                    }
+                }
+                if kind == Some("command") {
+                    if let Some(id) = start {
+                        self.command_id = Some(id.to_owned());
+                        self.exit_code = None;
+                    }
+                } else if end.is_some() && end == self.command_id.as_deref() {
+                    self.exit_code = match outcome {
+                        Some("success") => Some(0),
+                        Some("failure") => status.filter(|code| *code != 0).or(Some(1)),
+                        _ => None,
+                    };
+                }
+            }
+        }
+        self.osc.clear();
+    }
 }
 
 /// Run an interactive terminal session connected to the given session ID.
@@ -167,8 +257,10 @@ fn run_interactive_loop<R: BufRead + Send + 'static>(session_id: &str, reader: R
         }
     }
 
-    // Wait for output thread to finish
-    let _ = output_thread.join();
+    // Ctrl+] leaves the shared shell running; do not block waiting for its EOF.
+    if done.load(Ordering::SeqCst) {
+        let _ = output_thread.join();
+    }
 
     if !done.load(Ordering::SeqCst) {
         eprintln!(
@@ -289,7 +381,7 @@ fn looks_like_input_prompt(recent: &str) -> bool {
 }
 
 pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<CommandHandoff> {
-    let mut reader = ipc_support::connect_streaming(&IpcMessage::AttachSession {
+    let mut reader = ipc_support::connect_streaming(&IpcMessage::AttachSessionLive {
         session_id: session_id.to_string(),
     })?;
 
@@ -308,7 +400,6 @@ pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<Comma
     }
 
     let (output_tx, output_rx) = std::sync::mpsc::channel::<IpcMessage>();
-    let session_id_owned = session_id.to_string();
 
     let reader_thread = std::thread::spawn(move || {
         let mut line = String::new();
@@ -325,7 +416,8 @@ pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<Comma
                     match serde_json::from_str::<IpcMessage>(trimmed) {
                         Ok(message @ IpcMessage::SessionOutput { .. })
                         | Ok(message @ IpcMessage::SessionEnded { .. }) => {
-                            if output_tx.send(message).is_err() {
+                            let ended = matches!(&message, IpcMessage::SessionEnded { .. });
+                            if output_tx.send(message).is_err() || ended {
                                 break;
                             }
                         }
@@ -350,6 +442,7 @@ pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<Comma
     let start = Instant::now();
     let mut recent = String::new();
     let mut saw_output = false;
+    let mut shell_status = ShellCommandStatus::default();
 
     loop {
         if start.elapsed() >= COMMAND_MAX_DURATION {
@@ -359,6 +452,7 @@ pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<Comma
         match output_rx.recv_timeout(COMMAND_IDLE_TIMEOUT) {
             Ok(IpcMessage::SessionOutput { data, .. }) => {
                 saw_output = true;
+                shell_status.observe(&data);
                 let text = String::from_utf8_lossy(&data);
                 print!("{}", text);
                 let _ = std::io::stdout().flush();
@@ -369,7 +463,7 @@ pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<Comma
                 if !reason.is_empty() {
                     eprintln!("\nSession ended: {}", reason);
                 }
-                return Ok(CommandHandoff::SessionEnded);
+                return Ok(CommandHandoff::SessionEnded(shell_status.exit_code));
             }
             Ok(_) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
@@ -377,19 +471,20 @@ pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<Comma
                     continue;
                 }
 
-                let _ = ipc_support::send(&IpcMessage::DetachSession {
-                    session_id: session_id_owned.clone(),
-                });
-
                 if looks_like_input_prompt(&recent) || !looks_like_shell_prompt(&recent) {
                     return Ok(CommandHandoff::AwaitingInput);
                 }
 
-                return Ok(CommandHandoff::Completed);
+                return Ok(CommandHandoff::Completed(shell_status.exit_code));
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 let _ = reader_thread.join();
-                return Ok(CommandHandoff::Completed);
+                return shell_status
+                    .exit_code
+                    .map(|code| CommandHandoff::Completed(Some(code)))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Lost terminal output before command status was known")
+                    });
             }
         }
     }
@@ -399,7 +494,35 @@ pub fn run_command_with_handoff(session_id: &str, command: &str) -> Result<Comma
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-    use super::{key_event_to_bytes, looks_like_input_prompt, looks_like_shell_prompt};
+    use super::{
+        key_event_to_bytes, looks_like_input_prompt, looks_like_shell_prompt, ShellCommandStatus,
+    };
+
+    #[test]
+    fn shell_status_tracks_only_matching_completed_command_across_chunks() {
+        let mut status = ShellCommandStatus::default();
+        status.observe(b"\x1b]3008;start=older;type=shell\x1b\\");
+        status.observe(b"\x1b]3008;start=abc;type=command;cwd=/home/ubuntu\x1b");
+        status.observe(b"\\some output\r\n\x1b]3008;end=unrelated;exit=failure;status=9\x07");
+        assert_eq!(status.exit_code, None);
+        status.observe(b"\x1b]3008;end=abc;exit=failure;sta");
+        status.observe(b"tus=42\x1b\\");
+        assert_eq!(status.exit_code, Some(42));
+        status.observe(b"\x1b]3008;start=def;type=command\x07");
+        assert_eq!(status.exit_code, None);
+        status.observe(b"\x1b]3008;end=def;exit=success\x1b\\");
+        assert_eq!(status.exit_code, Some(0));
+    }
+
+    #[test]
+    fn shell_status_never_interprets_a_prompt_as_success() {
+        let mut status = ShellCommandStatus::default();
+        status.observe(b"$ false\r\n$ ");
+        assert_eq!(status.exit_code, None);
+        status.observe(b"\x1b]3008;start=1;type=command\x1b\\");
+        status.observe(b"\x1b]3008;end=1;exit=failure\x1b\\");
+        assert_eq!(status.exit_code, Some(1));
+    }
 
     #[test]
     fn detects_common_shell_prompts() {

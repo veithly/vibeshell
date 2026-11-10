@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useEffect } from 'react';
-import { AlertCircle, Code2, Loader2, Maximize2, Minimize2, Minus, Monitor, Wifi, X } from 'lucide-react';
+import { AlertCircle, Loader2, Maximize2, Minimize2, Minus, Monitor, Wifi, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useRuntimeCapabilitiesStore } from '../stores/runtimeCapabilitiesStore';
 
@@ -18,7 +18,6 @@ export const TitleBar = memo(function TitleBar({
   activeSessionName,
   activeSessionType,
   activeSessionState,
-  activeSessionPurpose,
 }: {
   activeSessionName?: string;
   activeSessionType?: string;
@@ -169,17 +168,13 @@ export const TitleBar = memo(function TitleBar({
     </div>
   );
 
-  const sessionKind = activeSessionPurpose === 'coding_agent'
-    ? 'Agent'
-    : activeSessionType === 'local' ? 'Local' : 'SSH';
+  const sessionKind = activeSessionType === 'local' ? 'Local' : 'SSH';
   const stateLabel = activeSessionState && activeSessionState !== 'connected' ? activeSessionState : null;
   const StatusIcon = activeSessionState === 'connecting'
     ? Loader2
     : activeSessionState === 'error'
       ? AlertCircle
-      : activeSessionPurpose === 'coding_agent'
-        ? Code2
-        : activeSessionType === 'local'
+      : activeSessionType === 'local'
           ? Monitor
           : Wifi;
 

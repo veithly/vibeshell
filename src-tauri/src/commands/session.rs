@@ -6,7 +6,6 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::ipc::{IpcClient, IpcMessage, IpcSessionInfo};
 use crate::local_shell::LocalShellManager;
-use crate::mcp::SharedAgentInputTracker;
 use crate::session::{Session, SessionInfo, SessionManager, SshCredential};
 use crate::ssh::PtyConfig;
 use crate::storage::Database;
@@ -187,6 +186,23 @@ async fn ensure_session_output_forwarder(app: AppHandle, session: Arc<Session>) 
     let session_id = session.id.clone();
     let mut receiver = session.subscribe();
 
+    let mut typing = session.subscribe_cli_typing();
+    let typing_app = app.clone();
+    let typing_id = session_id.clone();
+    tokio::spawn(async move {
+        loop {
+            match typing.recv().await {
+                Ok(text) => {
+                    let _ = typing_app.emit(
+                        "cli-terminal-typing",
+                        serde_json::json!({"sessionId":typing_id,"text":text}),
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break,
+            }
+        }
+    });
     tokio::spawn(async move {
         loop {
             // Block until the next chunk. A lagged receiver must NOT kill the
@@ -342,6 +358,12 @@ fn start_remote_session_forwarder(
                         match serde_json::from_str::<IpcMessage>(trimmed) {
                             Ok(IpcMessage::SessionOutput { session_id, data }) => {
                                 emit_session_output_event(&app, &session_id, data);
+                            }
+                            Ok(IpcMessage::CliTyping { session_id, text }) => {
+                                let _ = app.emit(
+                                    "cli-terminal-typing",
+                                    serde_json::json!({"sessionId":session_id,"text":text}),
+                                );
                             }
                             Ok(IpcMessage::SessionEnded { .. }) => break,
                             Ok(_) => {}
@@ -559,97 +581,49 @@ pub async fn session_kill(
         .map_err(|e| e.to_string())
 }
 
-/// Send input data to a session (as string)
+/// Forward exactly once to the process owning this PTY. Only the owner
+/// reconstructs submitted lines, so the GUI and daemon cannot double-log input.
+async fn send_keyboard(
+    manager: &SessionManager,
+    access: &SessionAccessState,
+    session_id: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    if access.is_remote_session(&session_id).await {
+        return match ipc_send(IpcMessage::SendUserInput { session_id, data }).await? {
+            IpcMessage::Ok => Ok(()),
+            IpcMessage::Error { message } => Err(message),
+            _ => Err("Unexpected keyboard input response".into()),
+        };
+    }
+    manager
+        .send_keyboard_input(&session_id, &data, false)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn session_send_input(
     manager: State<'_, Arc<SessionManager>>,
     access_state: State<'_, Arc<SessionAccessState>>,
-    input_tracker: State<'_, Arc<SharedAgentInputTracker>>,
     request: SendInputRequest,
 ) -> Result<(), String> {
-    // Human and AI keystrokes share one PTY line. Feed human input through the
-    // same tracker so an AI-submitted Enter is classified against the actual
-    // mixed line, not only the bytes previously sent by the agent.
-    let _session_input_guard = input_tracker.lock_session(&request.session_id).await;
-    let (checkpoint, _) = input_tracker
-        .checkpoint_and_observe(&request.session_id, &request.data, &[], false)
-        .await;
-
-    let result = if access_state.is_remote_session(&request.session_id).await {
-        match ipc_send(IpcMessage::SendUserInput {
-            session_id: request.session_id,
-            data: request.data.into_bytes(),
-        })
-        .await
-        {
-            Ok(IpcMessage::Ok) => Ok(()),
-            Ok(IpcMessage::Error { message }) => Err(message),
-            Ok(other) => Err(format!(
-                "Unexpected IPC response while sending input: {:?}",
-                other
-            )),
-            Err(error) => Err(error),
-        }
-    } else {
-        match manager.get(&request.session_id).await {
-            Some(session) => session
-                .write_to_ssh(request.data.as_bytes())
-                .await
-                .map_err(|error| error.to_string()),
-            None => Err(format!("Session not found: {}", request.session_id)),
-        }
-    };
-
-    if result.is_err() {
-        input_tracker.restore(checkpoint).await;
-    }
-    result
+    send_keyboard(
+        &manager,
+        &access_state,
+        request.session_id,
+        request.data.into_bytes(),
+    )
+    .await
 }
 
-/// Send raw input data to a session (as bytes)
 #[tauri::command]
 pub async fn session_send_bytes(
     manager: State<'_, Arc<SessionManager>>,
     access_state: State<'_, Arc<SessionAccessState>>,
-    input_tracker: State<'_, Arc<SharedAgentInputTracker>>,
     request: SendBytesRequest,
 ) -> Result<(), String> {
-    let _session_input_guard = input_tracker.lock_session(&request.session_id).await;
-    let input = String::from_utf8_lossy(&request.data);
-    let (checkpoint, _) = input_tracker
-        .checkpoint_and_observe(&request.session_id, &input, &[], false)
-        .await;
-    drop(input);
-
-    let result = if access_state.is_remote_session(&request.session_id).await {
-        match ipc_send(IpcMessage::SendUserInput {
-            session_id: request.session_id,
-            data: request.data,
-        })
-        .await
-        {
-            Ok(IpcMessage::Ok) => Ok(()),
-            Ok(IpcMessage::Error { message }) => Err(message),
-            Ok(other) => Err(format!(
-                "Unexpected IPC response while sending bytes: {:?}",
-                other
-            )),
-            Err(error) => Err(error),
-        }
-    } else {
-        match manager.get(&request.session_id).await {
-            Some(session) => session
-                .write_to_ssh(&request.data)
-                .await
-                .map_err(|error| error.to_string()),
-            None => Err(format!("Session not found: {}", request.session_id)),
-        }
-    };
-
-    if result.is_err() {
-        input_tracker.restore(checkpoint).await;
-    }
-    result
+    send_keyboard(&manager, &access_state, request.session_id, request.data).await
 }
 
 /// Resize a session's terminal

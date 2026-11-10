@@ -29,9 +29,9 @@ The difference is the workflow, not a new SSH protocol. OpenSSH, tmux, editors a
 
 ### See what it ran, and where
 
-Desktop, native CLI and MCP can use the same saved servers and discover existing sessions. When an agent runs a command, the activity strip and history show the command, session, time and operation state. Repeated attempts remain separate records; multiline commands are not reduced to a one-line label.
+Desktop and CLI use the same SSH shell. Open **History** to see the command, its session and its source: **Agent (CLI)** in magenta or **User** in cyan. Select a live session in a row to return to its terminal.
 
-There are two ways to collaborate. Send input into a shared interactive shell when you want to work in that prompt together. Use independent execution when the agent should inspect something without typing over your work. Both have visible activity; “input sent” is kept distinct from “command completed.”
+A `cd` or `export` from either side changes that shell for both. `--new` explicitly opens a separate session. When shell integration reports the command's exit status (OSC 3008), the CLI propagates that status, including failures; on shells without that signal it warns that success is unverified.
 
 An agent-created session appears as another tab without switching away from the tab you selected. Two connections to the same server remain two sessions, not one ambiguous server-name tab. History can be paged through and recovered after reopening the UI.
 
@@ -57,7 +57,7 @@ The agent's terminal stays beside the rest of your work. Open **Workspace change
 
 ## A terminal that helps with the small things
 
-You should not need AI just to remember a flag. Built-in completion suggests commands, subcommands and options, with descriptions and command-history matches. Inline suggestions and a keyboard-driven completion list keep the answer near the cursor. Frequently used commands can become snippets, while **Quick Cmd** runs a short inspection and shows its output without taking over your interactive shell.
+You should not need AI just to remember a flag. Built-in completion suggests commands, subcommands and options, with descriptions and command-history matches. Inline suggestions and a keyboard-driven completion list keep the answer near the cursor. Frequently used commands can become snippets.
 
 For an extra nudge, enable **AI command prediction** with your own OpenAI-compatible or Claude endpoint and model. It proposes a suffix to what you are typing; it does not run the suggestion for you. This is separate from launching a coding agent.
 
@@ -149,6 +149,7 @@ vibeshell ssh my-server
 vibeshell ssh my-server -- uname -a
 vibeshell sessions
 vibeshell sftp my-server ls /srv/app
+vibeshell sftp --session ALIAS pwd  # Run SFTP on the existing connection.
 ```
 
 Replace `my-server` with a saved name. Use an alias returned by `sessions` with `vibeshell ssh-session ALIAS -- pwd`; add `--new` when you need a separate connection. For complex quoting, use `--command-file` or `--command-stdin`. Never put passwords or private keys in command-line arguments or agent prompts.

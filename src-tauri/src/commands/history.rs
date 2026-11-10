@@ -50,7 +50,7 @@ pub fn agent_activity_list(
     before: Option<i64>,
     limit: Option<u32>,
 ) -> Result<Vec<crate::storage::database::StoredAgentActivity>, String> {
-    db.agent_activity_list(after, before, limit.unwrap_or(200))
+    db.activity_page(after, before, limit.unwrap_or(200), true)
         .map_err(|error| format!("Failed to read agent activity: {error}"))
 }
 

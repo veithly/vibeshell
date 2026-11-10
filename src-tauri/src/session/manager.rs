@@ -88,6 +88,22 @@ impl Drop for JumpBridgeGuard {
     }
 }
 
+fn echoed_command<'a>(
+    line: &str,
+    command: &'a crate::mcp::guard::TrackedAgentCommand,
+    sensitive: bool,
+) -> &'a str {
+    if sensitive {
+        "[sensitive input omitted]"
+    } else if !command.is_verifiable {
+        "[interactive input: final command unavailable]"
+    } else if line.trim_end().ends_with(&command.command) {
+        &command.command
+    } else {
+        "[input not echoed]"
+    }
+}
+
 pub struct SessionManager {
     pub agent_input_tracker: Arc<crate::mcp::SharedAgentInputTracker>,
     pub(crate) local_shell_manager: std::sync::OnceLock<Arc<crate::local_shell::LocalShellManager>>,
@@ -106,6 +122,78 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    /// Both desktop ownership modes and interactive CLI attach arrive here.
+    /// The submitter of Enter owns the row; guard state is shared by the PTY.
+    pub async fn send_keyboard_input(&self, id: &str, data: &[u8], cli: bool) -> Result<()> {
+        let session = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow!("Session not found: {id}"))?;
+        let _guard = self.agent_input_tracker.lock_session(id).await;
+        let (checkpoint, commands, sensitive) = self
+            .agent_input_tracker
+            .checkpoint_and_observe_sensitive(id, &String::from_utf8_lossy(data), &[], false, false)
+            .await;
+        // Never turn a password prompt / no-echo input into stored command text.
+        // Only retain human-typed text corroborated by the PTY's own echo.
+        let echo = if !commands.is_empty() && !sensitive {
+            Some(session.subscribe_with_replay().await)
+        } else {
+            None
+        };
+        if cli && !sensitive {
+            session.mark_cli_typing(data);
+        }
+        if let Err(error) = session.write_to_ssh(data).await {
+            self.agent_input_tracker.restore(checkpoint).await;
+            return Err(error);
+        }
+        if commands.is_empty() {
+            return Ok(());
+        }
+        let db = self.database.clone();
+        let id = id.to_owned();
+        let submitted_at = chrono::Utc::now().timestamp_millis();
+        tokio::spawn(async move {
+            let mut line = Vec::new();
+            if let Some((backlog, mut live)) = echo {
+                let bytes = backlog.concat();
+                line.extend_from_slice(bytes.rsplit(|b| *b == b'\n').next().unwrap_or_default());
+                // Enter can arrive in the same batch as the last keystrokes.
+                let _ = tokio::time::timeout(Duration::from_millis(750), async {
+                    while line.len() < 256 * 1024
+                        && line.iter().filter(|b| **b == b'\n').count() < commands.len()
+                    {
+                        match live.recv().await {
+                            Ok(bytes) => line.extend(bytes),
+                            Err(_) => break,
+                        }
+                    }
+                })
+                .await;
+            }
+            let text = String::from_utf8_lossy(&line);
+            let mut echoed = text.lines();
+            for command in commands {
+                let summary =
+                    echoed_command(echoed.next().unwrap_or_default(), &command, sensitive);
+                let event = crate::mcp::server::AgentActivityEvent {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    tool: "input".into(),
+                    summary: summary.to_owned(),
+                    session_id: Some(id.clone()),
+                    status: crate::mcp::server::AgentActivityStatus::Succeeded,
+                    timestamp: submitted_at,
+                };
+                if let Err(error) =
+                    db.activity_record_origin(&event, Some(if cli { "cli" } else { "user" }))
+                {
+                    log::error!("Could not save submitted input history: {error}");
+                }
+            }
+        });
+        Ok(())
+    }
     pub fn new(database: Arc<Database>) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),

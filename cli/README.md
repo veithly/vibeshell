@@ -29,6 +29,7 @@ vibeshell import auto
 vibeshell servers
 vibeshell ssh <server>
 vibeshell sftp <server>
+vibeshell sftp --session ALIAS pwd
 ```
 
 Commands that need an SSH/SFTP session automatically start the native local daemon. The daemon uses a private per-user IPC endpoint and the same saved-profile database as the desktop. A GUI-owned service can also answer native CLI requests. Inspect the current owner and sessions with:
@@ -60,7 +61,7 @@ vibeshell license
 
 Select an existing session and verify the plugin is installed and enabled first. Plugin action details are in the packaged `skills/vibeshell/references/` documents or available live through `plugins docs`; the main Skill contains discovery instructions and an index. CLI and MCP share permission and input checks. Confirmation and sudo opt-in require the person's authorization.
 
-The desktop displays Agent/CLI operations in activity history. Use shared terminal commands when collaborating with a person and independent exec for non-interfering inspection. Inputs marked as sent are not proof of remote command success. Connections require their owning process to remain alive; upgrade the GUI and CLI together rather than mixing incompatible service versions.
+The desktop displays Agent (CLI) commands in the same history as human terminal input. `ssh`, `exec` and `ssh-session` use the same persistent remote shell, so `cd` and `export` survive subsequent CLI calls. For shells emitting OSC 3008 command status events, the CLI propagates the remote exit code, not merely command submission; if no exit status is available it prints a warning instead of claiming verified success. Connections require their owning process to remain alive; upgrade the GUI and CLI together rather than mixing incompatible service versions.
 
 VibeShell 1.1.0 is GPL-3.0-only. Release archives include LICENSE, NOTICE and legacy attribution; matching source materials are available beside the release binaries. Earlier MIT grants are not revoked. The software comes without warranty to the extent permitted by law.
 

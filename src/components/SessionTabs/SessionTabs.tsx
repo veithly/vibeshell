@@ -1,6 +1,6 @@
 import { useState, useCallback, memo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle, RefreshCw, Code2, ExternalLink, Save } from 'lucide-react';
+import { Plus, X, Loader2, AlertCircle, Wifi, Monitor, Circle, RefreshCw, Code2, ExternalLink } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { ContextMenu, type ContextMenuItem } from '../ContextMenu';
 import { useSessionStore, type Session, type SessionState, type SessionType } from '../../stores/sessionStore';
@@ -16,7 +16,6 @@ import { beginTabDragOnMouseDown } from '../../lib/tabDragController';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { FileIcon } from '../SftpPanel/FileIcon';
 import { PluginIcon } from '../PluginIcon';
-import { OpenLocalFilesButton } from '../OpenLocalFilesButton';
 
 interface SessionTabsProps {
   /** Callback when "New Session" is clicked */
@@ -35,7 +34,6 @@ interface SessionTabsProps {
   ) => void;
   /** Commands pinned to the right of the scrollable session strip. */
   rightActions?: ReactNode;
-  onSaveLayout?: () => void;
 }
 
 /**
@@ -441,7 +439,7 @@ function TabContextMenu({
 /**
  * Session tabs component displaying all active sessions
  */
-export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInWindow, onPaneDropTab, rightActions, onSaveLayout }: SessionTabsProps) {
+export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInWindow, onPaneDropTab, rightActions }: SessionTabsProps) {
   const { t } = useTranslation();
   const { sessions, activeSessionId, setActiveSession, killSession, killLocalShellSession, moveSessionBefore } =
     useSessionStore();
@@ -667,8 +665,6 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
             <Plus className="w-4 h-4" />
           </button>
         </div>
-        <OpenLocalFilesButton />
-        {onSaveLayout && <button type="button" className="icon-button h-8 w-8 shrink-0" title={t('workspaceLayout.save')} aria-label={t('workspaceLayout.save')} onClick={onSaveLayout}><Save className="h-4 w-4" /></button>}
         {rightActions}
       </div>
 

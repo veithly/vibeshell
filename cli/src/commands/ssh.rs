@@ -5,7 +5,6 @@
 //! Interactive sessions are automatically assigned a short 3-digit alias so
 //! users can reference them via `vibeshell ssh-session <alias>` later.
 
-use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
@@ -38,41 +37,6 @@ pub fn connect(server_name: &str, command: &[String], wait: bool, force_new: boo
         .or_else(|| session_alias::register(&session_id, server_name).ok())
         .unwrap_or_else(|| session_id[..8].to_string());
 
-    // Single-command mode: use a dedicated SSH exec channel so the
-    // command output is clean (no MOTD banner), and the command never
-    // gets typed into the shared PTY (avoids garbled input when the
-    // GUI terminal is also attached).
-    if !command.is_empty() {
-        let joined = command.join(" ");
-        if !reused_existing {
-            return run_isolated_command(&session_id, &alias, &joined, true);
-        }
-
-        match run_isolated_command(&session_id, &alias, &joined, false) {
-            Ok(()) => return Ok(()),
-            Err(error) => {
-                eprintln!(
-                    "Reused session {} (alias: {}) could not execute the command: {}",
-                    session_id, alias, error
-                );
-                eprintln!("Creating a fresh session and retrying...");
-
-                if ipc_support::session_client_count(&session_id) == 0 {
-                    let _ = ipc_support::send(&IpcMessage::KillSession {
-                        session_id: session_id.clone(),
-                    });
-                    let _ = session_alias::remove_by_session_id(&session_id);
-                }
-
-                let fresh_session_id = create_session_with_retry(server_name, wait)?;
-                let fresh_alias = session_alias::register(&fresh_session_id, server_name)
-                    .unwrap_or_else(|_| fresh_session_id[..8].to_string());
-
-                return run_isolated_command(&fresh_session_id, &fresh_alias, &joined, true);
-            }
-        }
-    }
-
     if reused_existing {
         eprintln!(
             "Reusing server '{}' session {} (alias: {})",
@@ -83,6 +47,9 @@ pub fn connect(server_name: &str, command: &[String], wait: bool, force_new: boo
             "Connected to server '{}' (session: {}, alias: {})",
             server_name, session_id, alias
         );
+    }
+    if !command.is_empty() {
+        return super::session::exec(&session_id, command);
     }
     eprintln!("Press Ctrl+] to detach. Session continues in the background.\r");
 
@@ -189,74 +156,6 @@ fn pick_reusable_session(sessions: &[IpcSessionInfo], server_name: &str) -> Opti
         .cloned()
 }
 
-/// Execute a command via a dedicated SSH exec channel.
-///
-/// The exec channel bypasses the interactive PTY entirely, which:
-/// 1. Suppresses the remote server's MOTD / welcome banner.
-/// 2. Prevents garbled input when the GUI terminal shares the same session.
-fn run_isolated_command(
-    session_id: &str,
-    alias: &str,
-    command: &str,
-    owns_session: bool,
-) -> Result<()> {
-    let output = ipc_support::exec_isolated(session_id, command)?;
-    print!("{}", output);
-    let _ = std::io::stdout().flush();
-
-    if output_looks_interactive(&output) {
-        eprintln!();
-        eprintln!("Interactive input may be required. Send a response:");
-        eprintln!(
-            "  vibeshell send-key {} y enter   # send 'y' then Enter",
-            alias
-        );
-        eprintln!("  vibeshell send-key {} enter      # press Enter", alias);
-        eprintln!(
-            "  vibeshell ssh-session {}          # attach interactively",
-            alias
-        );
-        return Ok(());
-    }
-
-    if owns_session {
-        let _ = ipc_support::send(&IpcMessage::KillSession {
-            session_id: session_id.to_string(),
-        });
-        let _ = session_alias::remove_by_session_id(session_id);
-    } else {
-        eprintln!("Next use: vibeshell ssh-session {} -- <command>", alias);
-        eprintln!(
-            "If your local shell mangles quotes, use: vibeshell ssh-session {} --command-file ./remote-command.sh",
-            alias
-        );
-    }
-
-    Ok(())
-}
-
-fn output_looks_interactive(output: &str) -> bool {
-    let lower = output.to_ascii_lowercase();
-    [
-        "[y/n]",
-        "[yes/no]",
-        "(y/n)",
-        "(yes/no)",
-        "press enter",
-        "continue?",
-        "are you sure",
-        "password:",
-        "passphrase:",
-        "confirmation",
-        "confirm ",
-        "do you want",
-        "[y] yes",
-        "[n] no",
-    ]
-    .iter()
-    .any(|marker| lower.contains(&marker.to_ascii_lowercase()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::pick_reusable_session;
@@ -297,20 +196,5 @@ mod tests {
             pick_reusable_session(&sessions, "prod").is_none(),
             "inactive sessions must not be reused"
         );
-    }
-
-    #[test]
-    fn output_looks_interactive_detects_common_prompts() {
-        use super::output_looks_interactive;
-        assert!(output_looks_interactive("Do you want to continue? [Y/n] "));
-        assert!(output_looks_interactive(
-            "Are you sure you want to proceed?"
-        ));
-        assert!(output_looks_interactive("Enter password: "));
-        assert!(output_looks_interactive("Press ENTER to continue"));
-        assert!(!output_looks_interactive(
-            "total 42\ndrwxr-xr-x 2 root root"
-        ));
-        assert!(!output_looks_interactive("Linux hostname 5.15.0"));
     }
 }
