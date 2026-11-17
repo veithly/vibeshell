@@ -47,6 +47,8 @@ The supported executable is `vibeshell`, not the retired `vshell` command. `vshe
 
 ## Import sources
 
+Teleport nodes can be added with `vibeshell servers add alice@node --type teleport --proxy proxy.example:443` or previewed with `vibeshell import teleport --proxy proxy.example:443 --user alice --dry-run`. Run `tsh login` explicitly first. The Unix login is required; automatic import never contacts Teleport. Terminal and command operations share the current service, while file operations require a standard external `sftp-server` executable on the node. See [Teleport setup and transport boundaries](../docs/TELEPORT.md).
+
 ```bash
 vibeshell import openssh --path ~/.ssh/config
 vibeshell import tabby --path ~/.config/tabby/config.yaml

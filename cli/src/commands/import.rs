@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use vibeshell_core::ssh_import::{
     import_preview, preview_import, ImportPreview, ImportReport, ImportSourceKind,
 };
@@ -12,8 +12,26 @@ pub fn run(
     path: Option<PathBuf>,
     dry_run: bool,
     json: bool,
+    proxy: Option<String>,
+    user: Option<String>,
 ) -> Result<()> {
-    let preview = preview_import(source, path)?;
+    let preview = if source == ImportSourceKind::Teleport {
+        if path.is_some() {
+            bail!("Teleport uses --proxy, not --path");
+        }
+        vibeshell_core::ssh_import::preview_teleport_import(
+            proxy
+                .as_deref()
+                .context("Teleport import requires --proxy HOST")?,
+            user.as_deref()
+                .context("Teleport import requires --user UNIX_LOGIN")?,
+        )?
+    } else {
+        if proxy.is_some() || user.is_some() {
+            bail!("--proxy and --user apply only to Teleport import");
+        }
+        preview_import(source, path)?
+    };
 
     if dry_run {
         if json {

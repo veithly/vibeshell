@@ -21,6 +21,20 @@ beforeEach(() => {
   });
 });
 describe('atomic saved credential editing', () => {
+  it('edits a Teleport proxy without requesting or attaching SSH credentials', async () => {
+    const close = vi.fn();
+    const teleport: Server = { ...server, connection_kind: 'teleport', teleport_proxy: 'proxy.example:443' };
+    const { container } = render(<EditServerDialog isOpen server={teleport} onClose={close} />);
+    expect(screen.queryByLabelText('New password')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Teleport proxy'), { target: { value: 'new-proxy.example:443' } });
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    const update = safeInvoke.mock.calls.find(([command]) => command === 'update_server')![1].updates;
+    expect(update.teleport_proxy).toBe('new-proxy.example:443');
+    expect(update.credentials).toBeUndefined();
+    expect(update.connection_kind).toBeUndefined();
+    expect(safeInvoke.mock.calls.some(([command]) => command === 'get_credential')).toBe(false);
+  });
   it('keeps omitted credentials and never fetches the saved password into the editor', async () => {
     const close = vi.fn();
     const { container } = render(<EditServerDialog isOpen server={server} onClose={close} />);

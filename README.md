@@ -160,6 +160,10 @@ The CLI can start a daemon when needed; the GUI can attach to its sessions. The 
 
 Apple signing/notarization details are in each release's notes. An ad-hoc signature is not Apple notarization. Mobile targets remain experimental. Common OpenSSH paths are tested, but not every MFA flow, hardware token or SSH implementation. Proposed CLI server-create/delete and Teleport support are not part of the current 1.1.0 release.
 
+### Teleport nodes
+
+The development branch supports Teleport profiles in the desktop and native `vibeshell` CLI. Log in with `tsh`, add a node with `vibeshell servers add alice@node --type teleport --proxy proxy.example:443`, and use the same terminal, command and file workflows. File operations require a standard external SFTP server on the node; unsupported configurations fail explicitly. [Setup and supported scope](docs/TELEPORT.md).
+
 ## Build, contribute, or explore the implementation
 
 Built with Tauri 2, Rust, React, TypeScript and xterm.js. Use Node.js 22.12+, current stable Rust and the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/).

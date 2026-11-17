@@ -17,7 +17,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 use crate::sftp::helpers::{
-    join_remote_child, sftp_mkdir_recursive, validate_remote_entry_name, MAX_RECURSIVE_DEPTH,
+    join_remote_child, sftp_mkdir_recursive, sftp_mkdir_recursive_counted,
+    validate_remote_entry_name, MAX_RECURSIVE_DEPTH,
 };
 
 /// Buffer size for streaming SFTP transfers (256 KiB).
@@ -43,7 +44,7 @@ pub fn next_transfer_chunk_size(remaining: Option<u64>) -> usize {
 }
 
 fn remote_parent_dir(path: &str) -> Option<String> {
-    let path = path.trim().trim_end_matches('/');
+    let path = path.trim_end_matches('/');
     if path.is_empty() || path == "/" {
         return None;
     }
@@ -558,18 +559,15 @@ pub async fn transfer_directory_to_sftp(
     .map_err(|e| format!("Directory planning task failed: {}", e))??;
 
     let remote_root = normalize_remote_dir(remote_root);
-    let mut created_directories = 0;
     let mut uploaded_files = 0;
     let mut skipped_files = 0;
     let mut transferred_bytes = 0;
 
-    sftp_mkdir_recursive(sftp, &remote_root).await?;
-    created_directories += 1;
+    let mut created_directories = sftp_mkdir_recursive_counted(sftp, &remote_root).await?;
 
     for directory in &plan.directories {
         let remote_path = join_remote_relative(&remote_root, directory);
-        sftp_mkdir_recursive(sftp, &remote_path).await?;
-        created_directories += 1;
+        created_directories += sftp_mkdir_recursive_counted(sftp, &remote_path).await?;
     }
 
     for file in &plan.files {
@@ -844,7 +842,8 @@ fn relative_path_string(root: &Path, path: &Path) -> Result<String, String> {
 }
 
 fn normalize_remote_dir(path: &str) -> String {
-    let trimmed = path.trim();
+    // Spaces are meaningful bytes in a remote directory name.
+    let trimmed = path;
     if trimmed.is_empty() {
         ".".to_string()
     } else if trimmed != "/" {

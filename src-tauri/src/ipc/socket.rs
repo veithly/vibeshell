@@ -52,6 +52,10 @@ struct WireRequest<T> {
 /// Server metadata returned to CLI for `vibeshell servers`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcServerInfo {
+    #[serde(default)]
+    pub connection_kind: crate::storage::ConnectionKind,
+    #[serde(default)]
+    pub teleport_proxy: Option<String>,
     pub id: String,
     pub name: String,
     pub host: String,
@@ -1370,6 +1374,8 @@ impl IpcServer {
                 match crate::commands::server::add_server_spec(&database, spec) {
                     Ok(server) => IpcMessage::ServerAdded {
                         server: IpcServerInfo {
+                            connection_kind: server.connection_kind,
+                            teleport_proxy: server.teleport_proxy,
                             id: server.id,
                             name: server.name,
                             host: server.host,
@@ -1447,6 +1453,8 @@ impl IpcServer {
                     let servers = servers
                         .into_iter()
                         .map(|server| IpcServerInfo {
+                            connection_kind: server.connection_kind,
+                            teleport_proxy: server.teleport_proxy,
                             id: server.id,
                             name: server.name,
                             host: server.host,
@@ -1484,53 +1492,15 @@ impl IpcServer {
                 IpcMessage::SessionList { sessions }
             }
             IpcMessage::CreateSession { server_name } => {
-                // Look up saved credentials for the server and connect
-                match database.credential_get(&server_name) {
-                    std::result::Result::Ok(Some(cred)) => {
-                        let ssh_cred = match crate::session::SshCredential::from_stored(cred) {
-                            Ok(credential) => credential,
-                            Err(error) => {
-                                return IpcMessage::Error {
-                                    message: format!(
-                                        "Failed to load credentials for '{}': {}",
-                                        server_name, error
-                                    ),
-                                };
-                            }
-                        };
-
-                        let pty_config = Some(crate::ssh::PtyConfig {
-                            term: "xterm-256color".to_string(),
-                            cols: 80,
-                            rows: 24,
-                            pix_width: 0,
-                            pix_height: 0,
-                        });
-
-                        match rt.block_on(session_manager.create_with_credentials(
-                            &server_name,
-                            ssh_cred,
-                            pty_config,
-                        )) {
-                            std::result::Result::Ok(session) => IpcMessage::SessionCreated {
-                                session_id: session.id.clone(),
-                            },
-                            Err(e) => IpcMessage::Error {
-                                message: format!("Failed to connect to '{}': {}", server_name, e),
-                            },
-                        }
-                    }
-                    std::result::Result::Ok(None) => IpcMessage::Error {
-                        message: format!(
-                            "No saved credentials for server '{}'. Save the password or private key in VibeShell, or connect through the GUI. No SSH connection was created.",
-                            server_name
-                        ),
+                match rt.block_on(
+                    session_manager
+                        .create_saved(&server_name, Some(crate::ssh::PtyConfig::default())),
+                ) {
+                    Ok(session) => IpcMessage::SessionCreated {
+                        session_id: session.id.clone(),
                     },
-                    Err(e) => IpcMessage::Error {
-                        message: format!(
-                            "Failed to look up credentials for '{}': {}",
-                            server_name, e
-                        ),
+                    Err(error) => IpcMessage::Error {
+                        message: format!("Failed to connect: {error}"),
                     },
                 }
             }

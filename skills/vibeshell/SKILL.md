@@ -22,12 +22,23 @@ Resolve the native executable in this order: `vibeshell` from `PATH`, `$HOME/.lo
 
 ```bash
 vibeshell servers add root@prod.example.com --name prod-web
-SSH_PASSWORD=... vibeshell servers add root@prod.example.com --name prod-web
 vibeshell servers add ubuntu@10.0.0.8:2222 --identity ~/.ssh/id_ed25519 --jump bastion --agent-forwarding
 vibeshell servers delete prod-web --yes
 ```
 
 Display name defaults to the host. Secrets must not appear on the command line. Deletion requires explicit user authorization and `--yes`; it closes the profile's active sessions and removes its saved credentials. Use `vibeshell`, never the retired `vshell` executable.
+
+## Teleport profiles
+
+Use the same native CLI and shared service, not the retired `vshell` executable. The user must install a compatible `tsh` client and explicitly complete `tsh login` for the service's OS account before connecting. Never extract Teleport credentials, disable certificate checks or request additional access automatically.
+
+```bash
+vibeshell servers add alice@node-name --type teleport --proxy proxy.example:443 --name work-node
+vibeshell import teleport --proxy proxy.example:443 --user alice --dry-run --json
+vibeshell ssh work-node
+```
+
+The Unix login and a single explicit node are required; do not infer a login from the Teleport account or use label selectors/wildcards. `import auto` does not contact Teleport. File operations use real SFTP and require a standard external `sftp-server` executable on the node; unsupported configurations fail explicitly. Never substitute shell text operations or recursive `scp` for file/sync contracts. Raw SSH jump-host/port/agent-forwarding options and SSH tunnels are not supported for Teleport sessions.
 
 ## Import existing SSH configurations
 

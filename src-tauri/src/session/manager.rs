@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 use crate::session::{Session, SessionInfo, SessionState};
 use crate::ssh::{FingerprintStore, HostKeyCheck, PtyConfig, SshClient};
 use crate::storage::{Database, Server};
+use crate::teleport::TeleportTarget;
 
 /// Credentials for SSH authentication
 #[derive(Debug, Clone)]
@@ -265,6 +266,32 @@ impl SessionManager {
         }
     }
 
+    pub fn is_teleport_server(&self, server_name: &str) -> Result<bool> {
+        Ok(self
+            .database
+            .server_get_by_name(server_name)?
+            .map(|server| server.is_teleport())
+            .unwrap_or(false))
+    }
+
+    /// One saved-profile entry point for CLI and MCP; Teleport authenticates
+    /// through the user's tsh profile, never through VibeShell SSH secrets.
+    pub async fn create_saved(
+        &self,
+        server_name: &str,
+        pty: Option<PtyConfig>,
+    ) -> Result<Arc<Session>> {
+        let credential = if self.is_teleport_server(server_name)? {
+            SshCredential::Password(String::new())
+        } else {
+            let stored = self.database.credential_get(server_name)?
+                .ok_or_else(|| anyhow!("No saved credentials for server '{server_name}'. Save credentials in VibeShell before connecting"))?;
+            SshCredential::from_stored(stored)?
+        };
+        self.create_with_credentials(server_name, credential, pty)
+            .await
+    }
+
     pub async fn list(&self) -> Vec<SessionInfo> {
         let sessions = self.sessions.read().await;
         let mut infos = Vec::new();
@@ -451,6 +478,10 @@ impl SessionManager {
             server.username, server.host, server.port
         );
 
+        if server.is_teleport() {
+            return self.create_teleport_session(server, pty_config).await;
+        }
+
         // Create channels for input/output
         let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
         let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
@@ -480,6 +511,9 @@ impl SessionManager {
                 error!("[SessionManager] Jump host server not found: {}", jump_id);
                 anyhow!("Jump host server not found: {}", jump_id)
             })?;
+            if jump_server.is_teleport() {
+                anyhow::bail!("A Teleport profile cannot be used as a raw SSH jump host");
+            }
 
             info!(
                 "[SessionManager] Jump host: {}@{}:{}",
@@ -760,6 +794,106 @@ impl SessionManager {
         Ok(session)
     }
 
+    async fn create_teleport_session(
+        &self,
+        server: Server,
+        pty_config: Option<PtyConfig>,
+    ) -> Result<Arc<Session>> {
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+        let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
+        let session = Arc::new(Session::new(
+            server.id.clone(),
+            server.name.clone(),
+            input_tx,
+            output_tx,
+        ));
+
+        self.attach_teleport(&session, &server, pty_config).await?;
+
+        let session_clone = Arc::downgrade(&session);
+        let session_id_for_input = session.id.clone();
+        tokio::spawn(async move {
+            while let Some(data) = input_rx.recv().await {
+                let Some(session) = session_clone.upgrade() else {
+                    break;
+                };
+                if let Err(e) = session.write_to_ssh(&data).await {
+                    error!(
+                        "[SessionManager] Error writing to Teleport PTY for session {}: {}",
+                        session_id_for_input, e
+                    );
+                    break;
+                }
+            }
+        });
+
+        self.send_post_login_command(&session, &server).await?;
+
+        let mut sessions = self.sessions.write().await;
+        sessions.insert(session.id.clone(), session.clone());
+        info!(
+            "[SessionManager] Teleport session {} ready ({})",
+            session.id, server.name
+        );
+        Ok(session)
+    }
+
+    async fn attach_teleport(
+        &self,
+        session: &Arc<Session>,
+        server: &Server,
+        pty_config: Option<PtyConfig>,
+    ) -> Result<()> {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let _ = (session, server, pty_config);
+            anyhow::bail!("Teleport sessions are not supported on mobile");
+        }
+
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let target = TeleportTarget::from_server(server)?;
+            crate::commands::server::validate_transport(server).map_err(|e| anyhow!(e))?;
+            let cols = pty_config.as_ref().map(|config| config.cols).unwrap_or(80);
+            let rows = pty_config.as_ref().map(|config| config.rows).unwrap_or(24);
+            let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+            session.disconnect().await?;
+            session.set_state(SessionState::Connecting).await;
+            let pty = match crate::teleport::spawn_tsh_ssh(&target, cols, rows, output_tx).await {
+                Ok(pty) => pty,
+                Err(error) => {
+                    session.set_state(SessionState::Error).await;
+                    return Err(error);
+                }
+            };
+            session.set_teleport_target(target).await;
+            session.set_teleport_pty(pty).await;
+            session.set_state(SessionState::Connected).await;
+
+            let session_for_output = Arc::downgrade(session);
+            tokio::spawn(async move {
+                while let Some(data) = output_rx.recv().await {
+                    let Some(session) = session_for_output.upgrade() else {
+                        break;
+                    };
+                    session.publish_output(data).await;
+                }
+            });
+            Ok(())
+        }
+    }
+
+    async fn send_post_login_command(&self, session: &Arc<Session>, server: &Server) -> Result<()> {
+        if let Some(ref cmd) = server.post_login_command {
+            if cmd.trim().is_empty() {
+                return Ok(());
+            }
+            // The remote readiness handshake has completed, not a guessed sleep.
+            session.write_to_ssh(format!("{cmd}\n").as_bytes()).await?;
+        }
+        Ok(())
+    }
+
     /// Connect an existing session with credentials
     pub async fn connect_session(
         &self,
@@ -796,6 +930,16 @@ impl SessionManager {
             "[SessionManager] Connecting to {}@{}:{}",
             server.username, server.host, server.port
         );
+
+        if server.is_teleport() {
+            self.attach_teleport(&session, &server, pty_config).await?;
+            self.send_post_login_command(&session, &server).await?;
+            info!(
+                "[SessionManager] Teleport session {} connected successfully",
+                session_id
+            );
+            return Ok(());
+        }
 
         // Create channel for SSH output
         let (ssh_output_tx, mut ssh_output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);

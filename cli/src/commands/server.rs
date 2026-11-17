@@ -10,6 +10,8 @@ use crate::ipc_support;
 use crate::ssh_target;
 
 pub struct AddServerArgs {
+    pub connection_kind: String,
+    pub teleport_proxy: Option<String>,
     pub target: String,
     pub name: Option<String>,
     pub user: Option<String>,
@@ -35,6 +37,16 @@ pub fn list() -> Result<()> {
 
             println!("Configured servers:");
             for server in servers {
+                if server.connection_kind == vibeshell_core::storage::ConnectionKind::Teleport {
+                    println!(
+                        "  {}  {}@{}  type=teleport proxy={} auth=tsh",
+                        server.name,
+                        server.username,
+                        server.host,
+                        server.teleport_proxy.as_deref().unwrap_or("(missing)")
+                    );
+                    continue;
+                }
                 println!(
                     "  {}  {}@{}:{}  auth={}",
                     server.name, server.username, server.host, server.port, server.auth_type
@@ -75,15 +87,48 @@ pub fn add(args: AddServerArgs) -> Result<()> {
         .unwrap_or_else(|| host.clone());
 
     let identity_path = args.identity.as_deref();
+    let teleport = args.connection_kind == "teleport";
+    if !matches!(args.connection_kind.as_str(), "ssh" | "teleport") {
+        bail!("Unknown connection type; expected ssh or teleport");
+    }
+    if teleport
+        && (identity_path.is_some()
+            || args.jump.is_some()
+            || args.agent_forwarding
+            || args.port.is_some()
+            || target.port.is_some())
+    {
+        bail!("Teleport profiles use --proxy and tsh login, not SSH identity/jump/forwarding/port options");
+    }
+    if teleport {
+        vibeshell_core::teleport::TeleportTarget::new(
+            args.teleport_proxy.as_deref().unwrap_or_default(),
+            &username,
+            &host,
+        )?;
+    } else if args.teleport_proxy.is_some() {
+        bail!("--proxy requires --type teleport");
+    }
     let ResolvedCredentials {
         auth_type,
         credential,
         passphrase,
         key_path,
-    } = resolve_credentials(identity_path)?;
+    } = if teleport {
+        ResolvedCredentials {
+            auth_type: "password",
+            credential: None,
+            passphrase: None,
+            key_path: None,
+        }
+    } else {
+        resolve_credentials(identity_path)?
+    };
     let saved_credentials = credential.is_some();
 
     let spec = AddServerSpec {
+        connection_kind: Some(args.connection_kind),
+        teleport_proxy: args.teleport_proxy,
         name: name.clone(),
         host: host.clone(),
         port,
@@ -108,7 +153,11 @@ pub fn add(args: AddServerArgs) -> Result<()> {
                 "Added server '{}' ({}@{}:{})",
                 server.name, server.username, server.host, server.port
             );
-            if !saved_credentials {
+            if teleport {
+                eprintln!(
+                    "Uses your existing tsh login. Run tsh login explicitly before connecting."
+                );
+            } else if !saved_credentials {
                 if identity_path.is_some() {
                     eprintln!(
                         "Warning: --identity was set but the key file could not be stored. This should not happen."

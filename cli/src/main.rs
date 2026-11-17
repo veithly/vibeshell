@@ -260,7 +260,7 @@ enum ServersCommand {
           SSH_PASSWORD=... vibeshell servers add root@prod.example.com --name prod-web\n\
           vibeshell servers add ubuntu@10.0.0.8:2222 --identity ~/.ssh/id_ed25519 --jump bastion"
     )]
-    Add(ServerAddCliArgs),
+    Add(Box<ServerAddCliArgs>),
     /// Delete a saved server by name or ID
     #[command(alias = "rm", alias = "remove")]
     Delete(ServerDeleteCliArgs),
@@ -308,6 +308,14 @@ struct ServerAddCliArgs {
     /// Tags (repeatable)
     #[arg(long = "tag")]
     tags: Vec<String>,
+
+    /// Connection type: ssh (default) or teleport
+    #[arg(long = "type", default_value = "ssh", value_parser = ["ssh", "teleport"])]
+    connection_type: String,
+
+    /// Teleport proxy, e.g. teleport.example.com:443 (required with --type teleport)
+    #[arg(long)]
+    proxy: Option<String>,
 }
 
 #[derive(Args)]
@@ -522,6 +530,7 @@ enum ImportSourceArg {
     OpenSsh,
     Putty,
     Tabby,
+    Teleport,
 }
 
 impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
@@ -531,13 +540,20 @@ impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
             ImportSourceArg::OpenSsh => Self::OpenSsh,
             ImportSourceArg::Putty => Self::Putty,
             ImportSourceArg::Tabby => Self::Tabby,
+            ImportSourceArg::Teleport => Self::Teleport,
         }
     }
 }
 
 #[derive(Args)]
 struct ImportArgs {
-    /// Source to import: auto, openssh, putty, or tabby
+    /// Teleport proxy host[:port]; required for explicit Teleport import
+    #[arg(long)]
+    proxy: Option<String>,
+    /// Unix login on the Teleport nodes (not the Teleport account identity)
+    #[arg(long)]
+    user: Option<String>,
+    /// Source to import: auto, openssh, putty, tabby, or teleport
     #[arg(value_enum, default_value = "auto")]
     source: ImportSourceArg,
 
@@ -715,15 +731,22 @@ fn run() -> Result<()> {
                     post_login: add.post_login,
                     group: add.group,
                     tags: add.tags,
+                    connection_kind: add.connection_type,
+                    teleport_proxy: add.proxy,
                 })
             }
             Some(ServersCommand::Delete(delete)) => {
                 commands::server::delete(&delete.name, delete.yes)
             }
         },
-        Some(Commands::Import(args)) => {
-            commands::import::run(args.source.into(), args.path, args.dry_run, args.json)
-        }
+        Some(Commands::Import(args)) => commands::import::run(
+            args.source.into(),
+            args.path,
+            args.dry_run,
+            args.json,
+            args.proxy,
+            args.user,
+        ),
         Some(Commands::Sessions) => commands::session::list(),
         Some(Commands::Attach(args)) => {
             let resolved =
@@ -821,6 +844,21 @@ mod tests {
             "web",
         ]);
         assert!(parsed.is_ok(), "vibeshell servers add should parse");
+    }
+
+    #[test]
+    fn parses_servers_add_teleport() {
+        let parsed = Cli::try_parse_from([
+            "vibeshell",
+            "servers",
+            "add",
+            "alice@web-1",
+            "--type",
+            "teleport",
+            "--proxy",
+            "teleport.example.com:443",
+        ]);
+        assert!(parsed.is_ok(), "teleport servers add should parse");
     }
 
     #[test]

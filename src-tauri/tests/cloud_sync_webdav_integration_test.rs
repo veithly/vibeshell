@@ -11,7 +11,7 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use vibeshell_core::{
     cloud_sync::CloudSyncManager,
-    storage::{AuthType, Database, Server},
+    storage::{AuthType, ConnectionKind, Database, Server},
 };
 
 #[derive(Clone, Default)]
@@ -113,6 +113,8 @@ async fn two_devices_sync_encrypted_records_through_webdav() {
         jump_host_id: None,
         post_login_command: None,
         agent_forwarding: false,
+        connection_kind: ConnectionKind::Ssh,
+        teleport_proxy: None,
     };
     source.server_add(&mut source_server).unwrap();
 

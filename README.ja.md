@@ -160,6 +160,10 @@ CLI は必要に応じて daemon を起動し、GUI は既存セッションに�
 
 Apple 署名/公証の状況は各リリースノートを参照してください。ad-hoc 署名は Apple 公証ではありません。モバイルは実験的で、全 MFA、ハードウェアトークン、SSH 実装への対応を保証しません。提案中の CLI サーバー作成/削除と Teleport は現在の 1.1.0 には含まれません。
 
+### Teleport ノード
+
+開発ブランチでは、デスクトップとネイティブ `vibeshell` CLI で Teleport 接続を管理できます。`tsh` でログインしてから `vibeshell servers add alice@node --type teleport --proxy proxy.example:443` で登録し、同じターミナル・コマンド・ファイル操作を利用します。ファイル操作にはノード上で実行できる標準 SFTP サーバーが必要です。未対応の構成は明示的にエラーを返します。[設定と対応範囲](docs/TELEPORT.md)。
+
 ## 動かす、開発する、実装を読む
 
 Tauri 2、Rust、React、TypeScript、xterm.js で構成しています。Node.js 22.12+、stable Rust、OS ごとの [Tauri 前提条件](https://v2.tauri.app/start/prerequisites/) が必要です。

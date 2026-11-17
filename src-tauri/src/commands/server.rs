@@ -3,11 +3,15 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::storage::database::Group;
-use crate::storage::{AuthType, Database, Server};
+use crate::storage::{AuthType, ConnectionKind, Database, Server};
 
 /// Shared add-server payload used by the GUI command and the CLI IPC path.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct AddServerSpec {
+    #[serde(default)]
+    pub connection_kind: Option<String>,
+    #[serde(default)]
+    pub teleport_proxy: Option<String>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -143,7 +147,18 @@ pub fn add_server_spec(db: &Database, spec: AddServerSpec) -> Result<Server, Str
         None
     };
 
+    let connection_kind = parse_connection_kind(spec.connection_kind.as_deref())?;
+    if connection_kind == ConnectionKind::Teleport
+        && (spec.credential.is_some()
+            || spec.credential_id.is_some()
+            || spec.passphrase.is_some()
+            || spec.key_path.is_some())
+    {
+        return Err("Teleport uses tsh login; do not attach SSH passwords or private keys".into());
+    }
     let mut new_server = Server {
+        connection_kind,
+        teleport_proxy: spec.teleport_proxy,
         id: String::new(),
         name: name.clone(),
         host,
@@ -159,6 +174,7 @@ pub fn add_server_spec(db: &Database, spec: AddServerSpec) -> Result<Server, Str
         post_login_command: spec.post_login_command.filter(|value| !value.is_empty()),
         agent_forwarding: spec.agent_forwarding,
     };
+    validate_transport(&new_server)?;
 
     let credentials =
         spec.credential
@@ -198,6 +214,10 @@ pub(crate) fn resolve_server_id(db: &Database, name_or_id: &str) -> Result<Strin
 /// Frontend sends snake_case field names (auth_type, credential_id, etc.)
 #[derive(Debug, Deserialize)]
 pub struct ServerInput {
+    #[serde(default, alias = "connectionKind")]
+    pub connection_kind: Option<String>,
+    #[serde(default, alias = "teleportProxy")]
+    pub teleport_proxy: Option<String>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -255,6 +275,8 @@ pub fn add_server(db: State<'_, Arc<Database>>, server: ServerInput) -> Result<S
 impl From<ServerInput> for AddServerSpec {
     fn from(server: ServerInput) -> Self {
         Self {
+            connection_kind: server.connection_kind,
+            teleport_proxy: server.teleport_proxy,
             name: server.name,
             host: server.host,
             port: server.port,
@@ -278,6 +300,14 @@ impl From<ServerInput> for AddServerSpec {
 /// Partial server update input — all fields optional except name/host/port/username
 #[derive(Deserialize)]
 pub struct ServerUpdateInput {
+    #[serde(default, alias = "connectionKind")]
+    pub connection_kind: Option<String>,
+    #[serde(
+        default,
+        alias = "teleportProxy",
+        deserialize_with = "deserialize_present_option"
+    )]
+    pub teleport_proxy: Option<Option<String>>,
     /// Omitted means preserve credentials; never deserialize into Server itself.
     pub credentials: Option<crate::storage::database::CredentialUpdate>,
     pub name: Option<String>,
@@ -352,7 +382,17 @@ pub fn update_server(
         return Err("Unknown authentication type".into());
     }
 
+    if let Some(kind) = updates.connection_kind.as_deref() {
+        if parse_connection_kind(Some(kind))? != existing.connection_kind {
+            return Err("Create a new profile to change its transport; existing credentials and live sessions are preserved".into());
+        }
+    }
+    if existing.is_teleport() && updates.credentials.is_some() {
+        return Err("Teleport credentials are managed by tsh login".into());
+    }
     let updated_server = Server {
+        connection_kind: existing.connection_kind,
+        teleport_proxy: updates.teleport_proxy.unwrap_or(existing.teleport_proxy),
         id: existing.id,
         name: updates.name.unwrap_or(existing.name),
         host: updates.host.unwrap_or(existing.host),
@@ -383,8 +423,33 @@ pub fn update_server(
     {
         return Err("Name, host, username and a valid port are required".into());
     }
+    validate_transport(&updated_server)?;
     db.server_update_with_credentials(&updated_server, updates.credentials.as_ref())
         .map_err(|e| format!("Failed to update server: {}", e))
+}
+
+fn parse_connection_kind(value: Option<&str>) -> Result<ConnectionKind, String> {
+    match value.unwrap_or("ssh") {
+        "ssh" => Ok(ConnectionKind::Ssh),
+        "teleport" => Ok(ConnectionKind::Teleport),
+        _ => Err("Unknown connection type; expected ssh or teleport".into()),
+    }
+}
+
+pub(crate) fn validate_transport(server: &Server) -> Result<(), String> {
+    if server.is_teleport() {
+        if server.jump_host_id.is_some()
+            || server.agent_forwarding
+            || server.port != 22
+            || server.credential_id.is_some()
+        {
+            return Err("Teleport profiles do not accept raw SSH jump hosts, agent forwarding, ports or credentials".into());
+        }
+        crate::teleport::TeleportTarget::from_server(server).map_err(|e| e.to_string())?;
+    } else if server.teleport_proxy.is_some() {
+        return Err("A Teleport proxy requires connection type teleport".into());
+    }
+    Ok(())
 }
 
 /// Delete a server and clean up everything attached to it:
@@ -571,6 +636,8 @@ mod tests {
             &db,
             super::AddServerSpec {
                 name: "bastion".to_string(),
+                connection_kind: None,
+                teleport_proxy: None,
                 host: "bastion.example.com".to_string(),
                 port: 22,
                 username: "jump".to_string(),
@@ -594,6 +661,8 @@ mod tests {
             &db,
             super::AddServerSpec {
                 name: "prod-web".to_string(),
+                connection_kind: None,
+                teleport_proxy: None,
                 host: "prod.example.com".to_string(),
                 port: 2222,
                 username: "root".to_string(),
@@ -633,6 +702,8 @@ mod tests {
             super::AddServerSpec {
                 name: "prod-web".to_string(),
                 host: "other.example.com".to_string(),
+                connection_kind: None,
+                teleport_proxy: None,
                 port: 22,
                 username: "root".to_string(),
                 auth_type: "password".to_string(),
@@ -734,5 +805,81 @@ mod tests {
         assert!(super::resolve_server_id(&db, &first.id)
             .unwrap_err()
             .contains("Ambiguous"));
+    }
+
+    #[test]
+    fn teleport_profiles_roundtrip_without_ssh_credentials_or_transport_downgrade() {
+        use crate::storage::{ConnectionKind, Database};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("transport.db");
+        let db = Database::new_at(path.clone()).unwrap();
+        let spec = super::AddServerSpec {
+            connection_kind: Some("teleport".into()),
+            teleport_proxy: Some("proxy.example:443".into()),
+            name: "teleport".into(),
+            host: "node-uuid".into(),
+            port: 22,
+            username: "CaseSensitive".into(),
+            auth_type: "password".into(),
+            ..Default::default()
+        };
+        for invalid in [
+            super::AddServerSpec {
+                credential: Some("must-not-be-saved".into()),
+                ..spec.clone()
+            },
+            super::AddServerSpec {
+                agent_forwarding: true,
+                ..spec.clone()
+            },
+            super::AddServerSpec {
+                port: 2222,
+                ..spec.clone()
+            },
+            super::AddServerSpec {
+                teleport_proxy: None,
+                ..spec.clone()
+            },
+            super::AddServerSpec {
+                host: "env=production".into(),
+                ..spec.clone()
+            },
+        ] {
+            assert!(super::add_server_spec(&db, invalid).is_err());
+            assert!(db.server_list(None, None).unwrap().is_empty());
+            assert!(db.credential_get("teleport").unwrap().is_none());
+        }
+        let server = super::add_server_spec(&db, spec).unwrap();
+        assert!(server.is_teleport());
+        assert!(server.credential_id.is_none());
+        let mut edited = server.clone();
+        edited.name = "renamed".into();
+        edited.teleport_proxy = Some("other-proxy:443".into());
+        db.server_update(&edited).unwrap();
+        let secret_update = crate::storage::database::CredentialUpdate {
+            credential: Some("not-a-tsh-password".into()),
+            passphrase: None,
+            key_path: None,
+        };
+        assert!(db
+            .server_update_with_credentials(&edited, Some(&secret_update))
+            .is_err());
+        let mut downgrade = edited.clone();
+        downgrade.connection_kind = ConnectionKind::Ssh;
+        downgrade.teleport_proxy = None;
+        assert!(db.server_update(&downgrade).is_err());
+        drop(db);
+        let db = Database::new_at(path).unwrap();
+        let restored = db.server_get(&server.id).unwrap().unwrap();
+        assert!(restored.is_teleport());
+        assert_eq!(restored.username, "CaseSensitive");
+        assert_eq!(restored.teleport_proxy.as_deref(), Some("other-proxy:443"));
+        assert!(db.credential_get("renamed").unwrap().is_none());
+        let mut legacy = serde_json::to_value(&restored).unwrap();
+        legacy.as_object_mut().unwrap().remove("connection_kind");
+        legacy.as_object_mut().unwrap().remove("teleport_proxy");
+        let legacy: crate::storage::Server = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.connection_kind, ConnectionKind::Ssh);
+        assert_eq!(legacy.teleport_proxy, None);
     }
 }

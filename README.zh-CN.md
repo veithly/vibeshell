@@ -160,6 +160,10 @@ CLI 可按需启动 daemon，GUI 能接入已有会话。连接依赖实际持�
 
 Apple 签名和公证以每次发布说明为准，ad-hoc 签名不是 Apple 公证。移动端仍是实验性支持，常见 OpenSSH 测试也不能覆盖每一种 MFA、硬件令牌或 SSH 实现。提议中的 CLI 新建/删除服务器和 Teleport 不属于当前 1.1.0 发布内容。
 
+### Teleport 节点
+
+开发分支支持在桌面和原生 `vibeshell` CLI 中管理 Teleport 连接。先用 `tsh` 登录，再执行 `vibeshell servers add alice@node --type teleport --proxy proxy.example:443`，即可沿用终端、命令和文件工作流。文件操作要求节点提供可执行的标准 SFTP 服务端；不支持的配置会明确报错。[配置方法与支持范围](docs/TELEPORT.md)。
+
 ## 自己运行，或者参与开发
 
 项目使用 Tauri 2、Rust、React、TypeScript 和 xterm.js。开发需要 Node.js 22.12+、当前稳定 Rust，以及系统对应的 [Tauri 前置依赖](https://v2.tauri.app/start/prerequisites/)。
