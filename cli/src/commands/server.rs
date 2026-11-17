@@ -10,6 +10,8 @@ use crate::ipc_support;
 use crate::ssh_target;
 
 pub struct AddServerArgs {
+    pub connection_kind: String,
+    pub teleport_proxy: Option<String>,
     pub target: String,
     pub name: Option<String>,
     pub user: Option<String>,
@@ -20,8 +22,6 @@ pub struct AddServerArgs {
     pub post_login: Option<String>,
     pub group: Option<String>,
     pub tags: Vec<String>,
-    pub connection_kind: String,
-    pub teleport_proxy: Option<String>,
 }
 
 /// List all configured servers known to VibeShell.
@@ -37,21 +37,20 @@ pub fn list() -> Result<()> {
 
             println!("Configured servers:");
             for server in servers {
-                let kind = server.connection_kind.as_deref().unwrap_or("ssh");
-                if kind == "teleport" {
+                if server.connection_kind == vibeshell_core::storage::ConnectionKind::Teleport {
                     println!(
-                        "  {}  {}@{}  teleport proxy={}",
+                        "  {}  {}@{}  type=teleport proxy={} auth=tsh",
                         server.name,
                         server.username,
                         server.host,
-                        server.teleport_proxy.as_deref().unwrap_or("-")
+                        server.teleport_proxy.as_deref().unwrap_or("(missing)")
                     );
-                } else {
-                    println!(
-                        "  {}  {}@{}:{}  auth={}",
-                        server.name, server.username, server.host, server.port, server.auth_type
-                    );
+                    continue;
                 }
+                println!(
+                    "  {}  {}@{}:{}  auth={}",
+                    server.name, server.username, server.host, server.port, server.auth_type
+                );
             }
             Ok(())
         }
@@ -88,32 +87,54 @@ pub fn add(args: AddServerArgs) -> Result<()> {
         .unwrap_or_else(|| host.clone());
 
     let identity_path = args.identity.as_deref();
-    let is_teleport = args.connection_kind.eq_ignore_ascii_case("teleport")
-        || args.connection_kind.eq_ignore_ascii_case("tsh");
-    if is_teleport {
-        let proxy_ok = args
-            .teleport_proxy
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some();
-        if !proxy_ok {
-            bail!("Teleport servers require --proxy (for example teleport.example.com:443)");
-        }
+    let teleport = args.connection_kind == "teleport";
+    if !matches!(args.connection_kind.as_str(), "ssh" | "teleport") {
+        bail!("Unknown connection type; expected ssh or teleport");
     }
-
-    let (auth_type, credential, passphrase, key_path, saved_credentials) = if is_teleport {
-        ("password", None, None, None, true)
+    if teleport
+        && (identity_path.is_some()
+            || args.jump.is_some()
+            || args.agent_forwarding
+            || args.port.is_some()
+            || target.port.is_some())
+    {
+        bail!("Teleport profiles use --proxy and tsh login, not SSH identity/jump/forwarding/port options");
+    }
+    if teleport {
+        vibeshell_core::teleport::TeleportTarget::new(
+            args.teleport_proxy.as_deref().unwrap_or_default(),
+            &username,
+            &host,
+        )?;
+    } else if args.teleport_proxy.is_some() {
+        bail!("--proxy requires --type teleport");
+    }
+    let ResolvedCredentials {
+        auth_type,
+        credential,
+        passphrase,
+        key_path,
+    } = if teleport {
+        ResolvedCredentials {
+            auth_type: "password",
+            credential: None,
+            passphrase: None,
+            key_path: None,
+        }
     } else {
         resolve_credentials(identity_path)?
     };
+    let saved_credentials = credential.is_some();
 
     let spec = AddServerSpec {
+        connection_kind: Some(args.connection_kind),
+        teleport_proxy: args.teleport_proxy,
         name: name.clone(),
         host: host.clone(),
         port,
         username: username.clone(),
         auth_type: auth_type.to_string(),
+        credential_id: None,
         group_id: None,
         group_name: args.group,
         tags: args.tags,
@@ -121,8 +142,6 @@ pub fn add(args: AddServerArgs) -> Result<()> {
         jump_host: args.jump,
         post_login_command: args.post_login,
         agent_forwarding: args.agent_forwarding,
-        connection_kind: Some(args.connection_kind),
-        teleport_proxy: args.teleport_proxy,
         credential,
         passphrase,
         key_path,
@@ -134,7 +153,11 @@ pub fn add(args: AddServerArgs) -> Result<()> {
                 "Added server '{}' ({}@{}:{})",
                 server.name, server.username, server.host, server.port
             );
-            if !saved_credentials {
+            if teleport {
+                eprintln!(
+                    "Uses your existing tsh login. Run tsh login explicitly before connecting."
+                );
+            } else if !saved_credentials {
                 if identity_path.is_some() {
                     eprintln!(
                         "Warning: --identity was set but the key file could not be stored. This should not happen."
@@ -154,7 +177,11 @@ pub fn add(args: AddServerArgs) -> Result<()> {
     }
 }
 
-pub fn delete(name: &str) -> Result<()> {
+pub fn delete(name: &str, confirmed: bool) -> Result<()> {
+    // Refuse before starting a daemon or sending any mutation.
+    if !confirmed {
+        bail!("Deletion closes active sessions and removes saved credentials. Confirm with --yes");
+    }
     let name = name.trim();
     if name.is_empty() {
         bail!("Server name is required");
@@ -162,6 +189,7 @@ pub fn delete(name: &str) -> Result<()> {
 
     match ipc_support::send(&IpcMessage::DeleteServer {
         name: name.to_string(),
+        confirmed,
     })? {
         IpcMessage::Ok => {
             println!("Deleted server '{name}'");
@@ -174,15 +202,14 @@ pub fn delete(name: &str) -> Result<()> {
     }
 }
 
-fn resolve_credentials(
-    identity: Option<&Path>,
-) -> Result<(
-    &'static str,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    bool,
-)> {
+struct ResolvedCredentials {
+    auth_type: &'static str,
+    credential: Option<String>,
+    passphrase: Option<String>,
+    key_path: Option<String>,
+}
+
+fn resolve_credentials(identity: Option<&Path>) -> Result<ResolvedCredentials> {
     if let Some(path) = identity {
         let key = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read identity file {}", path.display()))?;
@@ -191,27 +218,33 @@ fn resolve_credentials(
         }
         let passphrase =
             env_nonempty("VIBESHELL_KEY_PASSPHRASE").or_else(|| env_nonempty("SSH_KEY_PASSPHRASE"));
-        Ok((
-            "key_with_passphrase",
-            Some(key),
+        Ok(ResolvedCredentials {
+            auth_type: "key_with_passphrase",
+            credential: Some(key),
             passphrase,
-            Some(path.display().to_string()),
-            true,
-        ))
+            key_path: Some(path.display().to_string()),
+        })
     } else if let Some(password) =
         env_nonempty("SSH_PASSWORD").or_else(|| env_nonempty("VIBESHELL_PASSWORD"))
     {
-        Ok(("password", Some(password), None, None, true))
+        Ok(ResolvedCredentials {
+            auth_type: "password",
+            credential: Some(password),
+            passphrase: None,
+            key_path: None,
+        })
     } else {
-        Ok(("password", None, None, None, false))
+        Ok(ResolvedCredentials {
+            auth_type: "password",
+            credential: None,
+            passphrase: None,
+            key_path: None,
+        })
     }
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]
@@ -219,9 +252,21 @@ mod tests {
     use super::env_nonempty;
 
     #[test]
-    fn env_nonempty_treats_blank_as_unset() {
+    fn env_nonempty_preserves_exact_secret_bytes() {
         std::env::set_var("VIBESHELL_TEST_EMPTY_SECRET", "   ");
+        assert!(env_nonempty("VIBESHELL_TEST_EMPTY_SECRET").as_deref() == Some("   "));
+        std::env::set_var("VIBESHELL_TEST_EMPTY_SECRET", " secret \n");
+        assert!(env_nonempty("VIBESHELL_TEST_EMPTY_SECRET").as_deref() == Some(" secret \n"));
+        std::env::set_var("VIBESHELL_TEST_EMPTY_SECRET", "");
         assert!(env_nonempty("VIBESHELL_TEST_EMPTY_SECRET").is_none());
         std::env::remove_var("VIBESHELL_TEST_EMPTY_SECRET");
+    }
+
+    #[test]
+    fn deletion_without_confirmation_never_contacts_service() {
+        assert!(super::delete("anything", false)
+            .unwrap_err()
+            .to_string()
+            .contains("--yes"));
     }
 }

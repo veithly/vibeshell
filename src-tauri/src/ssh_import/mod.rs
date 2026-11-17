@@ -151,17 +151,10 @@ pub fn detect_import_sources() -> Vec<DetectedImportSource> {
         DetectedImportSource {
             kind: ImportSourceKind::Teleport,
             label: "Teleport (tsh)".to_string(),
-            available: crate::teleport::tsh_output(["status"])
-                .ok()
-                .map(|output| {
-                    crate::teleport::logged_in_from_status(&format!(
-                        "{}\n{}",
-                        output.stdout, output.stderr
-                    ))
-                })
-                .unwrap_or(false),
+            // Do not invoke a network/authentication tool during auto-detection.
+            available: false,
             path: None,
-            detail: "SSH nodes from `tsh status` and `tsh ls`. Run `tsh login --proxy=...` first."
+            detail: "Explicit import only: vibeshell import teleport --proxy HOST --user UNIX_LOGIN. Run tsh login first."
                 .to_string(),
         },
     ]
@@ -171,8 +164,11 @@ pub fn preview_import(
     source: ImportSourceKind,
     explicit_path: Option<PathBuf>,
 ) -> Result<ImportPreview> {
+    if source == ImportSourceKind::Teleport {
+        bail!("Teleport import requires explicit --proxy and --user; --path is not a proxy option");
+    }
     if source == ImportSourceKind::Auto && explicit_path.is_some() {
-        bail!("--path must be used with openssh, putty, tabby, or teleport, not auto");
+        bail!("--path must be used with openssh, putty, or tabby, not auto");
     }
 
     let sources = detect_import_sources();
@@ -211,7 +207,7 @@ pub fn preview_import(
             candidate.name.to_ascii_lowercase(),
             candidate.host.to_ascii_lowercase(),
             candidate.port,
-            candidate.username.to_ascii_lowercase(),
+            candidate.username.clone(),
         ))
     });
     servers.sort_by(|left, right| {
@@ -398,7 +394,7 @@ fn append_source(
         ImportSourceKind::Tabby => {
             tabby::parse(path.context("Tabby config path is unavailable")?, warnings)?
         }
-        ImportSourceKind::Teleport => teleport_candidates(path, warnings)?,
+        ImportSourceKind::Teleport => bail!("Teleport requires an explicit proxy and Unix login"),
     };
     servers.append(&mut imported);
     Ok(())
@@ -414,26 +410,9 @@ fn default_path_for(kind: ImportSourceKind) -> Option<PathBuf> {
     }
 }
 
-fn teleport_candidates(
-    path: Option<&Path>,
-    warnings: &mut Vec<String>,
-) -> Result<Vec<ImportCandidate>> {
-    let proxy = path
-        .and_then(|value| value.to_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let preview = crate::teleport::preview_import(proxy)?;
-    warnings.extend(preview.warnings);
-    let username = preview
-        .login
-        .as_deref()
-        .map(|value| value.split('@').next().unwrap_or(value).trim())
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(local_username);
-
-    Ok(preview
-        .nodes
+pub fn preview_teleport_import(proxy: &str, username: &str) -> Result<ImportPreview> {
+    let nodes = crate::teleport::preview_nodes(proxy, username)?;
+    let servers = nodes
         .into_iter()
         .map(|node| ImportCandidate {
             source: ImportSourceKind::Teleport,
@@ -441,7 +420,7 @@ fn teleport_candidates(
             name: node.clone(),
             host: node,
             port: 22,
-            username: username.clone(),
+            username: username.to_owned(),
             auth_type: AuthType::Password,
             key_path: None,
             jump_host: None,
@@ -449,9 +428,20 @@ fn teleport_candidates(
             agent_forwarding: false,
             tags: vec!["import:teleport".to_string()],
             connection_kind: ConnectionKind::Teleport,
-            teleport_proxy: Some(preview.proxy.clone()),
+            teleport_proxy: Some(proxy.to_owned()),
         })
-        .collect())
+        .collect();
+    Ok(ImportPreview {
+        sources: vec![DetectedImportSource {
+            kind: ImportSourceKind::Teleport,
+            label: "Teleport".into(),
+            available: true,
+            path: None,
+            detail: format!("Explicit proxy {proxy}; Unix login {username}"),
+        }],
+        servers,
+        warnings: Vec::new(),
+    })
 }
 
 fn remember_aliases(
@@ -472,7 +462,7 @@ fn remember_aliases(
 fn same_endpoint(server: &Server, candidate: &ImportCandidate) -> bool {
     server.host.eq_ignore_ascii_case(&candidate.host)
         && server.port == candidate.port
-        && server.username.eq_ignore_ascii_case(&candidate.username)
+        && server.username == candidate.username
         && server.connection_kind == candidate.connection_kind
         && server.teleport_proxy.as_deref() == candidate.teleport_proxy.as_deref()
 }

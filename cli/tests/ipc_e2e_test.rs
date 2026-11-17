@@ -59,7 +59,8 @@ fn test_ssh_interactive_pipeline() {
     std::thread::sleep(Duration::from_secs(2));
 
     // 6. Send a simple command via SendInput
-    let cmd = "echo VIBESHELL_TEST_OK\n";
+    // The expected marker must not appear in the echoed command itself.
+    let cmd = "printf '%s%s\\n' VIBESHELL_ PIPELINE_OK\n";
     let send_result = IpcClient::send(&IpcMessage::SendInput {
         session_id: session_id.clone(),
         data: cmd.as_bytes().to_vec(),
@@ -70,15 +71,16 @@ fn test_ssh_interactive_pipeline() {
         "SendInput should return Ok, got: {:?}",
         send_result
     );
-    println!("Sent command: echo VIBESHELL_TEST_OK");
+    println!("Sent harmless output-marker command");
 
     // 7. Read output — look for our test marker in the streaming output
     //    The streaming reader blocks on read_line(), so we use a thread with timeout.
-    let found_marker = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let found_clone = found_marker.clone();
+    let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
 
     let read_thread = std::thread::spawn(move || {
         let mut line_buf = String::new();
+        let mut tail = Vec::new();
+        let mut marker_found = false;
         loop {
             line_buf.clear();
             match reader.read_line(&mut line_buf) {
@@ -93,12 +95,14 @@ fn test_ssh_interactive_pipeline() {
                     }
                     match serde_json::from_str::<IpcMessage>(trimmed) {
                         Ok(IpcMessage::SessionOutput { data, .. }) => {
-                            let text = String::from_utf8_lossy(&data);
-                            print!("[OUTPUT] {}", text);
-                            if text.contains("VIBESHELL_TEST_OK") {
-                                found_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+                            const MARKER: &[u8] = b"VIBESHELL_PIPELINE_OK";
+                            tail.extend_from_slice(&data);
+                            if tail.windows(MARKER.len()).any(|bytes| bytes == MARKER) {
+                                marker_found = true;
                                 break;
                             }
+                            let keep_from = tail.len().saturating_sub(MARKER.len() - 1);
+                            tail.drain(..keep_from);
                         }
                         Ok(IpcMessage::SessionEnded { reason }) => {
                             println!("[SESSION ENDED] {}", reason);
@@ -108,7 +112,7 @@ fn test_ssh_interactive_pipeline() {
                             println!("[OTHER] {:?}", other);
                         }
                         Err(e) => {
-                            println!("[PARSE ERROR] {} for: {}", e, trimmed);
+                            println!("[PARSE ERROR] {}", e);
                         }
                     }
                 }
@@ -118,26 +122,28 @@ fn test_ssh_interactive_pipeline() {
                 }
             }
         }
+        let _ = finished_tx.send(marker_found);
     });
 
-    // Wait up to 10 seconds for the read thread to find the marker
-    match read_thread.join() {
-        Ok(()) => {}
-        Err(_) => println!("Read thread panicked"),
-    }
-
-    let marker_found = found_marker.load(std::sync::atomic::Ordering::SeqCst);
+    // join() itself has no deadline. Bound the observation before cleanup,
+    // rather than leaving the test hung when the server sends no output.
+    let marker_found = finished_rx
+        .recv_timeout(Duration::from_secs(20))
+        .unwrap_or(false);
 
     // 8. Kill the session
     let kill_result = IpcClient::send(&IpcMessage::KillSession {
         session_id: session_id.clone(),
     });
     println!("Kill result: {:?}", kill_result);
+    if read_thread.is_finished() {
+        read_thread.join().expect("output reader panicked");
+    }
 
     // 9. Assert we found the marker
     assert!(
         marker_found,
-        "Expected to find VIBESHELL_TEST_OK in session output"
+        "Expected actual VIBESHELL_PIPELINE_OK command output within 20 seconds"
     );
 
     println!("SUCCESS: Full interactive SSH pipeline works!");

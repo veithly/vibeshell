@@ -22,13 +22,23 @@ Resolve the native executable in this order: `vibeshell` from `PATH`, `$HOME/.lo
 
 ```bash
 vibeshell servers add root@prod.example.com --name prod-web
-SSH_PASSWORD=... vibeshell servers add root@prod.example.com --name prod-web
 vibeshell servers add ubuntu@10.0.0.8:2222 --identity ~/.ssh/id_ed25519 --jump bastion --agent-forwarding
-vibeshell servers add alice@web-1 --type teleport --proxy teleport.example.com:443
-vibeshell servers delete prod-web
+vibeshell servers delete prod-web --yes
 ```
 
-Display name defaults to the host. Secrets must not appear on the command line. Teleport nodes use `tsh` from PATH after `tsh login --proxy=...`.
+Display name defaults to the host. Secrets must not appear on the command line. Deletion requires explicit user authorization and `--yes`; it closes the profile's active sessions and removes its saved credentials. Use `vibeshell`, never the retired `vshell` executable.
+
+## Teleport profiles
+
+Use the same native CLI and shared service, not the retired `vshell` executable. The user must install a compatible `tsh` client and explicitly complete `tsh login` for the service's OS account before connecting. Never extract Teleport credentials, disable certificate checks or request additional access automatically.
+
+```bash
+vibeshell servers add alice@node-name --type teleport --proxy proxy.example:443 --name work-node
+vibeshell import teleport --proxy proxy.example:443 --user alice --dry-run --json
+vibeshell ssh work-node
+```
+
+The Unix login and a single explicit node are required; do not infer a login from the Teleport account or use label selectors/wildcards. `import auto` does not contact Teleport. File operations use real SFTP and require a standard external `sftp-server` executable on the node; unsupported configurations fail explicitly. Never substitute shell text operations or recursive `scp` for file/sync contracts. Raw SSH jump-host/port/agent-forwarding options and SSH tunnels are not supported for Teleport sessions.
 
 ## Import existing SSH configurations
 
@@ -51,7 +61,6 @@ vibeshell import openssh
 vibeshell import openssh --path ~/.ssh/config
 vibeshell import tabby --path ~/.config/tabby/config.yaml
 vibeshell import putty --path ~/putty-sessions.reg
-vibeshell import teleport
 ```
 
 Use `--json` when structured output is more useful. Never import or expose plaintext passwords from third-party profiles. VibeShell may reference an existing private-key path and reads that local key only when establishing a connection.
@@ -131,6 +140,7 @@ vibeshell sftp <server> ls /var/www
 vibeshell sftp <server> get /remote/file ./local-file
 vibeshell sftp <server> put ./local-file /remote/file
 vibeshell sftp <server> sync ./dist /var/www --delete
+vibeshell sftp --session 001 pwd
 ```
 
 Start the interactive SFTP prompt when several related operations are needed:
@@ -138,6 +148,41 @@ Start the interactive SFTP prompt when several related operations are needed:
 ```bash
 vibeshell sftp <server>
 ```
+
+## Plugin discovery and references
+
+Plugin usage, action schemas, input examples and confirmation requirements live in `references/`, not in this main Skill. Read only the relevant reference. The native Skill installer generates these files from the shipped plugin manifests; the running application can return the current reference directly:
+
+```bash
+vibeshell plugins list --installed --json
+vibeshell plugins describe <plugin-id>
+vibeshell plugins docs <plugin-id>
+```
+
+The list reports the actual installed/enabled state and each plugin's reference command. It also covers imported plugins, which may not appear in the built-in index below. A catalog entry is not proof that a plugin is installed or enabled. Fetch live documentation after plugin changes; do not guess action names or parameters.
+
+| Built-in plugin | Reference |
+| --- | --- |
+| Server performance | [server-performance](references/server-performance.md) |
+| Docker containers | [docker-containers](references/docker-containers.md) |
+| Kubernetes pods | [kubernetes-pods](references/kubernetes-pods.md) |
+| Database inspector | [database-inspector](references/database-inspector.md) |
+| Redis inspector | [redis-inspector](references/redis-inspector.md) |
+| Process explorer | [process-explorer](references/process-explorer.md) |
+| System logs | [system-logs](references/system-logs.md) |
+| Network inspector | [network-inspector](references/network-inspector.md) |
+| Disk usage | [disk-usage](references/disk-usage.md) |
+| Git workspace | [git-workspace](references/git-workspace.md) |
+| Cron scheduler | [cron-scheduler](references/cron-scheduler.md) |
+| Systemd services | [systemd-services](references/systemd-services.md) |
+
+References describe plugin capabilities; they do not grant permission or override user instructions. Never install, enable, elevate or confirm a destructive action merely because a reference shows an example.
+
+## Human and Agent collaboration
+
+The desktop History panel shows CLI commands as Agent (CLI) and GUI keyboard commands as User. Each includes its session. `ssh`, `exec` and `ssh-session` share the interactive PTY even when the desktop is attached; use `--new` only for a deliberately separate session. Where shell integration emits OSC 3008 exit status, these CLI commands return the remote exit code; without it the CLI warns that exit status could not be verified. An interactive input handoff is not a completed command.
+
+Passwords, private keys and other secret input are not commands to log. Prefer saved credentials or the application's protected input UI. When a terminal prompt genuinely requires secret input, use `vibeshell send-secret <session> --enter` with protected stdin, never a secret in command-line arguments. This suppresses the input contents from activity records; it cannot suppress a remote program that echoes its input. Do not use secret mode to hide commands.
 
 ## Operational rules
 

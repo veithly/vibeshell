@@ -3,6 +3,11 @@ import { safeInvoke, TauriError, sendInputBatched } from '../lib/tauri';
 import { useNotificationStore } from './notificationStore';
 import { useFileWorkspaceStore } from './fileWorkspaceStore';
 import { usePluginWorkspaceStore } from './pluginWorkspaceStore';
+import { useServerStore } from './serverStore';
+import { useFingerprintStore, parseHostKeyError } from './fingerprintStore';
+// Single source of truth for the local_shell_* Tauri wrappers lives in
+// localShellStore; the sessionStore local-shell methods delegate to it.
+import { isSessionMissingError, useLocalShellStore } from './localShellStore';
 import type { CodingAgentLaunchRequest } from '../types/codingAgent';
 
 /**
@@ -58,6 +63,14 @@ function upsertSession(sessions: Session[], session: Session): Session[] {
     existingIndex === index ? { ...existing, ...session } : existing
   );
 }
+
+/**
+ * Detect backend errors that mean the session no longer exists server-side
+ * (e.g. "Session not found: <id>" from the session manager / IPC relay).
+ * Defined in localShellStore.ts (shared with the local shell kill flow) and
+ * re-exported here to keep the existing import path stable.
+ */
+export { isSessionMissingError };
 
 /**
  * Session type: SSH or Local Shell
@@ -202,13 +215,13 @@ interface SessionStore {
   ) => Promise<Session | null>;
   /** Launch a local coding agent inside a PTY-backed session. */
   launchCodingAgentSession: (request: CodingAgentLaunchRequest) => Promise<Session | null>;
-  /** Send input to a local shell session */
+  /** Send input to a local shell session (delegates to localShellStore) */
   sendLocalShellInput: (sessionId: string, data: string) => Promise<boolean>;
-  /** Send input fast to a local shell session (fire-and-forget) */
+  /** Send input fast to a local shell session (fire-and-forget; delegates to localShellStore) */
   sendLocalShellInputFast: (sessionId: string, data: string) => void;
-  /** Resize a local shell session */
+  /** Resize a local shell session (delegates to localShellStore) */
   resizeLocalShellSession: (sessionId: string, cols: number, rows: number) => Promise<boolean>;
-  /** Kill a local shell session */
+  /** Kill a local shell session (delegates to localShellStore; session-not-found removes the tab and returns true) */
   killLocalShellSession: (sessionId: string) => Promise<boolean>;
 }
 
@@ -242,7 +255,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
     const sessions = [...state.sessions];
     const [moved] = sessions.splice(fromIndex, 1);
-    sessions.splice(toIndex, 0, moved);
+    sessions.splice(fromIndex < toIndex ? toIndex - 1 : toIndex, 0, moved);
     return { sessions };
   }),
 
@@ -338,73 +351,137 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     rows?: number,
     forceNew = false
   ) => {
-    console.log('[sessionStore] connectWithCredentials called:', {
-      serverName,
-      authType,
-      hasCredential: !!credential,
-      hasPassphrase: !!passphrase,
-      cols: cols ?? 80,
-      rows: rows ?? 24,
-    });
-
     set({ loading: true, error: null });
 
-    console.log('[sessionStore] Invoking session_connect command...');
-    const result = await safeInvoke<SessionInfo>('session_connect', {
-      request: {
-        serverName: serverName,
-        authType: authType,
-        credential,
-        // An empty passphrase means "unencrypted key" — send null so the
-        // backend never tries to decrypt the key with an empty string.
-        passphrase: passphrase ? passphrase : null,
-        cols: cols ?? 80,
-        rows: rows ?? 24,
-        forceNew,
-      },
-    });
+    const connectRequest = {
+      serverName: serverName,
+      authType: authType,
+      credential,
+      // An empty passphrase means "unencrypted key" — send null so the
+      // backend never tries to decrypt the key with an empty string.
+      passphrase: passphrase ? passphrase : null,
+      cols: cols ?? 80,
+      rows: rows ?? 24,
+      forceNew,
+    };
 
-    console.log('[sessionStore] session_connect result:', result);
-
-    if (result.success) {
-      const session = mapSessionInfo(result.data);
-
-      console.log('[sessionStore] Session created:', session);
-
+    const finishSuccess = (info: SessionInfo): Session => {
+      const session = mapSessionInfo(info);
       set((state) => ({
         sessions: upsertSession(state.sessions, session),
         activeSessionId: state.activeSessionId ?? session.id,
         loading: false,
       }));
-
       return session;
-    } else {
-      console.error('[sessionStore] session_connect failed:', result.error.message);
-      set({
-        error: result.error.message,
-        loading: false,
-      });
-      showError('Connection Failed', result.error);
+    };
+
+    const finishFailure = (error: TauriError): null => {
+      console.error('[sessionStore] session_connect failed:', error.message);
+      set({ error: error.message, loading: false });
+      showError('Connection Failed', error);
       return null;
+    };
+
+    // === TOFU: verify the server's host key BEFORE any credentials are sent. ===
+    // The probe performs an SSH handshake only (no authentication). The
+    // backend enforces the same policy during the real connect, so skipping
+    // this probe (e.g. when the probe cannot run) can never leak credentials.
+    const server = useServerStore
+      .getState()
+      .servers.find((candidate) => candidate.name === serverName);
+
+    // A jump target may not be reachable (or resolve identically) from this
+    // machine. Let the backend verify its identity through the actual route.
+    if (server && !server.jump_host_id) {
+      const { probeHostKey, requestHostKeyApproval } = useFingerprintStore.getState();
+      const probe = await probeHostKey(server.host, server.port);
+
+      if (probe && probe.status !== 'known') {
+        const approved = await requestHostKeyApproval({
+          host: server.host,
+          port: server.port,
+          fingerprint: probe.fingerprint ?? '',
+          algorithm: probe.keyType ?? 'unknown',
+          serverName,
+          status: probe.status,
+          storedFingerprint: probe.storedFingerprint ?? undefined,
+          storedAlgorithm: probe.storedKeyType ?? undefined,
+          storedAt: probe.storedAt ?? undefined,
+        });
+
+        if (!approved) {
+          useNotificationStore
+            .getState()
+            .warning(
+              'Connection Cancelled',
+              `Host key for ${server.host}:${server.port} was not trusted — no credentials were sent.`
+            );
+          set({ loading: false, error: 'Connection cancelled: host key not trusted' });
+          return null;
+        }
+        // Approved: acceptPendingVerification persisted the fingerprint, so
+        // the backend policy will trust the key during the connect below.
+      }
     }
+
+    let result = await safeInvoke<SessionInfo>('session_connect', {
+      request: connectRequest,
+    });
+
+    // Host-key refusal at the backend — covers a key that changed between the
+    // probe and the connect, and untrusted jump-host keys (which the frontend
+    // cannot probe because the jump chain is resolved backend-side). Offer
+    // the verification dialog with the details from the structured error and
+    // A single-hop route may need separate approvals for the jump and target.
+    // Never repeatedly approve the same identity in one connection attempt.
+    const approvedHosts = new Set<string>();
+    for (let approvals = 0; !result.success && approvals < 2; approvals += 1) {
+      const hostKeyError = parseHostKeyError(result.error.message);
+      if (hostKeyError && hostKeyError.host && hostKeyError.port && hostKeyError.fingerprint) {
+        const identity = JSON.stringify([hostKeyError.host, hostKeyError.port]);
+        if (approvedHosts.has(identity)) break;
+        approvedHosts.add(identity);
+        const approved = await useFingerprintStore.getState().requestHostKeyApproval({
+          host: hostKeyError.host,
+          port: hostKeyError.port,
+          fingerprint: hostKeyError.fingerprint,
+          algorithm: hostKeyError.keyType ?? 'unknown',
+          serverName,
+          status: hostKeyError.kind,
+          storedFingerprint: hostKeyError.storedFingerprint,
+          storedAlgorithm: hostKeyError.storedKeyType,
+        });
+
+        if (!approved) {
+          set({ loading: false, error: 'Connection cancelled: host key not trusted' });
+          return null;
+        }
+
+        result = await safeInvoke<SessionInfo>('session_connect', {
+          request: connectRequest,
+        });
+      } else {
+        break;
+      }
+    }
+
+    if (result.success) {
+      return finishSuccess(result.data);
+    }
+    return finishFailure(result.error);
   },
 
   attachSession: async (sessionId: string) => {
-    console.log('[sessionStore] attachSession called for:', sessionId);
-    console.log('[sessionStore] Invoking session_attach command...');
     const result = await safeInvoke<SessionInfo>('session_attach', {
       request: {
         sessionId: sessionId,
       },
     });
 
-    console.log('[sessionStore] session_attach result:', result);
-
     if (result.success) {
       // Update session state if needed
       const { updateSession } = get();
       updateSession(sessionId, { state: result.data.state });
-      console.log('[sessionStore] Session state updated to:', result.data.state);
       return true;
     }
     console.warn('[sessionStore] session_attach failed:', result.error.message);
@@ -499,7 +576,18 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       get().removeSession(sessionId);
       return true;
     }
-    console.warn('Failed to kill session:', result.error.message);
+
+    if (isSessionMissingError(result.error.message)) {
+      // The backend already dropped the session: removing the local tab is
+      // safe because the sync poll cannot resurrect it.
+      console.warn('Session already gone on backend, removing local tab:', sessionId);
+      get().removeSession(sessionId);
+      return true;
+    }
+
+    // The session may still be alive backend-side. Keep the tab and let the
+    // periodic sync reconcile instead of force-removing (which caused the
+    // sync poll to resurrect the tab a moment later).
     showError('Failed to Close Session', result.error);
     return false;
   },
@@ -525,7 +613,11 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const result = await safeInvoke<SessionInfo[]>('session_list');
 
     if (result.success) {
-      const sessions: Session[] = result.data.map(mapSessionInfo);
+      // A full SSH refresh must not discard independent local PTYs.
+      const sessions: Session[] = [
+        ...get().sessions.filter((session) => session.sessionType === 'local'),
+        ...result.data.map(mapSessionInfo),
+      ];
 
       useFileWorkspaceStore
         .getState()
@@ -552,9 +644,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       const errorMsg = result.error.isTauriUnavailable
         ? 'Running in browser mode'
         : result.error.message;
-      useFileWorkspaceStore.getState().retainTabsForSessions([]);
-    usePluginWorkspaceStore.getState().retainTabsForSessions([]);
-      set({ sessions: [], loading: false, error: errorMsg });
+      // A transient IPC failure is not evidence that sessions disappeared.
+      // Keep terminal and editor state, including unsaved file contents.
+      set({ loading: false, error: errorMsg });
       // Don't show toast for initial fetch failures when Tauri unavailable
       if (!result.error.isTauriUnavailable) {
         showError('Failed to Load Sessions', result.error);
@@ -563,6 +655,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   syncRemoteSessions: async () => {
+    const requestedSshIds = new Set(
+      get().sessions.filter((session) => session.sessionType === 'ssh').map((session) => session.id)
+    );
     const [result, localResult] = await Promise.all([
       safeInvoke<SessionInfo[]>('session_list'),
       safeInvoke<LocalShellSessionInfo[]>('local_shell_list_sessions'),
@@ -603,6 +698,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         }
         const backend = backendById.get(session.id);
         if (!backend) {
+          // The snapshot predates sessions created while IPC was in flight.
+          if (!requestedSshIds.has(session.id)) return [session];
           changed = true;
           return [];
         }
@@ -696,49 +793,29 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   sendLocalShellInput: async (sessionId: string, data: string) => {
-    const result = await safeInvoke('local_shell_send_input', {
-      request: {
-        sessionId,
-        data,
-      },
-    });
-    if (!result.success) {
-      console.warn('Failed to send input to local shell:', result.error.message);
-    }
-    return result.success;
+    // Thin delegator: localShellStore owns the local_shell_send_input wrapper.
+    return useLocalShellStore.getState().sendInput(sessionId, data);
   },
 
   sendLocalShellInputFast: (sessionId: string, data: string) => {
-    sendInputBatched(sessionId, data, 'local_shell_send_input');
+    useLocalShellStore.getState().sendInputFast(sessionId, data);
   },
 
   resizeLocalShellSession: async (sessionId: string, cols: number, rows: number) => {
-    const result = await safeInvoke('local_shell_resize', {
-      request: {
-        sessionId,
-        cols,
-        rows,
-      },
-    });
-    if (!result.success) {
-      console.warn('Failed to resize local shell:', result.error.message);
-    }
-    return result.success;
+    return useLocalShellStore.getState().resizeSession(sessionId, cols, rows);
   },
 
   killLocalShellSession: async (sessionId: string) => {
-    const result = await safeInvoke('local_shell_kill', {
-      request: {
-        sessionId,
-      },
-    });
-
-    if (result.success) {
+    // localShellStore.killSession is the single implementation of
+    // local_shell_kill and already treats "session not found" as closed.
+    // On success (or when the backend already dropped the session) also
+    // remove the tab here, which closes any file/plugin workspace tabs
+    // bound to the session.
+    const killed = await useLocalShellStore.getState().killSession(sessionId);
+    if (killed) {
       get().removeSession(sessionId);
-      return true;
     }
-    showError('Failed to Close Local Shell', result.error);
-    return false;
+    return killed;
   },
 }));
 

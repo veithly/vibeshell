@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import licenseText from '../../../LICENSE?raw';
+import licenseNotice from '../../../NOTICE?raw';
 import { useTranslation } from 'react-i18next';
 import {
   useSettingsStore,
@@ -1508,6 +1510,12 @@ export function Settings() {
                   <span className="text-tokyo-fg">Tauri + React + TypeScript</span>
                 </div>
               </div>
+
+              <details className="mt-4 rounded-lg border border-tokyo-bg-hl p-3 text-sm">
+                <summary className="cursor-pointer font-medium text-tokyo-fg">GPL-3.0-only · License / 许可证</summary>
+                <p className="mt-2 text-tokyo-comment">Copyright © 2026 Rick (veithly) and contributors. No warranty. Redistribution and modification are permitted under GPLv3.</p>
+                <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs text-tokyo-fg" tabIndex={0}>{licenseNotice}{'\n'}{licenseText}</pre>
+              </details>
 
               {runtimeCapabilities.desktopUpdater && (
                 <div className="mt-4 pt-4 border-t border-tokyo-bg-hl">

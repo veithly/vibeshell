@@ -18,18 +18,14 @@ pub(super) fn default_path() -> Option<PathBuf> {
 }
 
 pub(super) fn source_available(path: Option<&Path>) -> bool {
-    if path.map(Path::exists).unwrap_or(false) {
-        return true;
-    }
     #[cfg(windows)]
     {
-        return registry_profiles()
-            .map(|profiles| !profiles.is_empty())
-            .unwrap_or(false);
+        path.is_some_and(Path::exists)
+            || registry_profiles().is_ok_and(|profiles| !profiles.is_empty())
     }
     #[cfg(not(windows))]
     {
-        false
+        path.is_some_and(Path::exists)
     }
 }
 
@@ -277,16 +273,20 @@ fn read_text_file(path: &Path) -> Result<String> {
     let bytes = fs::read(path).with_context(|| format!("Failed to read {}", path.display()))?;
     if bytes.starts_with(&[0xff, 0xfe]) {
         let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_le_bytes(*chunk))
             .collect();
         return String::from_utf16(&units)
             .with_context(|| format!("Invalid UTF-16 text in {}", path.display()));
     }
     if bytes.starts_with(&[0xfe, 0xff]) {
         let units: Vec<u16> = bytes[2..]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|chunk| u16::from_be_bytes(*chunk))
             .collect();
         return String::from_utf16(&units)
             .with_context(|| format!("Invalid UTF-16 text in {}", path.display()));

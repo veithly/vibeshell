@@ -72,7 +72,7 @@ export function CronDashboard({ plugin, sessionId }: { plugin: PluginRecord; ses
     if (!schedule || !command) return;
     const line = `${schedule} ${command}`;
     if (!window.confirm(t('plugins.actionConfirm', { name: `+ ${line}` }))) return;
-    const result = await run('cron-add', { line });
+    const result = await run('cron-add', { line }, true);
     if (result !== null) {
       setNewSchedule('');
       setNewCommand('');
@@ -82,7 +82,7 @@ export function CronDashboard({ plugin, sessionId }: { plugin: PluginRecord; ses
 
   const removeEntry = async (line: string) => {
     if (!window.confirm(t('plugins.actionConfirm', { name: `- ${line}` }))) return;
-    const result = await run('cron-remove', { line });
+    const result = await run('cron-remove', { line }, true);
     if (result !== null) load('crontab');
   };
 

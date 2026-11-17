@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::State;
 use uuid::Uuid;
 
@@ -100,13 +100,17 @@ pub struct DatabaseSuggestion {
     pub detail: String,
 }
 
-fn endpoint_for(connection: &DatabaseConnection, database: Option<&str>) -> Result<DbEndpoint, String> {
+fn endpoint_for(
+    connection: &DatabaseConnection,
+    database: Option<&str>,
+) -> Result<DbEndpoint, String> {
     Ok(DbEndpoint {
         engine: DbEngine::parse(&connection.engine).map_err(|error| error.to_string())?,
         host: connection.host.clone(),
         port: connection.port,
         username: connection.username.clone(),
-        password: dbconn::decrypt_password(&connection.password_encrypted).map_err(|error| error.to_string())?,
+        password: dbconn::decrypt_password(&connection.password_encrypted)
+            .map_err(|error| error.to_string())?,
         database: database
             .map(str::to_string)
             .or_else(|| connection.default_database.clone()),
@@ -123,7 +127,9 @@ fn view_list(db: &Database) -> Result<Vec<DatabaseConnectionView>, String> {
 }
 
 #[tauri::command]
-pub fn db_connection_list(db: State<'_, Arc<Database>>) -> Result<Vec<DatabaseConnectionView>, String> {
+pub fn db_connection_list(
+    db: State<'_, Arc<Database>>,
+) -> Result<Vec<DatabaseConnectionView>, String> {
     view_list(&db)
 }
 
@@ -153,11 +159,18 @@ pub fn db_connection_save(
     };
 
     let connection = DatabaseConnection {
-        id: existing.as_ref().map(|c| c.id.clone()).unwrap_or_else(|| Uuid::new_v4().to_string()),
+        id: existing
+            .as_ref()
+            .map(|c| c.id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().to_string()),
         name: input.name.trim().to_string(),
         engine: engine.as_str().to_string(),
         host: input.host.trim().to_string(),
-        port: if input.port == 0 { engine.default_port() } else { input.port },
+        port: if input.port == 0 {
+            engine.default_port()
+        } else {
+            input.port
+        },
         username: input.username.trim().to_string(),
         password_encrypted,
         default_database: input
@@ -209,10 +222,17 @@ pub async fn db_connection_probe(input: DatabaseConnectionInput) -> Result<DbTes
     let endpoint = DbEndpoint {
         engine,
         host: input.host.trim().to_string(),
-        port: if input.port == 0 { engine.default_port() } else { input.port },
+        port: if input.port == 0 {
+            engine.default_port()
+        } else {
+            input.port
+        },
         username: input.username.trim().to_string(),
         password: input.password.unwrap_or_default(),
-        database: input.default_database.clone().filter(|value| !value.trim().is_empty()),
+        database: input
+            .default_database
+            .clone()
+            .filter(|value| !value.trim().is_empty()),
     };
     Ok(dbconn::test_connection(&endpoint).await)
 }
@@ -294,18 +314,38 @@ pub async fn db_connection_query(
 pub async fn db_session_detect(
     manager: State<'_, Arc<SessionManager>>,
     request: crate::commands::SessionIdRequest,
+    access_state: State<'_, Arc<crate::commands::SessionAccessState>>,
 ) -> Result<Vec<DatabaseSuggestion>, String> {
-    let session = manager
-        .get(&request.session_id)
-        .await
-        .ok_or_else(|| "Session not found".to_string())?;
-
     let script = r#"(ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -E ':(5432|3306|6379) ' ; \
 echo === ; docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' 2>/dev/null"#;
-    let output = session
-        .exec_command_with_stdin(script, None)
-        .await
-        .map_err(|error| format!("Probe failed: {error}"))?;
+    let output = if access_state.is_remote_session(&request.session_id).await {
+        use crate::ipc::IpcMessage;
+        match crate::commands::session::ipc_send(IpcMessage::ExecQuickCommand {
+            session_id: request.session_id,
+            command: script.into(),
+        })
+        .await?
+        {
+            IpcMessage::CommandResult {
+                output,
+                exit_code: 0,
+            } => output,
+            IpcMessage::CommandResult { exit_code, .. } => {
+                return Err(format!("Probe exited with code {exit_code}"))
+            }
+            IpcMessage::Error { message } => return Err(message),
+            _ => return Err("Unexpected database probe response".into()),
+        }
+    } else {
+        let session = manager
+            .get(&request.session_id)
+            .await
+            .ok_or("Session not found")?;
+        session
+            .exec_command_with_stdin(script, None)
+            .await
+            .map_err(|error| format!("Probe failed: {error}"))?
+    };
 
     let mut suggestions: Vec<DatabaseSuggestion> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -321,7 +361,9 @@ echo === ; docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' 2>/dev/null"#
             let ports = parts.next().unwrap_or("");
             let engine = if image.to_lowercase().contains("postgres") {
                 "postgresql"
-            } else if image.to_lowercase().contains("mysql") || image.to_lowercase().contains("mariadb") {
+            } else if image.to_lowercase().contains("mysql")
+                || image.to_lowercase().contains("mariadb")
+            {
                 "mysql"
             } else if image.to_lowercase().contains("redis") {
                 "redis"
@@ -378,10 +420,9 @@ mod tests {
 
     #[test]
     fn suggestions_parse_listener_and_docker_output() {
-        let db = crate::storage::Database::new_at(std::env::temp_dir().join(format!(
-            "dbconn-test-{}.db",
-            uuid::Uuid::new_v4()
-        )))
+        let db = crate::storage::Database::new_at(
+            std::env::temp_dir().join(format!("dbconn-test-{}.db", uuid::Uuid::new_v4())),
+        )
         .unwrap();
         let connection = DatabaseConnection {
             id: "c1".to_string(),

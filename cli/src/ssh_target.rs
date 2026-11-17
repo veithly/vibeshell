@@ -14,10 +14,17 @@ pub fn parse_ssh_target(input: &str) -> Result<SshTarget> {
     if input.is_empty() {
         bail!("Target is required (user@host[:port])");
     }
+    if input
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || c == '/')
+        || input.matches('@').count() > 1
+    {
+        bail!("Invalid SSH target");
+    }
 
     let (username, hostport) = match input.split_once('@') {
         Some((user, rest)) => {
-            if user.is_empty() {
+            if user.is_empty() || user.starts_with('-') {
                 bail!("Username is empty in '{input}'");
             }
             if rest.is_empty() {
@@ -29,7 +36,7 @@ pub fn parse_ssh_target(input: &str) -> Result<SshTarget> {
     };
 
     let (host, port) = split_host_port(hostport)?;
-    if host.is_empty() {
+    if host.is_empty() || host.starts_with('-') {
         bail!("Host is empty in '{input}'");
     }
 
@@ -45,6 +52,8 @@ fn split_host_port(hostport: &str) -> Result<(String, Option<u16>)> {
         let Some((host, after)) = rest.split_once(']') else {
             bail!("Invalid IPv6 target '{hostport}' (missing ']')");
         };
+        host.parse::<std::net::Ipv6Addr>()
+            .map_err(|_| anyhow::anyhow!("Invalid bracketed IPv6 host"))?;
         if after.is_empty() {
             return Ok((host.to_string(), None));
         }
@@ -55,12 +64,15 @@ fn split_host_port(hostport: &str) -> Result<(String, Option<u16>)> {
     }
 
     if let Some((host, port_str)) = hostport.rsplit_once(':') {
-        if !host.contains(':')
-            && !port_str.is_empty()
-            && port_str.chars().all(|c| c.is_ascii_digit())
-        {
+        if !host.contains(':') {
             return Ok((host.to_string(), Some(parse_port(port_str)?)));
         }
+        hostport.parse::<std::net::Ipv6Addr>().map_err(|_| {
+            anyhow::anyhow!("Invalid IPv6 host; use [address]:port for an explicit port")
+        })?;
+    }
+    if hostport.contains(['[', ']']) {
+        bail!("Invalid host brackets");
     }
 
     Ok((hostport.to_string(), None))
@@ -109,5 +121,30 @@ mod tests {
         let target = parse_ssh_target("root@[2001:db8::1]:22").unwrap();
         assert_eq!(target.host, "2001:db8::1");
         assert_eq!(target.port, Some(22));
+    }
+
+    #[test]
+    fn malformed_targets_are_not_literal_hosts() {
+        for input in [
+            "host:",
+            "host:abc",
+            "host:0",
+            "host:65536",
+            "a@b@c",
+            "a@-host",
+            "-user@host",
+            "user@host/path",
+            "user@bad host",
+            "[example.com]:22",
+            "[::1]junk",
+            "bad::host",
+            "host]",
+        ] {
+            assert!(
+                parse_ssh_target(input).is_err(),
+                "accepted malformed target {input}"
+            );
+        }
+        assert_eq!(parse_ssh_target("u@::1").unwrap().host, "::1");
     }
 }

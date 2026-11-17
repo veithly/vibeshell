@@ -7,6 +7,31 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::local_shell::{LocalShellInfo, LocalShellManager, ShellInfo};
 
+/// Window during which terminal output chunks are coalesced into one event so
+/// a busy PTY produces a few batched events instead of one per read.
+const OUTPUT_COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(12);
+
+/// Maximum payload carried by a single session-output event (before base64).
+const MAX_OUTPUT_EVENT_BYTES: usize = 256 * 1024;
+
+/// Replay backlogs are re-chunked to at most this many bytes per event.
+const MAX_REPLAY_EVENT_BYTES: usize = 64 * 1024;
+
+fn encode_output_payload(data: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+fn emit_local_shell_output_event(app: &AppHandle, session_id: &str, data: Vec<u8>) {
+    for chunk in data.chunks(MAX_OUTPUT_EVENT_BYTES) {
+        let event = LocalShellOutputEvent {
+            session_id: session_id.to_string(),
+            data: encode_output_payload(chunk),
+        };
+        let _ = app.emit("session-output", event);
+    }
+}
+
 pub(crate) fn ensure_local_shell_output_bridge(
     app: AppHandle,
     session: Arc<crate::local_shell::LocalShellSession>,
@@ -23,21 +48,44 @@ pub(crate) fn ensure_local_shell_output_bridge(
             session_id
         );
         loop {
-            match receiver.recv().await {
-                Ok(data) => {
-                    let event = LocalShellOutputEvent {
-                        session_id: session_id.clone(),
-                        data,
-                    };
-                    let _ = app.emit("session-output", event);
-                }
+            // Block until the next chunk. A lagged receiver must NOT kill the
+            // bridge: the terminal would freeze with no way to restart it.
+            let mut pending = match receiver.recv().await {
+                Ok(data) => data,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                     warn!(
                         "[LocalShell Command] Output bridge lagged {} chunks for session {}",
                         skipped, session_id
                     );
+                    continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+
+            // Coalesce bursts: drain everything else that arrives within a
+            // small window so each event carries a meaningful batch.
+            let deadline = tokio::time::Instant::now() + OUTPUT_COALESCE_WINDOW;
+            let mut closed = false;
+            while let Ok(result) = tokio::time::timeout_at(deadline, receiver.recv()).await {
+                match result {
+                    Ok(data) => pending.extend_from_slice(&data),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!(
+                            "[LocalShell Command] Output bridge lagged {} chunks for session {}",
+                            skipped, session_id
+                        );
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        closed = true;
+                        break;
+                    }
+                }
+            }
+
+            emit_local_shell_output_event(&app, &session_id, pending);
+
+            if closed {
+                break;
             }
         }
         debug!(
@@ -52,7 +100,9 @@ pub(crate) fn ensure_local_shell_output_bridge(
 #[serde(rename_all = "camelCase")]
 pub struct LocalShellOutputEvent {
     pub session_id: String,
-    pub data: Vec<u8>,
+    /// Base64-encoded terminal output. Raw bytes would JSON-serialize as a
+    /// number array, inflating every chunk roughly 4x on the IPC bridge.
+    pub data: String,
 }
 
 /// Request to create a local shell session
@@ -221,11 +271,16 @@ pub async fn local_shell_attach(
     // recreated after drag) redraws recent history instead of going blank.
     // Emitted before the forwarder subscribes so the listener is already
     // registered on the frontend side (the Terminal registers its listener
-    // before invoking local_shell_attach).
+    // before invoking local_shell_attach). The backlog is concatenated into
+    // <=64KB batched events instead of one emit per buffered chunk.
+    let mut backlog: Vec<u8> = Vec::new();
     for data in session.replay_output() {
+        backlog.extend_from_slice(&data);
+    }
+    for chunk in backlog.chunks(MAX_REPLAY_EVENT_BYTES) {
         let event = LocalShellOutputEvent {
             session_id: session_id.clone(),
-            data,
+            data: encode_output_payload(chunk),
         };
         let _ = webview.emit_to(webview.label(), "session-output", event);
     }

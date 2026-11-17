@@ -76,7 +76,7 @@ describe('sessionStore.syncRemoteSessions', () => {
     ]);
   });
 
-  it('clears file tabs when a full backend refresh fails and clears sessions', async () => {
+  it('preserves file tabs when a full backend refresh fails', async () => {
     openFileForSession('stale-session');
     safeInvokeMock.mockResolvedValue({
       success: false,
@@ -85,7 +85,7 @@ describe('sessionStore.syncRemoteSessions', () => {
 
     await useSessionStore.getState().fetchSessions();
 
-    expect(useFileWorkspaceStore.getState().tabs).toEqual([]);
+    expect(useFileWorkspaceStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['stale-session']);
   });
 
   it('removes ssh tabs that no longer exist in the backend instead of leaving disconnected zombies', async () => {
@@ -162,6 +162,58 @@ describe('sessionStore.syncRemoteSessions', () => {
     expect(useFileWorkspaceStore.getState().tabs.map((tab) => tab.sessionId)).toEqual([
       'local-shell',
     ]);
+  });
+
+  it('preserves local terminals and their files during a full SSH refresh', async () => {
+    useSessionStore.setState({ sessions: [{
+      id: 'local', serverId: 'zsh', serverName: 'zsh', state: 'connected',
+      createdAt: 1, sessionType: 'local',
+    }], activeSessionId: 'local' });
+    openFileForSession('local');
+    safeInvokeMock.mockResolvedValue({ success: true, data: [] });
+    await useSessionStore.getState().fetchSessions();
+    expect(useSessionStore.getState().sessions.map((session) => session.id)).toEqual(['local']);
+    expect(useFileWorkspaceStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['local']);
+  });
+
+  it('preserves an SSH session created while the list request was in flight', async () => {
+    let complete!: (value: unknown) => void;
+    safeInvokeMock.mockImplementation((command: string) => command === 'session_list'
+      ? new Promise((resolve) => { complete = resolve; })
+      : Promise.resolve({ success: true, data: [] }));
+    const refresh = useSessionStore.getState().syncRemoteSessions();
+    useSessionStore.getState().addSession({
+      id: 'new-ssh', serverId: 'new', serverName: 'new', state: 'connected',
+      createdAt: 1, sessionType: 'ssh',
+    });
+    complete({ success: true, data: [] });
+    await refresh;
+    expect(useSessionStore.getState().sessions.map((session) => session.id)).toEqual(['new-ssh']);
+  });
+
+  it('moves a tab before its target in both directions', () => {
+    useSessionStore.setState({ sessions: ['a', 'b', 'c', 'd'].map((id) => ({
+      id, serverId: id, serverName: id, state: 'connected', createdAt: 1, sessionType: 'ssh',
+    })) });
+    useSessionStore.getState().moveSessionBefore('a', 'c');
+    expect(useSessionStore.getState().sessions.map((session) => session.id)).toEqual(['b', 'a', 'c', 'd']);
+    useSessionStore.getState().moveSessionBefore('d', 'b');
+    expect(useSessionStore.getState().sessions.map((session) => session.id)).toEqual(['d', 'b', 'a', 'c']);
+  });
+
+  it('adds every Agent-created session without stealing the human active tab or duplicating tabs', async () => {
+    useSessionStore.setState({ sessions: [{ id: 'human', serverId: 'server', serverName: 'Example',
+      state: 'connected', createdAt: 1000, sessionType: 'ssh' }], activeSessionId: 'human' });
+    safeInvokeMock.mockImplementation(async (command: string) => ({ success: true,
+      data: command === 'local_shell_list_sessions' ? [] : ['human', 'agent-one', 'agent-two'].map((id) => ({
+        id, server_id: 'server', server_name: 'Example', state: 'connected', created_at: 1, clients: 1,
+      })),
+    }));
+    await useSessionStore.getState().syncRemoteSessions();
+    expect(useSessionStore.getState().sessions.map((session) => session.id)).toEqual(['human', 'agent-one', 'agent-two']);
+    expect(useSessionStore.getState().activeSessionId).toBe('human');
+    await useSessionStore.getState().syncRemoteSessions();
+    expect(useSessionStore.getState().sessions).toHaveLength(3);
   });
 
   it('does not update store state when backend sessions are unchanged', async () => {

@@ -1,592 +1,272 @@
-//! Teleport (`tsh`) integration.
+//! Teleport transport through the user's installed `tsh` and existing login.
 //!
-//! Interactive sessions spawn `tsh ssh` in a local PTY. File and exec
-//! operations call `tsh scp` / `tsh ssh -- <command>` so russh is not used.
-
-use std::io::{Read, Write};
-use std::process::{Command, Stdio};
-use std::sync::Arc;
+//! Never reads Teleport keys, disables verification, requests access or logs in
+//! automatically. The shared Session remains the owner for GUI, CLI and MCP.
+mod process;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod pty;
+#[cfg(all(test, unix, not(any(target_os = "android", target_os = "ios"))))]
+mod transport_tests;
 
 use anyhow::{anyhow, bail, Context, Result};
-use log::{info, warn};
 use serde::Deserialize;
+use std::time::Duration;
+use tokio::sync::watch;
 
-use crate::commands::sftp::SftpEntry;
-use crate::storage::Server;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub use pty::{spawn_tsh_ssh, TeleportPty};
 
 #[derive(Debug, Clone)]
 pub struct TeleportTarget {
     pub proxy: String,
     pub login: String,
     pub node: String,
+    binary: String,
+    cancellation: watch::Sender<bool>,
 }
 
 impl TeleportTarget {
-    pub fn from_server(server: &Server) -> Result<Self> {
-        let proxy = server
-            .teleport_proxy
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow!("Teleport server '{}' is missing a proxy", server.name))?;
+    pub fn from_server(server: &crate::storage::Server) -> Result<Self> {
+        Self::new(
+            server.teleport_proxy.as_deref().unwrap_or_default(),
+            &server.username,
+            &server.host,
+        )
+    }
+
+    pub fn new(proxy: &str, login: &str, node: &str) -> Result<Self> {
+        validate_proxy(proxy)?;
+        validate_operand(login, "Unix login")?;
+        validate_operand(node, "node")?;
         Ok(Self {
-            proxy: proxy.to_string(),
-            login: server.username.clone(),
-            node: server.host.clone(),
+            proxy: proxy.into(),
+            login: login.into(),
+            node: node.into(),
+            binary: "tsh".into(),
+            cancellation: watch::channel(false).0,
         })
     }
 
-    pub fn ssh_destination(&self) -> String {
-        if self.login.is_empty() {
-            self.node.clone()
-        } else {
-            format!("{}@{}", self.login, self.node)
-        }
+    pub fn cancel(&self) {
+        self.cancellation.send_replace(true);
     }
-}
 
-pub fn tsh_binary() -> Result<String> {
-    Ok("tsh".to_string())
-}
-
-pub fn ensure_logged_in(proxy: &str) -> Result<()> {
-    let output = tsh_output(["status", "--proxy", proxy])?;
-    let combined = format!("{}\n{}", output.stdout, output.stderr);
-    if output.status.success() && logged_in_from_status(&combined) {
-        return Ok(());
+    pub(crate) fn cancellation(&self) -> watch::Receiver<bool> {
+        self.cancellation.subscribe()
     }
-    bail!(
-        "tsh is not logged in to proxy '{proxy}'. Run: tsh login --proxy={proxy}\n{}",
-        combined.trim()
-    );
-}
 
-pub fn logged_in_from_status(status: &str) -> bool {
-    let lower = status.to_ascii_lowercase();
-    if lower.contains("not logged in") || lower.contains("no active profile") {
-        return false;
+    pub(crate) fn ssh_args(&self, tty: bool, command: &str) -> Vec<String> {
+        vec![
+            "--proxy".into(),
+            self.proxy.clone(),
+            "ssh".into(),
+            "--no-relogin".into(),
+            "--request-mode=off".into(),
+            if tty { "--tty" } else { "--no-tty" }.into(),
+            "--".into(),
+            format!("{}@{}", self.login, self.node),
+            command.into(),
+        ]
     }
-    status.lines().any(|line| {
-        let trimmed = line.trim();
-        trimmed.to_ascii_lowercase().starts_with("logged in as")
-            || trimmed.to_ascii_lowercase().contains("logged in as:")
-    })
-}
 
-pub fn parse_proxy_from_status(status: &str) -> Option<String> {
-    for line in status.lines() {
-        let trimmed = line.trim().trim_start_matches('>').trim();
-        let Some((label, value)) = trimmed.split_once(':') else {
-            continue;
-        };
-        let label = label.trim().to_ascii_lowercase();
-        if label == "profile url" || label == "proxy" {
-            let host = strip_url_scheme(value.trim());
-            if !host.is_empty() {
-                return Some(host.trim_end_matches('/').to_string());
-            }
-        }
-    }
-    None
-}
-
-fn strip_url_scheme(value: &str) -> String {
-    value
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .to_string()
-}
-
-pub struct CommandOutput {
-    pub status: std::process::ExitStatus,
-    pub stdout: String,
-    pub stderr: String,
-}
-
-pub fn tsh_output<const N: usize>(args: [&str; N]) -> Result<CommandOutput> {
-    tsh_output_slice(&args)
-}
-
-pub fn tsh_output_slice(args: &[&str]) -> Result<CommandOutput> {
-    let binary = tsh_binary()?;
-    let output = Command::new(&binary)
-        .args(args)
-        .output()
-        .with_context(|| format!("Failed to run `{binary} {}`", args.join(" ")))?;
-    Ok(CommandOutput {
-        status: output.status,
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    })
-}
-
-pub fn tsh_ssh_exec(target: &TeleportTarget, command: &str) -> Result<String> {
-    tsh_ssh_exec_with_stdin(target, command, None)
-}
-
-pub fn tsh_ssh_exec_with_stdin(
-    target: &TeleportTarget,
-    command: &str,
-    stdin: Option<&str>,
-) -> Result<String> {
-    ensure_logged_in(&target.proxy)?;
-    let dest = target.ssh_destination();
-    let mut child = Command::new(tsh_binary()?)
-        .args(["--proxy", &target.proxy, "ssh", &dest, "--", command])
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("Failed to start tsh ssh {dest}"))?;
-    if let Some(payload) = stdin {
-        let mut handle = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("tsh stdin closed"))?;
-        handle.write_all(payload.as_bytes())?;
-    }
-    let output = child.wait_with_output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    if !output.status.success() {
-        let detail = stderr.trim();
-        bail!(
-            "tsh ssh failed on {} (proxy {}): {}",
-            dest,
-            target.proxy,
-            if detail.is_empty() {
-                stdout.trim()
-            } else {
-                detail
-            }
+    pub async fn exec(
+        &self,
+        command: &str,
+        stdin: Option<&str>,
+        timeout: Duration,
+        cap: usize,
+    ) -> Result<crate::ssh::client::CommandResult> {
+        let output = process::run(
+            &self.binary,
+            &self.ssh_args(false, command),
+            stdin.map(str::as_bytes),
+            timeout,
+            cap,
+            self.cancellation(),
+        )
+        .await?;
+        // Text exec is distinct from binary SFTP. Invalid text fails rather
+        // than silently changing bytes or claiming success.
+        let mut text =
+            String::from_utf8(output.stdout).context("Teleport command output is not UTF-8")?;
+        text.push_str(
+            &String::from_utf8(output.stderr)
+                .context("Teleport command error output is not UTF-8")?,
         );
-    }
-    Ok(stdout)
-}
-
-pub fn teleport_home(target: &TeleportTarget) -> Result<String> {
-    let pwd = tsh_ssh_exec(target, "pwd")?;
-    let home = pwd.lines().last().unwrap_or(pwd.trim()).trim();
-    if home.is_empty() {
-        bail!("Could not determine home directory via tsh ssh");
-    }
-    Ok(home.to_string())
-}
-
-pub fn list_dir(target: &TeleportTarget, path: &str) -> Result<Vec<SftpEntry>> {
-    match tsh_ssh_exec(target, &python_stat_command("listdir", path)) {
-        Ok(stdout) => {
-            if let Ok(entries) = serde_json::from_str::<Vec<SftpEntry>>(stdout.trim()) {
-                return Ok(entries);
-            }
-        }
-        Err(error) => warn!("[Teleport] python listdir failed: {error}"),
-    }
-
-    let listing = tsh_ssh_exec(
-        target,
-        &format!("ls -1A {}", shell_single_quote(path)),
-    )?;
-    Ok(listing
-        .lines()
-        .map(|name| name.trim())
-        .filter(|name| !name.is_empty())
-        .map(|name| {
-            let entry_path = if path.ends_with('/') {
-                format!("{path}{name}")
-            } else {
-                format!("{path}/{name}")
-            };
-            SftpEntry {
-                name: name.to_string(),
-                path: entry_path,
-                is_directory: false,
-                size: 0,
-                modified_at: 0,
-                permissions: "-".to_string(),
-            }
+        Ok(crate::ssh::client::CommandResult {
+            output: text,
+            exit_code: output.status.code().unwrap_or(-1),
         })
-        .collect())
+    }
+
+    pub async fn open_sftp(&self) -> Result<russh_sftp::client::SftpSession> {
+        // Execute a real protocol server; never approximate SFTP with cat/ls/scp.
+        // No path supplied by a file request is interpolated into this command.
+        const SERVER: &str = "if command -v sftp-server >/dev/null 2>&1; then exec sftp-server; fi; for p in /usr/lib/openssh/sftp-server /usr/libexec/openssh/sftp-server /usr/lib/ssh/sftp-server /usr/libexec/sftp-server; do if test -x \"$p\"; then exec \"$p\"; fi; done; printf '%s\\n' 'VibeShell: a standard sftp-server executable is required on this Teleport node' >&2; exit 127";
+        let stream = process::stream(
+            &self.binary,
+            &self.ssh_args(false, SERVER),
+            self.cancellation(),
+        )
+        .await?;
+        let sftp = tokio::time::timeout(Duration::from_secs(20), russh_sftp::client::SftpSession::new_opts(stream, Some(15))).await
+            .map_err(|_| anyhow!("Teleport SFTP negotiation timed out; no file operation was performed"))?
+            .map_err(|_| anyhow!("Teleport SFTP unavailable: this node must allow execution of a standard OpenSSH sftp-server. No cat/ls/scp fallback is used"))?;
+        Ok(sftp)
+    }
 }
 
-pub fn stat_path(target: &TeleportTarget, path: &str) -> Result<SftpEntry> {
-    let stdout = tsh_ssh_exec(target, &python_stat_command("stat", path))?;
-    serde_json::from_str(stdout.trim()).context("Failed to parse Teleport stat JSON")
-}
-
-pub fn read_file(target: &TeleportTarget, path: &str, max_size: Option<u64>) -> Result<String> {
-    let escaped = shell_single_quote(path);
-    let command = match max_size {
-        Some(limit) => format!("head -c {limit} -- {escaped}"),
-        None => format!("cat -- {escaped}"),
-    };
-    tsh_ssh_exec(target, &command)
-}
-
-pub fn write_file(target: &TeleportTarget, path: &str, content: &str) -> Result<()> {
-    tsh_ssh_exec_with_stdin(
-        target,
-        &format!("cat > {}", shell_single_quote(path)),
-        Some(content),
-    )
-    .map(|_| ())
-}
-
-pub fn mkdir(target: &TeleportTarget, path: &str) -> Result<()> {
-    tsh_ssh_exec(target, &format!("mkdir -p {}", shell_single_quote(path))).map(|_| ())
-}
-
-pub fn delete_path(target: &TeleportTarget, path: &str, recursive: bool) -> Result<()> {
-    let flag = if recursive { "-rf" } else { "-f" };
-    tsh_ssh_exec(
-        target,
-        &format!("rm {flag} -- {}", shell_single_quote(path)),
-    )
-    .map(|_| ())
-}
-
-pub fn rename(target: &TeleportTarget, old_path: &str, new_path: &str) -> Result<()> {
-    tsh_ssh_exec(
-        target,
-        &format!(
-            "mv -- {} {}",
-            shell_single_quote(old_path),
-            shell_single_quote(new_path)
-        ),
-    )
-    .map(|_| ())
-}
-
-pub fn download_file(target: &TeleportTarget, remote_path: &str, local_path: &str) -> Result<()> {
-    ensure_logged_in(&target.proxy)?;
-    let source = format!("{}:{}", target.ssh_destination(), remote_path);
-    let output = tsh_output_slice(&["--proxy", &target.proxy, "scp", &source, local_path])?;
-    if !output.status.success() {
-        bail!("tsh scp download failed: {}", output.stderr.trim());
+pub fn validate_proxy(proxy: &str) -> Result<()> {
+    if proxy.is_empty()
+        || proxy.starts_with('-')
+        || proxy.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        bail!("A Teleport proxy host[:port] is required");
+    }
+    let parsed = reqwest::Url::parse(&format!("https://{proxy}"))?;
+    if parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || proxy.contains(['/', '@', '?', '#'])
+    {
+        bail!("Teleport proxy must be a host[:port], not a URL, path or credential");
+    }
+    if parsed.port() == Some(0) {
+        bail!("Teleport proxy port must be nonzero");
     }
     Ok(())
 }
 
-pub fn upload_file(target: &TeleportTarget, local_path: &str, remote_path: &str) -> Result<()> {
-    ensure_logged_in(&target.proxy)?;
-    let dest = format!("{}:{}", target.ssh_destination(), remote_path);
-    let output = tsh_output_slice(&["--proxy", &target.proxy, "scp", local_path, &dest])?;
-    if !output.status.success() {
-        bail!("tsh scp upload failed: {}", output.stderr.trim());
+fn validate_operand(value: &str, label: &str) -> Result<()> {
+    // Label selectors/wildcards can execute on multiple machines; a saved
+    // session must refer to one concrete node and one explicit Unix login.
+    if value.is_empty()
+        || value.starts_with('-')
+        || value
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "@=,*?/'\"\\;[]".contains(c))
+    {
+        bail!("Teleport {label} must be a single explicit name, not a selector or option");
     }
     Ok(())
 }
 
-pub fn upload_directory(
-    target: &TeleportTarget,
-    local_path: &str,
-    remote_path: &str,
-) -> Result<()> {
-    ensure_logged_in(&target.proxy)?;
-    let dest = format!("{}:{}", target.ssh_destination(), remote_path);
-    let output = tsh_output_slice(&["--proxy", &target.proxy, "scp", "-r", local_path, &dest])?;
-    if !output.status.success() {
-        bail!("tsh scp directory upload failed: {}", output.stderr.trim());
-    }
-    Ok(())
-}
-
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-fn python_stat_command(mode: &str, path: &str) -> String {
-    let script = r#"import json,os,stat,sys
-path=sys.argv[2]
-mode=sys.argv[1]
-def entry(p):
-    st=os.lstat(p)
-    return {'name':os.path.basename(p) or p,'path':p,'isDirectory':stat.S_ISDIR(st.st_mode),'size':st.st_size,'modifiedAt':int(st.st_mtime),'permissions':oct(st.st_mode & 0o777)}
-if mode=='stat':
-    print(json.dumps(entry(path)))
-else:
-    entries=[]
-    for name in os.listdir(path):
-        p=os.path.join(path,name)
-        try:
-            entries.append(entry(p))
-        except OSError:
-            continue
-    print(json.dumps(entries))"#;
-    format!(
-        "python3 -c {} {} {}",
-        shell_single_quote(script),
-        shell_single_quote(mode),
-        shell_single_quote(path)
-    )
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct TeleportNode {
     #[serde(default)]
     kind: Option<String>,
     #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
     hostname: Option<String>,
     #[serde(default)]
-    metadata: Option<TeleportMetadata>,
+    metadata: Option<NodeMetadata>,
     #[serde(default)]
-    spec: Option<TeleportSpec>,
+    spec: Option<NodeSpec>,
 }
-
-#[derive(Debug, Deserialize)]
-struct TeleportMetadata {
-    #[serde(default)]
-    name: Option<String>,
+#[derive(Deserialize)]
+struct NodeMetadata {
+    name: String,
 }
-
-#[derive(Debug, Deserialize)]
-struct TeleportSpec {
+#[derive(Deserialize)]
+struct NodeSpec {
     #[serde(default)]
     hostname: Option<String>,
-}
-
-impl TeleportNode {
-    fn is_ssh_node(&self) -> bool {
-        match self.kind.as_deref() {
-            None => true,
-            Some(kind) => kind.eq_ignore_ascii_case("node"),
-        }
-    }
-
-    fn hostname(&self) -> Option<String> {
-        self.hostname
-            .clone()
-            .or_else(|| self.spec.as_ref().and_then(|spec| spec.hostname.clone()))
-            .or_else(|| self.metadata.as_ref().and_then(|meta| meta.name.clone()))
-            .or_else(|| self.name.clone())
-            .filter(|value| !value.is_empty())
-    }
-}
-
-pub struct TeleportImportPreview {
-    pub proxy: String,
-    pub login: Option<String>,
-    pub nodes: Vec<String>,
-    pub warnings: Vec<String>,
-}
-
-pub fn preview_import(explicit_proxy: Option<&str>) -> Result<TeleportImportPreview> {
-    let status_args = match explicit_proxy {
-        Some(proxy) => vec!["status", "--proxy", proxy],
-        None => vec!["status"],
-    };
-    let status = tsh_output_slice(&status_args)?;
-    let combined = format!("{}\n{}", status.stdout, status.stderr);
-    if !logged_in_from_status(&combined) {
-        bail!(
-            "tsh is not logged in. Run `tsh login --proxy=<proxy>` first.\n{}",
-            combined.trim()
-        );
-    }
-    let proxy = explicit_proxy
-        .map(ToOwned::to_owned)
-        .or_else(|| parse_proxy_from_status(&combined))
-        .ok_or_else(|| anyhow!("Could not determine Teleport proxy from `tsh status`"))?;
-
-    let login = combined.lines().find_map(|line| {
-        let lower = line.to_ascii_lowercase();
-        lower
-            .split_once("logged in as:")
-            .map(|(_, rest)| rest.trim().to_string())
-            .filter(|value| !value.is_empty())
-    });
-
-    let ls = tsh_output_slice(&["--proxy", &proxy, "ls", "--format=json"])?;
-    let mut warnings = Vec::new();
-    if !ls.status.success() {
-        warnings.push(format!("tsh ls failed: {}", ls.stderr.trim()));
-    }
-    let nodes = parse_tsh_ls_json(&ls.stdout).unwrap_or_else(|error| {
-        warnings.push(format!("Could not parse tsh ls JSON: {error}"));
-        Vec::new()
-    });
-
-    Ok(TeleportImportPreview {
-        proxy,
-        login,
-        nodes,
-        warnings,
-    })
 }
 
 pub fn parse_tsh_ls_json(json: &str) -> Result<Vec<String>> {
-    let trimmed = json.trim();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
+    let nodes: Vec<TeleportNode> = serde_json::from_str(json).context("Invalid tsh ls JSON")?;
+    let mut result = Vec::new();
+    for node in nodes {
+        if node.kind.as_deref().is_some_and(|k| k != "node") {
+            continue;
+        }
+        // Resource UUID/name is unambiguous; hostnames can be shared by nodes.
+        let name = node
+            .metadata
+            .map(|m| m.name)
+            .or(node.hostname)
+            .or_else(|| node.spec.and_then(|s| s.hostname))
+            .ok_or_else(|| anyhow!("Teleport node has no usable identity"))?;
+        validate_operand(&name, "node")?;
+        if !result.contains(&name) {
+            result.push(name);
+        }
     }
-    if let Ok(nodes) = serde_json::from_str::<Vec<TeleportNode>>(trimmed) {
-        return Ok(nodes
-            .into_iter()
-            .filter(TeleportNode::is_ssh_node)
-            .filter_map(|node| node.hostname())
-            .collect());
-    }
-    if let Ok(node) = serde_json::from_str::<TeleportNode>(trimmed) {
-        return Ok(node.hostname().into_iter().collect());
-    }
-    bail!("Unrecognized tsh ls JSON");
+    Ok(result)
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub struct TeleportPty {
-    pub writer: Arc<std::sync::Mutex<Option<Box<dyn Write + Send>>>>,
-    pub master: Arc<std::sync::Mutex<Option<Box<dyn portable_pty::MasterPty + Send>>>>,
-    child: Arc<std::sync::Mutex<Option<Box<dyn portable_pty::Child + Send + Sync>>>>,
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub fn spawn_tsh_ssh(
-    target: &TeleportTarget,
-    cols: u16,
-    rows: u16,
-    output_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
-) -> Result<TeleportPty> {
-    ensure_logged_in(&target.proxy)?;
-    let binary = tsh_binary()?;
-    let pty_system = portable_pty::native_pty_system();
-    let pair = pty_system.openpty(portable_pty::PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    })?;
-
-    let mut cmd = portable_pty::CommandBuilder::new(&binary);
-    cmd.arg("--proxy");
-    cmd.arg(&target.proxy);
-    cmd.arg("ssh");
-    cmd.arg(target.ssh_destination());
-    #[cfg(not(target_os = "windows"))]
-    {
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
-        cmd.env("TERM_PROGRAM", "VibeShell");
+/// Import requires an explicit proxy and Unix login. A Teleport identity such
+/// as an email address is not an operating-system login and must not be guessed.
+pub fn preview_nodes(proxy: &str, login: &str) -> Result<Vec<String>> {
+    let target = TeleportTarget::new(proxy, login, "preview")?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let args = vec![
+        "--proxy".into(),
+        proxy.into(),
+        "ls".into(),
+        "--format=json".into(),
+    ];
+    let output = runtime.block_on(process::run(
+        "tsh",
+        &args,
+        None,
+        Duration::from_secs(20),
+        4 * 1024 * 1024,
+        target.cancellation(),
+    ))?;
+    if !output.status.success() {
+        bail!(
+            "tsh ls failed; run tsh login for this proxy explicitly before importing (exit {:?})",
+            output.status.code()
+        );
     }
-
-    let child = pair.slave.spawn_command(cmd)?;
-    info!(
-        "[Teleport] spawned tsh ssh {} via proxy {}",
-        target.ssh_destination(),
-        target.proxy
-    );
-
-    let writer = pair.master.take_writer()?;
-    let mut reader = pair.master.try_clone_reader()?;
-    let writer = Arc::new(std::sync::Mutex::new(Some(writer)));
-    let master = Arc::new(std::sync::Mutex::new(Some(pair.master)));
-    let child = Arc::new(std::sync::Mutex::new(Some(child)));
-
-    let child_for_wait = child.clone();
-    std::thread::spawn(move || {
-        let mut buf = vec![0u8; 8192];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if output_tx.blocking_send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        if let Ok(mut guard) = child_for_wait.lock() {
-            if let Some(mut child) = guard.take() {
-                let _ = child.wait();
-            }
-        }
-    });
-
-    Ok(TeleportPty {
-        writer,
-        master,
-        child,
-    })
-}
-
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-impl TeleportPty {
-    pub fn write(&self, data: &[u8]) -> Result<()> {
-        let mut guard = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow!("Teleport PTY writer lock poisoned"))?;
-        let writer = guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("Teleport PTY is closed"))?;
-        writer.write_all(data)?;
-        writer.flush()?;
-        Ok(())
-    }
-
-    pub fn resize(&self, cols: u32, rows: u32) -> Result<()> {
-        let guard = self
-            .master
-            .lock()
-            .map_err(|_| anyhow!("Teleport PTY master lock poisoned"))?;
-        let master = guard
-            .as_ref()
-            .ok_or_else(|| anyhow!("Teleport PTY is closed"))?;
-        master.resize(portable_pty::PtySize {
-            rows: rows as u16,
-            cols: cols as u16,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-        Ok(())
-    }
-
-    pub fn kill(&self) {
-        if let Ok(mut guard) = self.child.lock() {
-            if let Some(mut child) = guard.take() {
-                let _ = child.kill();
-                let _ = child.wait();
-            }
-        }
-        if let Ok(mut writer) = self.writer.lock() {
-            *writer = None;
-        }
-        if let Ok(mut master) = self.master.lock() {
-            *master = None;
-        }
-    }
+    parse_tsh_ls_json(
+        std::str::from_utf8(&output.stdout).context("tsh ls returned non-UTF-8 JSON")?,
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{logged_in_from_status, parse_proxy_from_status, parse_tsh_ls_json};
-
+    use super::*;
     #[test]
-    fn detects_logged_in_status() {
-        let status = ">\n  Profile URL:        https://teleport.example.com:443\n  Logged in as:       alice\n  Cluster:            example\n";
-        assert!(logged_in_from_status(status));
+    fn rejects_selectors_options_credentials_and_preserves_case() {
         assert_eq!(
-            parse_proxy_from_status(status).as_deref(),
-            Some("teleport.example.com:443")
+            TeleportTarget::new("example.com:443", "CaseSensitive", "node-1")
+                .unwrap()
+                .login,
+            "CaseSensitive"
         );
+        for node in ["env=prod", "*", "a,b", "-o", "x@y", "a\nb"] {
+            assert!(TeleportTarget::new("example.com", "u", node).is_err());
+        }
+        for proxy in [
+            "",
+            "--insecure",
+            "user:pass@host",
+            "https://host",
+            "host/path",
+            "host?x",
+            "host:0",
+            "host:99999",
+        ] {
+            assert!(validate_proxy(proxy).is_err(), "accepted proxy {proxy}");
+        }
+        assert!(validate_proxy("[::1]:443").is_ok());
     }
-
     #[test]
-    fn detects_logged_out_status() {
-        assert!(!logged_in_from_status("ERROR: not logged in"));
-        assert!(!logged_in_from_status("No active profile"));
-    }
-
-    #[test]
-    fn parses_node_list_json() {
-        let json = r#"[{"kind":"node","metadata":{"name":"web-1"},"spec":{"hostname":"web-1"}}]"#;
-        assert_eq!(parse_tsh_ls_json(json).unwrap(), vec!["web-1".to_string()]);
+    fn import_uses_unique_node_identity_and_refuses_malformed_data() {
+        assert_eq!(parse_tsh_ls_json(r#"[{"kind":"node","metadata":{"name":"UUID-1"},"spec":{"hostname":"shared"}},{"kind":"app","metadata":{"name":"ignore"}}]"#).unwrap(), ["UUID-1"]);
+        assert!(parse_tsh_ls_json("not JSON").is_err());
+        assert!(parse_tsh_ls_json(r#"[{"kind":"node"}]"#).is_err());
+        let args = TeleportTarget::new("proxy", "u", "n")
+            .unwrap()
+            .ssh_args(false, "echo hello");
+        assert!(args.contains(&"--no-relogin".into()));
+        assert!(args.contains(&"--request-mode=off".into()));
+        assert!(!args.contains(&"--insecure".into()));
     }
 }

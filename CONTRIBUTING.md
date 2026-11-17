@@ -1,0 +1,79 @@
+# Contributing to VibeShell
+
+[English README](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+
+## Branches and pull requests
+
+**Open feature, bug-fix, security-fix and documentation PRs against `dev`.** Start your branch from `origin/dev`. The repository default is `dev` so GitHub proposes that base automatically.
+
+`main` is the stable release branch. Its only normal incoming PR is a release promotion from **this repository's `dev` branch**. A fork branch merely named `dev` is not a release promotion. `master` is retained as historical context and is not an active contribution target. There is no separate `develop` branch; `dev` is the development branch.
+
+```bash
+git fetch origin
+git switch -c fix/short-description origin/dev
+# Make and test the change.
+git push -u origin fix/short-description
+gh pr create --base dev
+```
+
+Keep a PR focused, explain user-visible behavior and tradeoffs, and include reproducible test results. The PR target check rejects direct feature PRs to `main`. Retarget an incorrect base rather than deleting the contribution. Release promotions use merge commits to preserve the relationship between `dev`, `main` and version tags.
+
+## Local checks
+
+Use Node.js 22.12+ and current stable Rust, with Tauri's platform prerequisites installed. Do not run arbitrary ignored tests against your saved servers.
+
+```bash
+npm ci
+cargo run --locked -p vibeshell-plugins --example export_references -- --check
+node scripts/check-release.mjs
+node --test scripts/tests/*.test.mjs
+npm test
+npm run build
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+```
+
+For SSH transport changes, run `bash scripts/test-ssh-compatibility.sh` with Docker available. It creates a loopback-only OpenSSH fixture and generated test keys, not a connection to a production server. Database/credential tests must use injected temporary directories or in-memory stores. Never initialize the user's real database from a unit test.
+
+A successful build is not proof of UI correctness or universal server compatibility. For UI changes, exercise focus, keyboard navigation, reduced motion, resize and unsaved-edit handling. Include sanitized screenshots when useful. Never publish real server details, tokens, private keys or session recordings in fixtures or test logs.
+
+## Manual GitHub checks
+
+Pushing code or opening a PR does **not** compile the project. After reviewing the diff, a maintainer explicitly runs **Actions → CI → Run workflow** on the PR's head branch, or:
+
+```bash
+gh workflow run ci.yml --ref fix/short-description
+```
+
+All existing required checks remain in branch protection; making them manual does not waive them. A new commit needs a new manual run. Do not use `--admin`, fabricate check results, or remove required checks to merge a pending PR. The small, metadata-only **PR Target** check remains automatic and never checks out contributor code. For a fork PR, use a reviewed same-repository branch with the exact head SHA (or a separate integration PR after resolving conflicts); do not run unreviewed fork code with release secrets.
+
+GitHub does not count `workflow_dispatch` job checks directly toward PR requirements. The manual workflow first marks the five required commit statuses pending, then reports each actual job's result using the GitHub Actions token. Missing, failed, cancelled, skipped or incomplete evidence never produces success; a superseded run cannot intentionally replace a newer run's results. Only the two status-reporting jobs have `statuses: write`; build/test jobs remain read-only. Each status links to its real run. This reporting is not an override and does not start CI automatically.
+
+## Plugin and documentation changes
+
+The validated manifests in `plugins/builtin/` define the built-in plugin catalog. Each plugin must expose machine-readable actions and current reference documentation. Details belong in `references/<id>.md`, not in the main Skill.
+
+Regenerate the checked-in references with:
+
+```bash
+cargo run --locked -p vibeshell-plugins --example export_references
+```
+
+This command writes only the three repository Skill/reference directories. It does not install anything into your home directory or connect to a server. CI checks that generated documents and all three main Skill copies agree. Do not hand-edit generated references; update the manifest or renderer instead.
+
+Update English, Simplified Chinese and Japanese README sections when changing their documented behavior. Preserve command syntax, safety boundaries and language navigation. Additional translations are welcome; do not turn a translation into a separate feature claim.
+
+## Compatibility and security
+
+Preserve exact credential bytes, including meaningful spaces. Secret fields must not enter debug logs or activity summaries. Metadata/credential mutations must commit atomically and roll back on error. Do not weaken host-key verification to make an authentication test pass.
+
+Keep file overwrite, binary encoding, path validation, output limits, cancellation and sync exclusion semantics consistent across transports. Unsupported operations must fail clearly, not report fabricated success. Do not replay a mutating command after a response loss without a server-side idempotency guarantee.
+
+Third-party code must have a compatible license and preserved notices. Contributions are accepted under the repository's GPL-3.0-only terms; by submitting a contribution, you confirm you have the right to provide it on those terms. This is not a copyright assignment. See [NOTICE](NOTICE) for the earlier MIT-licensed portions.
+
+Report exploitable vulnerabilities through the repository's private security reporting channel where available; do not disclose credentials in public issues. Existing dependency advisories are not waived by functional test success.
+
+## Releases
+
+Version changes go through `dev`, then a tested promotion to `main`. Pushing a `vX.Y.Z` tag does **not** build or publish anything. Run CI manually on the exact tagged commit, then run Release from `main` with that existing tag. Release defaults to a draft; only an explicit `publish=true` run publishes after every verification/build succeeds. See [RELEASING](docs/RELEASING.md).

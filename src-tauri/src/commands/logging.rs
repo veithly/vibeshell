@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use tauri::State;
 
+use crate::commands::SessionAccessState;
+use crate::ipc::runtime_services::{self, RuntimeRequest};
 use crate::logging::SessionLogger;
 use crate::session::SessionManager;
 use crate::storage::{Database, Recording};
@@ -12,7 +14,15 @@ pub async fn start_recording(
     manager: State<'_, Arc<SessionManager>>,
     session_id: String,
     server_id: String,
+    access_state: State<'_, Arc<SessionAccessState>>,
 ) -> Result<String, String> {
+    if access_state.is_remote_session(&session_id).await {
+        return runtime_services::call(RuntimeRequest::RecordingStart {
+            session_id,
+            server_id,
+        })
+        .await;
+    }
     let session = manager
         .get(&session_id)
         .await
@@ -29,7 +39,17 @@ pub async fn start_recording(
 pub async fn stop_recording(
     logger: State<'_, Arc<SessionLogger>>,
     recording_id: String,
+    db: State<'_, Arc<Database>>,
+    access_state: State<'_, Arc<SessionAccessState>>,
 ) -> Result<(), String> {
+    if let Some(recording) = db
+        .recording_get(&recording_id)
+        .map_err(|error| error.to_string())?
+    {
+        if access_state.is_remote_session(&recording.session_id).await {
+            return runtime_services::call(RuntimeRequest::RecordingStop { recording_id }).await;
+        }
+    }
     logger
         .stop_recording(&recording_id)
         .await
@@ -51,7 +71,13 @@ pub fn list_recordings(
 pub async fn is_session_recording(
     logger: State<'_, Arc<SessionLogger>>,
     session_id: String,
+    access_state: State<'_, Arc<SessionAccessState>>,
 ) -> Result<bool, String> {
+    if access_state.is_remote_session(&session_id).await {
+        let id: Option<String> =
+            runtime_services::call(RuntimeRequest::RecordingStatus { session_id }).await?;
+        return Ok(id.is_some());
+    }
     Ok(logger.is_recording(&session_id).await)
 }
 
@@ -60,7 +86,11 @@ pub async fn is_session_recording(
 pub async fn get_session_recording_id(
     logger: State<'_, Arc<SessionLogger>>,
     session_id: String,
+    access_state: State<'_, Arc<SessionAccessState>>,
 ) -> Result<Option<String>, String> {
+    if access_state.is_remote_session(&session_id).await {
+        return runtime_services::call(RuntimeRequest::RecordingStatus { session_id }).await;
+    }
     Ok(logger.get_recording_id(&session_id).await)
 }
 
@@ -74,19 +104,4 @@ pub fn delete_recording(db: State<'_, Arc<Database>>, recording_id: String) -> R
     }
     db.recording_delete(&recording_id)
         .map_err(|e| format!("Failed to delete recording: {}", e))
-}
-
-/// Read the content of a recording file
-#[tauri::command]
-pub fn get_recording_content(
-    db: State<'_, Arc<Database>>,
-    recording_id: String,
-) -> Result<String, String> {
-    let recording = db
-        .recording_get(&recording_id)
-        .map_err(|e| format!("Failed to get recording: {}", e))?
-        .ok_or_else(|| "Recording not found".to_string())?;
-
-    std::fs::read_to_string(&recording.file_path)
-        .map_err(|e| format!("Failed to read recording file: {}", e))
 }

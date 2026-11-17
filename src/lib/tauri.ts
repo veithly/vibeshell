@@ -121,17 +121,10 @@ export async function isTauriAvailable(): Promise<boolean> {
 }
 
 /**
- * Synchronously check if Tauri is available (after initial async check)
- * Returns null if the check hasn't been performed yet
- */
-export function isTauriAvailableSync(): boolean | null {
-  return tauriAvailabilityCache;
-}
-
-/**
  * Reset the Tauri availability cache (useful for testing)
  */
 export function resetTauriAvailabilityCache(): void {
+  cachedInvoke = null;
   tauriAvailabilityCache = null;
   tauriCheckPromise = null;
 }
@@ -310,23 +303,6 @@ export async function invokeOrThrow<T>(
   const result = await safeInvoke<T>(command, args);
   if (!result.success) {
     throw result.error;
-  }
-  return result.data;
-}
-
-/**
- * Invoke a Tauri command with a fallback value on failure
- * Logs the error but returns the fallback instead of throwing
- */
-export async function invokeWithFallback<T>(
-  command: string,
-  fallback: T,
-  args?: Record<string, unknown>
-): Promise<T> {
-  const result = await safeInvoke<T>(command, args);
-  if (!result.success) {
-    console.warn(`Using fallback for "${command}":`, result.error.message);
-    return fallback;
   }
   return result.data;
 }

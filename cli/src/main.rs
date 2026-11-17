@@ -14,10 +14,11 @@ mod terminal;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use command_input::CommandInputArgs;
 use commands::file_tools::ContentInputArgs;
+use vibeshell_core::ipc::IpcMessage;
 
 #[derive(Parser)]
 #[command(name = "vibeshell")]
@@ -40,12 +41,13 @@ use commands::file_tools::ContentInputArgs;
       vibeshell ssh prod-web -- uname -a\n\
       vibeshell ssh prod-web --command-file .\\remote-command.sh\n\
       vibeshell ssh-session 001 -- journalctl -u nginx -n 200\n\
-      vibeshell sftp prod-web ls /var/www\n\
-      vibeshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
+          vibeshell sftp prod-web ls /var/www\n\
+          vibeshell sftp --session 001 pwd\n\
+          vibeshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
       vibeshell sftp prod-web\n\
       vibeshell servers\n\
       vibeshell servers add root@prod.example.com:22 --name prod-web --identity ~/.ssh/id_ed25519\n\
-      vibeshell servers delete prod-web\n\
+      vibeshell servers delete prod-web --yes\n\
       vibeshell daemon status"
 )]
 struct Cli {
@@ -57,6 +59,23 @@ struct Cli {
 enum Commands {
     /// Show version information
     Version,
+
+    /// Show GPLv3 terms, copyright notices and source information
+    License,
+
+    /// Send sensitive prompt input from stdin, never from command-line arguments.
+    SendSecret {
+        session_id: String,
+        /// Append Enter unless the input already ends in a newline.
+        #[arg(long)]
+        enter: bool,
+    },
+
+    /// Discover installed plugins, read references, and run reviewed actions.
+    Plugins {
+        #[command(subcommand)]
+        command: commands::plugins::PluginCommand,
+    },
 
     /// Connect to a configured SSH server in the terminal
     #[command(
@@ -105,6 +124,8 @@ enum Commands {
           vibeshell sftp prod-web put ./local-file /remote/file\n\
           vibeshell sftp prod-web put ./local-folder /remote/parent\n\
           vibeshell sftp prod-web sync ./dist /var/www --delete\n\n\
+          vibeshell sftp --session 001 pwd\n\
+          vibeshell sftp --session 001 ls /var/www\n\n\
         Or start the interactive prompt:\n\
           vibeshell sftp prod-web\n\n\
         Supported commands inside the prompt or direct mode:\n\
@@ -239,7 +260,7 @@ enum ServersCommand {
           SSH_PASSWORD=... vibeshell servers add root@prod.example.com --name prod-web\n\
           vibeshell servers add ubuntu@10.0.0.8:2222 --identity ~/.ssh/id_ed25519 --jump bastion"
     )]
-    Add(ServerAddCliArgs),
+    Add(Box<ServerAddCliArgs>),
     /// Delete a saved server by name or ID
     #[command(alias = "rm", alias = "remove")]
     Delete(ServerDeleteCliArgs),
@@ -289,7 +310,7 @@ struct ServerAddCliArgs {
     tags: Vec<String>,
 
     /// Connection type: ssh (default) or teleport
-    #[arg(long = "type", default_value = "ssh")]
+    #[arg(long = "type", default_value = "ssh", value_parser = ["ssh", "teleport"])]
     connection_type: String,
 
     /// Teleport proxy, e.g. teleport.example.com:443 (required with --type teleport)
@@ -301,6 +322,9 @@ struct ServerAddCliArgs {
 struct ServerDeleteCliArgs {
     /// Server display name or ID
     name: String,
+    /// Confirm deletion of the profile, credentials and its active sessions
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Args)]
@@ -367,6 +391,39 @@ struct SftpArgs {
     /// Run a single SFTP operation directly instead of entering the interactive prompt
     #[arg(trailing_var_arg = true)]
     args: Vec<String>,
+}
+
+impl SftpArgs {
+    fn target_and_command(&self) -> (Option<&str>, Vec<String>) {
+        let mut command = self.args.clone();
+        let mut server = self.server.as_deref();
+        // clap assigns the first positional word to `server`, even with
+        // --session. In that mode, a leading SFTP verb is the command instead.
+        if self.session.is_some()
+            && matches!(
+                server,
+                Some(
+                    "pwd"
+                        | "ls"
+                        | "cd"
+                        | "cat"
+                        | "get"
+                        | "put"
+                        | "sync"
+                        | "mkdir"
+                        | "rm"
+                        | "mv"
+                        | "help"
+                        | "quit"
+                        | "exit"
+                )
+            )
+        {
+            command.insert(0, server.expect("matched SFTP verb").to_string());
+            server = None;
+        }
+        (server, command)
+    }
 }
 
 #[derive(Args)]
@@ -490,6 +547,12 @@ impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
 
 #[derive(Args)]
 struct ImportArgs {
+    /// Teleport proxy host[:port]; required for explicit Teleport import
+    #[arg(long)]
+    proxy: Option<String>,
+    /// Unix login on the Teleport nodes (not the Teleport account identity)
+    #[arg(long)]
+    user: Option<String>,
     /// Source to import: auto, openssh, putty, tabby, or teleport
     #[arg(value_enum, default_value = "auto")]
     source: ImportSourceArg,
@@ -545,7 +608,21 @@ struct UninstallArgs {
     tool: String,
 }
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error:#}");
+            let code = error
+                .downcast_ref::<terminal::RemoteCommandExit>()
+                .map(|status| status.0.clamp(1, 255) as u8)
+                .unwrap_or(1);
+            std::process::ExitCode::from(code)
+        }
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     // The native binary carries the canonical Skill. Keep agent directories
@@ -557,6 +634,35 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
+        Some(Commands::Plugins { command }) => commands::plugins::run(command),
+        Some(Commands::SendSecret { session_id, enter }) => {
+            use std::io::{IsTerminal, Read};
+            if std::io::stdin().is_terminal() {
+                bail!("Use protected piped stdin or the application's password input; interactive stdin could echo a secret");
+            }
+            let mut data = Vec::new();
+            std::io::stdin().take(65_537).read_to_end(&mut data)?;
+            if data.is_empty() || data.len() > 65_536 {
+                bail!("Sensitive input must contain 1–65536 bytes");
+            }
+            if enter && !matches!(data.last(), Some(b'\r' | b'\n')) {
+                data.push(b'\r');
+            }
+            let session_id = session_alias::resolve(&session_id).unwrap_or(session_id);
+            match ipc_support::send(&IpcMessage::SendSensitiveInput { session_id, data })? {
+                IpcMessage::Ok => Ok(()),
+                IpcMessage::Error { message } => bail!("{message}"),
+                _ => bail!("Unexpected sensitive input response"),
+            }
+        }
+        Some(Commands::License) => {
+            println!(
+                "{}\n{}",
+                include_str!("../../NOTICE"),
+                include_str!("../../LICENSE")
+            );
+            Ok(())
+        }
         Some(Commands::Version) => {
             println!("vibeshell {}", vibeshell_core::version());
             Ok(())
@@ -574,11 +680,8 @@ fn main() -> Result<()> {
                 .session
                 .as_ref()
                 .map(|id| session_alias::resolve(id).unwrap_or_else(|| id.clone()));
-            commands::sftp::connect(
-                args.server.as_deref(),
-                resolved_session.as_deref(),
-                &args.args,
-            )
+            let (server, command) = args.target_and_command();
+            commands::sftp::connect(server, resolved_session.as_deref(), &command)
         }
         Some(Commands::Rg(args)) => commands::file_tools::rg(
             &args.target,
@@ -632,11 +735,18 @@ fn main() -> Result<()> {
                     teleport_proxy: add.proxy,
                 })
             }
-            Some(ServersCommand::Delete(delete)) => commands::server::delete(&delete.name),
+            Some(ServersCommand::Delete(delete)) => {
+                commands::server::delete(&delete.name, delete.yes)
+            }
         },
-        Some(Commands::Import(args)) => {
-            commands::import::run(args.source.into(), args.path, args.dry_run, args.json)
-        }
+        Some(Commands::Import(args)) => commands::import::run(
+            args.source.into(),
+            args.path,
+            args.dry_run,
+            args.json,
+            args.proxy,
+            args.user,
+        ),
         Some(Commands::Sessions) => commands::session::list(),
         Some(Commands::Attach(args)) => {
             let resolved =
@@ -688,6 +798,7 @@ fn main() -> Result<()> {
             println!("VibeShell - High-performance SSH/SFTP terminal");
             println!();
             println!("Run 'vibeshell --help' for usage information.");
+            println!("GPL-3.0-only; no warranty. Run 'vibeshell license' for terms and source.");
             Ok(())
         }
     }
@@ -695,8 +806,15 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{commands, Cli, Commands};
     use clap::Parser;
+
+    #[test]
+    fn exposes_license_without_connecting_to_a_server() {
+        let parsed = Cli::try_parse_from(["vibeshell", "license"]).unwrap();
+        assert!(matches!(parsed.command, Some(Commands::License)));
+        assert!(include_str!("../../LICENSE").contains("Version 3, 29 June 2007"));
+    }
 
     #[test]
     fn parses_servers_command() {
@@ -839,6 +957,43 @@ mod tests {
     }
 
     #[test]
+    fn sftp_session_command_without_server_is_not_interactive() {
+        for words in [
+            vec!["vibeshell", "sftp", "--session", "001", "pwd"],
+            vec!["vibeshell", "sftp", "--session", "001", "ls", "/tmp"],
+        ] {
+            let parsed = Cli::try_parse_from(words).unwrap();
+            let Some(Commands::Sftp(args)) = parsed.command else {
+                panic!("expected sftp");
+            };
+            let (server, command) = args.target_and_command();
+            assert!(server.is_none());
+            assert!(!command.is_empty());
+            assert!(matches!(command[0].as_str(), "pwd" | "ls"));
+        }
+    }
+
+    #[test]
+    fn sftp_session_still_accepts_explicit_server_and_interactive_mode() {
+        let parsed =
+            Cli::try_parse_from(["vibeshell", "sftp", "TencentJP", "--session", "001", "pwd"])
+                .unwrap();
+        let Some(Commands::Sftp(args)) = parsed.command else {
+            panic!("expected sftp");
+        };
+        let (server, command) = args.target_and_command();
+        assert_eq!(server, Some("TencentJP"));
+        assert_eq!(command, ["pwd"]);
+
+        let parsed = Cli::try_parse_from(["vibeshell", "sftp", "--session", "001"]).unwrap();
+        let Some(Commands::Sftp(args)) = parsed.command else {
+            panic!("expected sftp");
+        };
+        let (server, command) = args.target_and_command();
+        assert!(server.is_none() && command.is_empty());
+    }
+
+    #[test]
     fn parses_rg_command() {
         let parsed = Cli::try_parse_from([
             "vibeshell",
@@ -962,6 +1117,73 @@ mod tests {
         assert!(
             parsed.is_ok(),
             "vibeshell ss <alias> should parse (alias for ssh-session)"
+        );
+    }
+
+    #[test]
+    fn parses_plugin_discovery_and_typed_execution_contract() {
+        for args in [
+            vec!["vibeshell", "plugins", "list", "--installed", "--json"],
+            vec!["vibeshell", "plugins", "describe", "server-performance"],
+            vec!["vibeshell", "plugins", "docs", "docker-containers"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        let cli = Cli::try_parse_from([
+            "vibeshell",
+            "plugins",
+            "run",
+            "example.ai",
+            "show",
+            "--session",
+            "001",
+            "--inputs",
+            r#"{"count":2,"text":"quoted value"}"#,
+            "--confirm",
+        ])
+        .unwrap();
+        match cli.command.unwrap() {
+            Commands::Plugins {
+                command:
+                    commands::plugins::PluginCommand::Run {
+                        inputs,
+                        confirm,
+                        session,
+                        ..
+                    },
+            } => {
+                assert_eq!(inputs["count"], 2);
+                assert!(confirm);
+                assert_eq!(session, "001");
+            }
+            _ => panic!("wrong plugin command"),
+        }
+        assert!(Cli::try_parse_from([
+            "vibeshell",
+            "plugins",
+            "run",
+            "x",
+            "y",
+            "--session",
+            "001",
+            "--sudo"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "vibeshell",
+            "plugins",
+            "run",
+            "x",
+            "y",
+            "--session",
+            "001",
+            "--inputs",
+            "[]"
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from(["vibeshell", "send-secret", "001", "--enter"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["vibeshell", "send-secret", "001", "secret-in-argv"]).is_err()
         );
     }
 

@@ -162,7 +162,8 @@ export function PluginPanel({
       sessionId,
       inputValues,
       sudoPassword,
-      trySudo
+      trySudo,
+      true // This helper is called only after the explicit Run/confirmation or sudo form submission.
     );
     if (
       requestSequence === requestSequenceRef.current

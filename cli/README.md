@@ -26,22 +26,28 @@ Both installers verify the native binary and trigger its built-in, idempotent Sk
 vibeshell version
 vibeshell import auto --dry-run
 vibeshell import auto
-vibeshell servers add root@prod.example.com --name prod-web
 vibeshell servers
+vibeshell servers add user@host:2222 --name my-server --identity ~/.ssh/id_ed25519
+vibeshell servers delete my-server --yes
 vibeshell ssh <server>
 vibeshell sftp <server>
+vibeshell sftp --session ALIAS pwd
 ```
 
-Add a server without the GUI using `user@host[:port]`. Passwords are read from `SSH_PASSWORD` or `VIBESHELL_PASSWORD` (never argv). Use `--identity` for a private key. Teleport: `vibeshell servers add user@node --type teleport --proxy teleport.example.com:443`. Delete with `vibeshell servers delete <name>`.
-
-Commands that need an SSH/SFTP session automatically start the native local daemon. The daemon stores its IPC endpoint and state under the current user's VibeShell data directory and can be inspected directly:
+Commands that need an SSH/SFTP session automatically start the native local daemon. The daemon uses a private per-user IPC endpoint and the same saved-profile database as the desktop. A GUI-owned service can also answer native CLI requests. Inspect the current owner and sessions with:
 
 ```bash
 vibeshell daemon status
 vibeshell sessions
 ```
 
+`servers add` also accepts `--user`, `--port`, `--jump`, `--group`, repeatable `--tag`, `--agent-forwarding`, and `--post-login`. Passwords come from an already-set `SSH_PASSWORD` or `VIBESHELL_PASSWORD`; encrypted keys use `VIBESHELL_KEY_PASSPHRASE` or `SSH_KEY_PASSPHRASE`. Do not place actual secrets in command arguments or shell history. Secret whitespace is preserved. The profile, optional group, encrypted credentials and sync metadata commit together. Deletion requires `--yes`, closes that server's sessions, and removes its saved credentials atomically with its profile. Ambiguous names/IDs and malformed targets fail without deletion.
+
+The supported executable is `vibeshell`, not the retired `vshell` command. `vshell` remains only the internal Cargo package identifier used by existing build scripts.
+
 ## Import sources
+
+Teleport nodes can be added with `vibeshell servers add alice@node --type teleport --proxy proxy.example:443` or previewed with `vibeshell import teleport --proxy proxy.example:443 --user alice --dry-run`. Run `tsh login` explicitly first. The Unix login is required; automatic import never contacts Teleport. Terminal and command operations share the current service, while file operations require a standard external `sftp-server` executable on the node. See [Teleport setup and transport boundaries](../docs/TELEPORT.md).
 
 ```bash
 vibeshell import openssh --path ~/.ssh/config
@@ -51,10 +57,26 @@ vibeshell import putty --path ~/putty-sessions.reg
 
 OpenSSH `Host`, `Include`, `IdentityFile`, `ProxyJump`, `RemoteCommand`, and `ForwardAgent` metadata are supported. Tabby SSH profiles and PuTTY sessions/registry exports are supported. Third-party stored passwords are deliberately not copied. OpenSSH-format private keys are referenced by local path and read only when a connection is established; PuTTY `.ppk` keys must first be converted to OpenSSH format.
 
+## Agent-readable plugins and license
+
+```bash
+vibeshell plugins list --installed --json
+vibeshell plugins describe server-performance
+vibeshell plugins docs server-performance
+vibeshell plugins run server-performance status --session SESSION_ID --inputs '{}'
+vibeshell license
+```
+
+Select an existing session and verify the plugin is installed and enabled first. Plugin action details are in the packaged `skills/vibeshell/references/` documents or available live through `plugins docs`; the main Skill contains discovery instructions and an index. CLI and MCP share permission and input checks. Confirmation and sudo opt-in require the person's authorization.
+
+The desktop displays Agent (CLI) commands in the same history as human terminal input. `ssh`, `exec` and `ssh-session` use the same persistent remote shell, so `cd` and `export` survive subsequent CLI calls. For shells emitting OSC 3008 command status events, the CLI propagates the remote exit code, not merely command submission; if no exit status is available it prints a warning instead of claiming verified success. Connections require their owning process to remain alive; upgrade the GUI and CLI together rather than mixing incompatible service versions.
+
+VibeShell 1.1.0 is GPL-3.0-only. Release archives include LICENSE, NOTICE and legacy attribution; matching source materials are available beside the release binaries. Earlier MIT grants are not revoked. The software comes without warranty to the extent permitted by law.
+
 ## Build from source
 
 ```bash
-cargo build --release --package vshell --bin vibeshell
+cargo build --release --locked --package vshell --bin vibeshell
 ```
 
 To prepare the target-suffixed binary consumed by Tauri desktop packaging:

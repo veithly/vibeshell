@@ -1,0 +1,5 @@
+# Generated references are compared byte-for-byte with the Rust renderer.
+# Keep their checkout representation stable even with core.autocrlf=true.
+skills/vibeshell/references/*.md text eol=lf
+.claude/skills/vibeshell/references/*.md text eol=lf
+.codex/skills/vibeshell/references/*.md text eol=lf

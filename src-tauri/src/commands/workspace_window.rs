@@ -35,13 +35,20 @@ fn buttons() -> (Option<bool>, bool) {
         fn CGEventSourceKeyState(state: i32, key: u16) -> bool;
     }
     // Combined-session state; left button and Escape. Read only during a gesture.
-    unsafe { (Some(CGEventSourceButtonState(0, 0)), CGEventSourceKeyState(0, 53)) }
+    unsafe {
+        (
+            Some(CGEventSourceButtonState(0, 0)),
+            CGEventSourceKeyState(0, 53),
+        )
+    }
 }
 
 #[cfg(target_os = "windows")]
 fn buttons() -> (Option<bool>, bool) {
     #[link(name = "user32")]
-    extern "system" { fn GetAsyncKeyState(key: i32) -> i16; }
+    extern "system" {
+        fn GetAsyncKeyState(key: i32) -> i16;
+    }
     unsafe { (Some(GetAsyncKeyState(0x01) < 0), GetAsyncKeyState(0x1B) < 0) }
 }
 
@@ -49,7 +56,9 @@ fn buttons() -> (Option<bool>, bool) {
     not(any(target_os = "android", target_os = "ios")),
     not(any(target_os = "macos", target_os = "windows"))
 ))]
-fn buttons() -> (Option<bool>, bool) { (None, false) }
+fn buttons() -> (Option<bool>, bool) {
+    (None, false)
+}
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
@@ -57,9 +66,16 @@ pub fn workspace_pointer_state(window: tauri::Window) -> Result<WorkspacePointer
     if window.label() != "main" && !window.label().starts_with("detach-") {
         return Err("Not a workspace window".into());
     }
-    let point = window.cursor_position().map_err(|error| error.to_string())?;
+    let point = window
+        .cursor_position()
+        .map_err(|error| error.to_string())?;
     let (primary_down, escape_down) = buttons();
-    Ok(WorkspacePointerState { x: point.x, y: point.y, primary_down, escape_down })
+    Ok(WorkspacePointerState {
+        x: point.x,
+        y: point.y,
+        primary_down,
+        escape_down,
+    })
 }
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
@@ -70,7 +86,9 @@ pub fn workspace_pointer_state(_window: tauri::Window) -> Result<WorkspacePointe
 
 #[tauri::command]
 pub fn workspace_exit(app: tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
-    if window.label() != "main" { return Err("Only the main workspace may quit the app".into()); }
+    if window.label() != "main" {
+        return Err("Only the main workspace may quit the app".into());
+    }
     app.exit(0);
     Ok(())
 }

@@ -1,508 +1,192 @@
 <div align="center">
+  <img src="app-icon.svg" width="96" alt="VibeShell" />
+  <h1>VibeShell</h1>
+  <p><strong>Keep your servers, files, and AI work in the same place.</strong></p>
+  <p>An SSH terminal you can work in yourself, share with an agent, and make your own.</p>
 
-<img src="app-icon.svg" width="112" height="112" alt="VibeShell logo" />
+  [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
-# VibeShell
+  [![Manual CI](https://github.com/veithly/vibeshell/actions/workflows/ci.yml/badge.svg?branch=dev&event=workflow_dispatch)](https://github.com/veithly/vibeshell/actions/workflows/ci.yml)
+  [![Release](https://img.shields.io/github/v/release/veithly/vibeshell)](https://github.com/veithly/vibeshell/releases)
+  [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**The local-first SSH workspace for developers, operators, and coding agents.**
-
-Desktop command center · Native headless CLI · Persistent Rust sessions · Bundled Agent Skill
-
-[![Release](https://img.shields.io/github/v/release/veithly/vibeshell?style=flat-square&color=7aa2f7)](https://github.com/veithly/vibeshell/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/veithly/vibeshell/ci.yml?style=flat-square&label=CI&color=9ece6a)](https://github.com/veithly/vibeshell/actions/workflows/ci.yml)
-[![Tauri 2](https://img.shields.io/badge/Tauri-2.x-24c8db?style=flat-square)](https://v2.tauri.app)
-[![React](https://img.shields.io/badge/React-18-61dafb?style=flat-square)](https://react.dev)
-[![Rust](https://img.shields.io/badge/Rust-native-f7768e?style=flat-square)](https://www.rust-lang.org)
-[![Platform](https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-supported-bb9af7?style=flat-square)](#install)
-
-[Why VibeShell](#why-vibeshell) · [Screenshots](#screenshots) · [Quick Start](#quick-start) · [Features](#features) · [Native CLI](#native-cli) · [AI Agents](#ai-agents) · [Security](#security-and-current-boundaries) · [Install](#install) · [Build](#build-from-source)
-
+  [Download](https://github.com/veithly/vibeshell/releases) · [Agent / CLI guide](skills/vibeshell/SKILL.md) · [Changelog](CHANGELOG.md) · [Contribute](CONTRIBUTING.md)
 </div>
 
-![VibeShell terminal workspace](docs/assets/screenshots/terminal-workspace.png)
+![Terminal, host status and visible agent operations in one VibeShell workspace](docs/assets/screenshots/tour-collaboration.png)
 
-VibeShell brings SSH, SFTP, tunnels, local shells, remote files, and coding agents into one observable workspace. Its desktop app, standalone `vibeshell` command, bundled Coding Agent Skill, and optional MCP Gateway all use the same local server inventory and persistent session model.
+*Real VibeShell components, synthetic Northstar demo data. The gallery uses an isolated browser fixture: no live servers, credentials, model calls, or service restarts. Agent transcripts and command results are examples, not recordings of an actual agent run. [Reproduce the screenshots](scripts/readme-demo/README.md).*
 
-The desktop window is not the control plane. Close it and the native Rust daemon can keep serving the CLI and compatible coding agents on a workstation or a server without a graphical desktop. Open the app again and it can discover sessions created from the command line instead of forcing you to start over.
+## Less passing context between tools
 
-VibeShell is designed for a workflow that traditional SSH clients rarely treat as a first-class use case: a human and an AI agent operating the same infrastructure while preserving named targets, session continuity, visible output, file context, and explicit safety boundaries.
+A routine server task rarely stays in one terminal. You check a log, find a configuration file, open an editor, ask an agent for help, then work out which machine and session each tool is using.
 
-> The screenshots in this README are rendered with Playwright from VibeShell's real React components using sanitized demo servers. They use reserved example domains only; no real hostnames, IPs, credentials, or customer data are shown.
+VibeShell keeps that work together. SSH and local terminals, coding agents, remote files, Git changes, and operations dashboards share a tabbed workspace. Use it as a normal terminal; bring AI into the parts where it helps. You do not need a model account for ordinary terminal and file work.
 
-## Why VibeShell
+The difference is the workflow, not a new SSH protocol. OpenSSH, tmux, editors and scripts can cover many of the same jobs. VibeShell reduces the setup, copying and window switching needed to make them work together.
 
-### One control plane, three ways to work
+## Let an agent help without losing the thread
 
-| Interface | Best for | What it shares |
+### See what it ran, and where
+
+Desktop and CLI use the same SSH shell. Open **History** to see the command, its session and its source: **Agent (CLI)** in magenta or **User** in cyan. Select a live session in a row to return to its terminal.
+
+A `cd` or `export` from either side changes that shell for both. `--new` explicitly opens a separate session. When shell integration reports the command's exit status (OSC 3008), the CLI propagates that status, including failures; on shells without that signal it warns that success is unverified.
+
+An agent-created session appears as another tab without switching away from the tab you selected. Two connections to the same server remain two sessions, not one ambiguous server-name tab. History can be paged through and recovered after reopening the UI.
+
+### Approve the actual operation, not a vague request
+
+The approval dialog puts the proposed command and the reasons for review in front of you. You can allow that operation or reject it instead of discovering a service restart in the transcript afterward. CLI and MCP plugin actions also retain their permission and confirmation checks.
+
+![Actual agent approval dialog showing the proposed restart and reasons for review](docs/assets/screenshots/tour-agent-approval.png)
+
+*Demo request only. The service restart in this image was never executed. Command classification and approval are useful controls, not a sandbox or a guarantee that every risky command will be recognized.*
+
+## Bring your coding agent, not another chat window
+
+Launch separately installed tools such as **Claude Code, Codex, OpenCode and Pi** in real local terminals. Pick a project directory, add an initial brief, and choose the start modes the selected tool supports: a new session, continuing the latest one, or choosing a previous session. Access modes are explicit rather than hidden in a command copied from a tutorial.
+
+![Coding-agent launcher with project, session mode, access mode and initial brief](docs/assets/screenshots/tour-agent-launcher.png)
+
+The agent's terminal stays beside the rest of your work. Open **Workspace changes** to see the branch, changed files and line-by-line diff. You can read the proposed edit instead of relying on the agent's summary of it. Local development and remote operations can live in neighboring tabs, but they are not silently treated as the same execution environment.
+
+![A synthetic coding-agent transcript beside the real Git changes and diff interface](docs/assets/screenshots/tour-agent-review.png)
+
+*Agent tools need their own installation, sign-in and subscriptions. VibeShell provides the workspace and launch integration; it does not bundle a model subscription or claim the sample transcript is live output.*
+
+## A terminal that helps with the small things
+
+You should not need AI just to remember a flag. Built-in completion suggests commands, subcommands and options, with descriptions and command-history matches. Inline suggestions and a keyboard-driven completion list keep the answer near the cursor. Frequently used commands can become snippets.
+
+For an extra nudge, enable **AI command prediction** with your own OpenAI-compatible or Claude endpoint and model. It proposes a suffix to what you are typing; it does not run the suggestion for you. This is separate from launching a coding agent.
+
+**Prediction is off by default.** When enabled, the current input, recent command history and local completion candidates are sent to the provider you configure. Leave it disabled for work that must not leave the machine; ordinary local completion remains available.
+
+Terminal rendering uses xterm.js, a WebGL renderer where available, and batched input/output paths to reduce UI overhead. These are responsiveness choices, not a claim that VibeShell makes the SSH network faster.
+
+## Find a connection without remembering an address
+
+The connection launcher brings **SSH, local shells and coding agents** into one place. Search your saved servers, switch between compact lists and cards, and organize targets with groups and tags. Existing-session indicators and a separate new-session action help distinguish “return to my work” from “open another connection.”
+
+![Searchable connection cards with groups, saved targets and existing-session indicators](docs/assets/screenshots/tour-connections.png)
+
+Bring existing profiles from OpenSSH, PuTTY or Tabby, preview an import before applying it, and configure a jump host for private targets. Stored passwords from those other applications are deliberately not copied; PuTTY `.ppk` keys need conversion to OpenSSH format.
+
+Changing a saved password, private key or passphrase does not require deleting the server. Untouched fields keep their values, existing secrets are not loaded into the edit form, and profile/credential changes save together or roll back together. This changes **VibeShell's saved login information**, not the remote account's password.
+
+## Files belong next to the command that uses them
+
+Open a remote configuration through SFTP, or use **⌘/Ctrl+O** for local files without opening an SSH connection at all. Documents get their own tabs, so closing the last terminal does not close your local notes.
+
+The file workspace offers editable text/code, syntax highlighting, and Markdown source, preview, or both side by side. SFTP includes column/icon browsing, multiple selection, path copying, upload/download progress, and viewers for supported images, PDFs, media and archives. Read a runbook, inspect a log and edit a config without maintaining a separate mental map of windows.
+
+Move file and terminal panes around, split the workspace, or detach a document into another window. Unsaved text stays with its editing buffer during layout changes. Local text saves detect changes made by another program and refuse to silently overwrite them; truncated reads are not offered as a full-file save.
+
+Folder transfer is also about correctness: bounded chunks, downloads that wait for local writes, content comparison for same-size edits, and protection for excluded paths and nested `.gitignore` rules when deleting extras. Content comparison can add remote reads; it is not a promise of lower bandwidth.
+
+[Local files, Markdown behavior and editing limits](docs/local-files-and-css-themes.md)
+
+## Go from a command to a useful view
+
+Sometimes a terminal is the right view; sometimes a container list or a CPU graph is faster to understand. Open a plugin for the session you are already using instead of configuring the same server in another dashboard.
+
+| What you are working on | Built-in views and tools |
+| --- | --- |
+| A slow or unhealthy host | Server Performance, Process Explorer, System Logs, Network Inspector, Disk Usage |
+| Services and infrastructure | Docker Containers, Kubernetes Pods, Cron Scheduler, Systemd Services |
+| Data and code | Database Inspector, Redis Inspector, Git Workspace |
+
+These **12 built-ins** are more than UI buttons. Agents can discover what is installed, read an action's inputs, fetch its current instructions and use it through the native CLI or MCP:
+
+```bash
+vibeshell plugins list --installed --json
+vibeshell plugins describe server-performance
+vibeshell plugins docs server-performance
+vibeshell plugins run server-performance status --session SESSION_ID --inputs '{}'
+```
+
+Use an existing session ID and check the plugin is installed and enabled first. The main Skill contains an index; detailed usage lives in `references/<plugin-id>.md`. Supported imported declarative plugins expose the same discovery interface, with documentation generated from their current validated manifest.
+
+Reading a plugin's documentation does not grant permissions, install remote tools or approve a destructive action. Docker, Kubernetes and database tools still need the appropriate target environment and access. Remote host-performance collection currently assumes Linux `/proc`.
+
+[Plugin specification](docs/plugin-spec.md) · [Agent and plugin reference index](skills/vibeshell/SKILL.md#plugin-discovery-and-references)
+
+## Arrange it around the way you work
+
+**Keep context, not a pile of windows.** Terminals, documents and plugins can be split, rearranged and moved into separate windows. Save a layout and return to it; restoring the workspace is not a promise that an old network connection survives a process restart.
+
+**Make long sessions comfortable.** Choose light or dark themes, follow the system appearance, adjust terminal fonts and cursors, and use keyboard navigation or reduced-motion settings. The application has English and Simplified Chinese UI; the Japanese README is a documentation translation, not a claim of Japanese UI support.
+
+**Go beyond a color preset.** The custom CSS editor supports live preview, apply/save, import/export and local background images. Change spacing, corners and document typography as well as colors. If a theme hides the controls, **⌘/Ctrl+Shift+F12** or the native *Disable Custom CSS* menu can turn it off. Only apply trusted CSS: remote URLs in a theme can make network requests.
+
+[Custom CSS guide and recovery](docs/local-files-and-css-themes.md) · [Starter theme](themes/vibecode-starter.css)
+
+## The SSH essentials are still here
+
+Local forwarding, SOCKS5 and reverse forwarding sit alongside session recording and playback. Saved tunnel configurations reduce repetitive setup; session cleanup also tears down associated tunnels and recordings. Check bind addresses before exposing a service beyond loopback.
+
+Optional encrypted **Gist/WebDAV sync** carries server metadata, groups, snippets and plugin installations between your own setups. It is not a VibeShell-hosted SSH relay. Login credentials, host-key trust, live terminal sessions and agent activity history stay outside that sync. Protect provider tokens and recovery material, and review plugin settings before sharing an export.
+
+SSH host identity is checked before authentication, including the real destination behind a jump host. Credentials and agent activity use encrypted local storage. That is not OS Keychain custody or protection from a compromised local account. A correct private key does not justify accepting an unexpected server fingerprint.
+
+## Start with a server you already use
+
+Get the desktop installer or standalone CLI from [Releases](https://github.com/veithly/vibeshell/releases).
+
+| Platform | Desktop | Native CLI |
 | --- | --- | --- |
-| **Desktop workspace** | Interactive terminal work, split panes, SFTP, tunnels, recordings, approvals, and visual inspection | Servers, groups, credentials/key references, sessions, snippets, fingerprints, and local settings |
-| **Native `vibeshell` CLI** | Headless servers, scripts, CI helpers, remote commands, file operations, and terminal-native SFTP | The same server database and reusable native session daemon |
-| **Coding Agent integrations** | Claude Code, Codex, Cursor, OpenCode, Gemini CLI, Windsurf, Roo Code, Continue, Kiro, Trae, OpenHands, and other detected tools | A bundled Skill that calls the native CLI directly, plus an optional authenticated GUI-shared Gateway |
+| macOS Apple Silicon / Intel | Architecture-specific `.dmg` | `.tar.gz` |
+| Windows x64 | `.exe` / `.msi` | `.zip` |
+| Linux x64 | `.AppImage` / `.deb` | `.tar.gz` |
 
-### What makes it different
-
-VibeShell does not try to replace the SSH protocol. It improves the operating model around it.
-
-| Workflow need | Raw `ssh` / `sftp` workflow | Typical desktop SSH workflow | VibeShell |
-| --- | --- | --- | --- |
-| **Session continuity** | Usually tied to one terminal or an external multiplexer | Often confined to tabs inside the running app | Persistent sessions can be reused, listed, attached, executed against, and addressed by short aliases from the desktop, CLI, or Agent Skill |
-| **Headless operation** | Native, but separate from GUI inventory and file tooling | Usually requires the desktop process | The same Rust service works with or without the desktop; no Node.js, Electron, or browser process is required |
-| **AI agent access** | Agents reconstruct raw shell commands and connection arguments | Integration is often product- or plugin-specific | A canonical Skill ships with VibeShell, installs into detected agent directories, and uses saved server names instead of exposing credentials |
-| **Migration** | Existing OpenSSH config works, but other client profiles remain separate | Connections are commonly re-entered by hand | Safe preview and import from OpenSSH, PuTTY, and Tabby, with duplicate detection, conflict renaming, key-path preservation, and jump-host linking |
-| **Remote files** | Separate `scp`, `rsync`, editors, and ad-hoc temporary files | Usually a client-specific file browser | Finder-style SFTP, shared file tabs, guarded text editing, media previews, searchable archives, direct CLI file primitives, and recursive sync |
-| **Observable automation** | Output exists, but context and intent are fragmented across shells | Visual state is available only while the app is open | Session output, aliases, exit status, live Git diffs, Agent activity, and optional approval gates can be kept in one workspace |
-| **Data ownership** | Local by default | Varies by product and account model | Local-first SQLite storage with no hosted VibeShell control plane; optional encrypted sync uses your private GitHub Gist or WebDAV endpoint |
-
-Most SSH tools specialize in one layer: a terminal, a file manager, a connection database, or an automation API. VibeShell is useful when those layers need to stay connected across human and agent work.
-
-## Screenshots
-
-| Server launcher | Split terminal workspace |
-| --- | --- |
-| ![Icon view with three sanitized demo servers](docs/assets/screenshots/server-launcher.png) | ![Three shell panes in the VibeShell workspace](docs/assets/screenshots/terminal-workspace.png) |
-
-| Finder-style SFTP | Tunnel manager |
-| --- | --- |
-| ![Three-column SFTP file manager with sanitized demo paths](docs/assets/screenshots/sftp-workflow.png) | ![SSH tunnel manager](docs/assets/screenshots/tunnel-manager.png) |
-
-| AI integrations | Theme system |
-| --- | --- |
-| ![Coding Agent integration settings](docs/assets/screenshots/ai-integrations.png) | ![Five high-contrast themes in English settings](docs/assets/screenshots/theme-system.png) |
-
-## Quick Start
-
-### Use the desktop app
-
-1. Download the installer for your platform from [GitHub Releases](https://github.com/veithly/vibeshell/releases).
-2. Start VibeShell. It opens directly into a local shell instead of an empty landing page.
-3. Add a server manually or import existing profiles.
-4. Open SSH, SFTP, tunnels, files, snippets, or a local coding agent from the same workspace.
-
-### Import existing SSH profiles
-
-Preview first:
+The desktop includes a CLI sidecar. Standalone CLI archives include `install.sh` / `install.ps1`; inspect the script before running it. The native Rust CLI itself does not need Node.js. [CLI installation](cli/README.md)
 
 ```bash
-vibeshell import auto --dry-run
-```
-
-Use structured output when reviewing a large migration:
-
-```bash
-vibeshell import auto --dry-run --json
-```
-
-Import the discovered OpenSSH, PuTTY, and Tabby profiles:
-
-```bash
-vibeshell import auto
-vibeshell servers add root@prod.example.com --name prod-web
+vibeshell import auto --dry-run    # Review, then run without --dry-run to import.
 vibeshell servers
-```
-
-Third-party passwords are deliberately not copied. Imported OpenSSH private keys remain referenced by local path and are read only when VibeShell establishes a connection.
-
-### Run without a desktop
-
-Install a headless release archive, then use the same native command on macOS, Linux, or Windows:
-
-```bash
-vibeshell version
-vibeshell servers
-vibeshell ssh prod-web -- uname -a
+vibeshell servers add user@host --name my-server --identity ~/.ssh/id_ed25519
+vibeshell ssh my-server
+vibeshell ssh my-server -- uname -a
+vibeshell servers delete unused-server --yes
 vibeshell sessions
-vibeshell sftp prod-web ls /var/www
+vibeshell sftp my-server ls /srv/app
+vibeshell sftp --session ALIAS pwd  # Run SFTP on the existing connection.
 ```
 
-Commands that need a connection automatically start the local daemon when no desktop process is running.
+Replace `my-server` with a saved name. Use an alias returned by `sessions` with `vibeshell ssh-session ALIAS -- pwd`; add `--new` when you need a separate connection. For complex quoting, use `--command-file` or `--command-stdin`. Never put passwords or private keys in command-line arguments or agent prompts.
 
-### Reuse a session instead of reconnecting
+The CLI can start a daemon when needed; the GUI can attach to its sessions. The process owning a connection must remain alive: daemon-owned sessions can outlive the GUI, while GUI-owned ones end when that GUI exits. Upgrade the desktop and CLI together, and save ongoing work before restarting.
+
+Apple signing/notarization details are in each release's notes. An ad-hoc signature is not Apple notarization. Mobile targets remain experimental. Common OpenSSH paths are tested, but not every MFA flow, hardware token or SSH implementation. Proposed CLI server-create/delete and Teleport support are not part of the current 1.1.0 release.
+
+### Teleport nodes
+
+The development branch supports Teleport profiles in the desktop and native `vibeshell` CLI. Log in with `tsh`, add a node with `vibeshell servers add alice@node --type teleport --proxy proxy.example:443`, and use the same terminal, command and file workflows. File operations require a standard external SFTP server on the node; unsupported configurations fail explicitly. [Setup and supported scope](docs/TELEPORT.md).
+
+## Build, contribute, or explore the implementation
+
+Built with Tauri 2, Rust, React, TypeScript and xterm.js. Use Node.js 22.12+, current stable Rust and the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
-vibeshell ssh prod-web
-vibeshell sessions
-vibeshell ssh-session 001 -- systemctl status nginx
-vibeshell get-content --session 001 /var/log/nginx/error.log --max-bytes 200000
-vibeshell attach 001
-```
-
-By default, `vibeshell ssh <server>` reuses the earliest active session for that server. Use `--new` only when an independent parallel shell is intentional.
-
-## Features
-
-### Terminal and session continuity
-
-- Multi-tab SSH sessions, local shells, and embedded coding-agent sessions.
-- Direct-to-terminal startup with a real interactive login shell.
-- Up to four panes with horizontal and vertical split layouts.
-- Persistent native sessions shared through the local daemon rather than tied to one UI tab.
-- Short session aliases such as `001` for attach, command execution, file access, SFTP, keystrokes, and termination.
-- Session reuse by default, with explicit `--new` behavior for parallel connections.
-- CLI-created SSH sessions can be discovered by the desktop workspace.
-- xterm.js rendering with WebGL acceleration, web links, responsive fitting, and low-latency batched input.
-- Mouse-based terminal input cursor placement and ghost-text completion for common commands.
-- Command snippets with search, tags, copy, and insert actions.
-- Session recording for replay, audit, and handoff.
-- Reconnect controls and clear connected, disconnected, error, local-shell, and coding-agent states.
-
-### SSH, inventory, and migration
-
-- Password, private-key, and key-with-passphrase authentication.
-- Host-key verification with device-local trusted fingerprint management.
-- Groups, tags, saved server names, post-login commands, and startup context.
-- Jump hosts / OpenSSH `ProxyJump` relationships for bastion access.
-- SSH agent forwarding.
-- Long connection timeout and keepalive behavior suited to VPN and Tailscale-style environments; `vibeshell ssh <server> --wait` can keep retrying while network authentication completes.
-- OpenSSH import with `Host`, `Include`, glob expansion, `IdentityFile`, `ProxyJump`, `RemoteCommand`, `ForwardAgent`, first-obtained-value semantics, and Windows path handling.
-- PuTTY import from the Windows registry, exported `.reg` files, or session directories where available.
-- Tabby SSH profile import from `config.yaml`.
-- Dry-run and JSON previews before database mutation.
-- Equivalent endpoints are skipped, conflicting names are renamed deterministically, and imported jump-host references are resolved after creation.
-- PuTTY `.ppk` keys are reported with an actionable warning because VibeShell currently expects OpenSSH-format private keys.
-
-### SFTP and remote file workspace
-
-- Finder-style column browsing for path context and an icon view for visual scanning.
-- Shared remote file tabs instead of a separate modal editor.
-- Syntax-highlighted text reading and editing with overwrite protection and bounded previews.
-- Image, PDF, audio, and video preview support.
-- ZIP, TAR, TAR.GZ, and TGZ archive listings with in-archive search.
-- Multi-select upload, download, delete, rename, and directory creation.
-- Recursive upload and directory sync with optional deletion, exclude patterns, and `.gitignore` awareness.
-- Visible transfer progress and bounded handling for large files.
-- Remote compression and extraction actions.
-- Direct CLI operations and an interactive terminal SFTP prompt.
-- SFTP reuse through an existing session alias to avoid opening another SSH connection.
-
-### Tunnels
-
-- Persistent tunnel configurations tied to saved servers and sessions.
-- Local port forwarding.
-- Dynamic SOCKS5 forwarding.
-- Start, stop, inspect, and clean up active tunnels from the desktop workspace.
-- Remote-forward configuration is present, but full `forwarded-tcpip` data bridging is still experimental. Do not rely on reverse forwarding as a production path yet.
-
-### Local coding agents
-
-VibeShell can detect installed Claude Code, Codex, OpenCode, and Pi executables and launch them inside native PTY-backed tabs. Each integration exposes only the session and access modes that the underlying tool supports:
-
-- New session, continue latest, or choose a previous session where supported.
-- Tool-default, read-only, or auto-edit access modes where supported.
-- Repository picker and optional initial prompt.
-- Cross-platform launcher handling, including Windows command shims.
-- Live workspace-change inspection with staged, unstaged, renamed, untracked, deleted, and conflicted files.
-- Bounded unified text diffs with wrap controls and detached-HEAD reporting.
-
-This keeps the agent process, terminal output, repository path, and Git changes visible in the same workspace.
-
-### Coding Agent Skill and optional MCP Gateway
-
-- One canonical `skills/vibeshell/SKILL.md` ships with both desktop installers and headless CLI archives.
-- First launch installs the Skill idempotently into detected per-tool directories and the universal `~/.agents/skills/vibeshell` convention.
-- The Skill calls `vibeshell` directly. It does not require Node.js, `gateway.mjs`, browser automation, raw password extraction, or a separate npm package.
-- Saved server names are preferred over raw hosts, and credentials stay inside VibeShell's local data model.
-- Persistent sessions, command files/stdin, `send-key`, remote search, file primitives, and SFTP operations give agents structured alternatives to deeply escaped one-liners.
-- The authenticated MCP Gateway remains available when an agent should intentionally share the visible desktop session manager.
-- GUI-shared Agent Gateway workflows can require approval for commands matched by built-in or custom danger patterns, with allow rules, one-time approval, denial, and a bounded auto-approval window.
-
-### Encrypted sync, plugins, and platform integration
-
-- Optional encrypted workspace sync through a private GitHub Gist or a WebDAV JSON object.
-- AES-256-GCM authenticated encryption with a fresh nonce per batch.
-- Versioned change journal, deterministic revisions, tombstones, conflict reporting, atomic apply, retryable outbox delivery, and cursor-based exchange.
-- Version 1 sync scope includes servers, groups, and command snippets. Credentials, private keys, trusted fingerprints, recordings, live sessions, tunnels, and local paths remain device-local or excluded.
-- Portable JSON import/export for explicit local-file backup and migration.
-- Built-in and external command plugins with declared local/remote execution permissions, bounded inputs/output, and confirmation requirements for elevated actions.
-- Five contrast-safe themes: Paper White, Warm Ivory, Ink Black, Violet Black, and Cyan Black.
-- Platform-aware window controls and fullscreen behavior for macOS, Windows, and Linux.
-- Automatic signed updater checks in desktop builds.
-- Capability-gated iOS and Android foundations for foreground SSH and SFTP. Mobile distribution and native document workflows remain experimental rather than a headline production target.
-
-## Native CLI
-
-The standalone `vibeshell` binary is a real Rust client and daemon, not a JavaScript wrapper around the desktop application. It shares VibeShell's data model and communicates over a local Unix socket or Windows named pipe.
-
-| Area | Commands |
-| --- | --- |
-| Version and diagnostics | `vibeshell version`, `vibeshell daemon start`, `vibeshell daemon status` |
-| Inventory | `vibeshell servers`, `vibeshell servers add user@host`, `vibeshell servers delete <name>` |
-| Import | `vibeshell import auto|openssh|putty|tabby|teleport [--path ...] [--dry-run] [--json]` |
-| Connect | `vibeshell ssh <server> [--new] [--wait]` |
-| Remote command | `vibeshell ssh <server> -- <command>`, `--command-file`, or `--command-stdin` |
-| Sessions | `vibeshell sessions`, `vibeshell attach`, `vibeshell ssh-session`, `vibeshell exec`, `vibeshell send-key`, `vibeshell kill` |
-| Search | `vibeshell rg <server> <pattern> [path]`, or `--session <alias>` |
-| Remote text files | `vibeshell get-content`, `vibeshell add-file`, `vibeshell edit-file` |
-| SFTP | `vibeshell sftp <server>`, direct `ls|get|put|sync|cat|mkdir|rm|mv`, or `--session <alias>` |
-| Agent integration | `vibeshell tools`, `vibeshell install <claude-code|cursor|codex|opencode|pi|all>`, `vibeshell uninstall <tool>` |
-
-For nested quoting, multiline scripts, command substitutions, or platform-sensitive escaping, prefer a command file or stdin:
-
-```bash
-vibeshell ssh prod-web --command-file ./remote-command.sh
-cat ./remote-command.sh | vibeshell ssh prod-web --command-stdin
-```
-
-Respond to an interactive remote process without abandoning the session:
-
-```bash
-vibeshell send-key 001 yes enter
-vibeshell send-key 001 ctrl-c
-```
-
-Read and patch remote files through SFTP-backed primitives:
-
-```bash
-vibeshell get-content prod-web /etc/nginx/nginx.conf
-vibeshell add-file prod-web /tmp/example.txt --content-file ./example.txt --parents
-vibeshell edit-file prod-web /etc/app.conf --replace 'debug=false' --with 'debug=true'
-```
-
-Use destructive flags such as `--delete`, overwrites, recursive uploads, and remote deletion deliberately. Inspect the current target before mutating it.
-
-## AI Agents
-
-VibeShell supports two complementary agent models.
-
-### Native Skill: best for headless and terminal-first work
-
-The bundled Skill teaches compatible coding agents to:
-
-1. Verify the native CLI and inspect saved targets.
-2. Reuse a persistent session instead of opening unnecessary parallel connections.
-3. Run commands with reliable exit status and streaming output.
-4. Use command files or stdin when quoting becomes fragile.
-5. Search and edit remote files through bounded VibeShell primitives.
-6. Use SFTP transfers without requesting private-key text or passwords.
-7. Report the server name, session alias, exit status, and verified result.
-
-Detected installation targets include Claude Code, Cursor, Codex, OpenCode, Pi, Gemini CLI, OpenClaw, Windsurf, Roo Code, Augment Code, Continue, Kiro, Trae, OpenHands, and additional tool-specific or universal Skill directories defined by the installer.
-
-```text
-User request
-    |
-    v
-Coding Agent + bundled VibeShell Skill
-    |
-    v
-native `vibeshell` command
-    |
-    +-- saved server inventory
-    +-- auto-starting headless daemon
-    +-- persistent SSH sessions
-    +-- remote commands, search, files, and SFTP
-```
-
-### Authenticated MCP Gateway: best for visible shared control
-
-The optional Gateway is useful when the agent should operate alongside the human inside the desktop control room. It can share the session manager, emit visible Agent activity, and route risky commands through the approval guard. It is no longer required for basic Skill installation or headless operation.
-
-## Architecture
-
-```text
-VibeShell
-├─ React 18 + TypeScript + Zustand + Tailwind
-│  ├─ terminal tabs, split panes, server launcher, SFTP, tunnels, snippets
-│  ├─ remote file workspace, media/archive previews, recordings
-│  ├─ Coding Agent launcher, Agent activity, approvals, and Git diff panel
-│  └─ safeInvoke wrappers for Tauri IPC
-├─ Tauri 2 desktop bridge
-├─ Native `vibeshell` CLI
-│  ├─ auto-starting headless IPC daemon
-│  ├─ SSH/session/command/search/file/SFTP commands
-│  ├─ OpenSSH, PuTTY, and Tabby import
-│  └─ Coding Agent Skill installation and diagnostics
-├─ Shared Rust core
-│  ├─ russh SSH client, host verification, jump hosts, and session manager
-│  ├─ russh-sftp operations, recursive transfer, sync, compression, extraction
-│  ├─ SQLite inventory, settings, snippets, plugins, and recordings
-│  ├─ local shell and tunnel managers
-│  ├─ encrypted GitHub Gist/WebDAV sync and portable snapshots
-│  ├─ local coding-agent launcher and bounded Git inspection
-│  └─ optional authenticated MCP Gateway
-└─ Canonical Skill + multi-agent installer
-```
-
-The desktop, CLI, and agent integrations intentionally converge on the same core instead of maintaining separate SSH implementations.
-
-## Security And Current Boundaries
-
-VibeShell is local-first, but local-first is not the same as security-complete. The current boundaries are documented explicitly:
-
-| Area | Current behavior |
-| --- | --- |
-| **Hosted service** | VibeShell has no hosted control plane and does not proxy terminal traffic through a VibeShell server. |
-| **Imported passwords** | Passwords stored by PuTTY, Tabby, or other third-party tools are never copied during import. |
-| **Private keys** | OpenSSH-format keys are referenced by local path and read only when connecting. PuTTY `.ppk` conversion is not performed automatically. |
-| **Saved credentials** | Saving is opt-in and device-local, but the current implementation is not yet backed by Keychain/Keystore-grade secure storage. Treat it as convenience, not a hardened secrets vault. |
-| **Host trust** | Trusted fingerprints stay device-local so trust is verified independently on every machine. |
-| **Cloud sync** | Providers receive encrypted envelopes only. Version 1 syncs servers, groups, and snippets, not credentials, fingerprints, recordings, sessions, tunnels, or local paths. |
-| **Vault unlock** | The sync vault key currently remains in process memory and must be supplied again after restart; persistent secure-vault integration is deferred. |
-| **Portable export** | The local JSON snapshot is plaintext and may contain sensitive hostnames and commands, though it excludes credentials, fingerprints, and recordings. Protect exported files accordingly. |
-| **Agent approvals** | The command approval guard applies to authenticated GUI-shared Agent Gateway workflows; direct native CLI execution follows the permissions of the local user running it. |
-| **Remote forwarding** | Local and dynamic forwarding are supported; full reverse-forward data bridging remains experimental. |
-| **Mobile** | Foreground SSH/SFTP foundations exist, but background session survival and native document picker flows are not promised yet. |
-
-These limitations are kept in the README so deployment decisions can be made from the actual implementation rather than marketing assumptions.
-
-## Install
-
-Download the latest release from [GitHub Releases](https://github.com/veithly/vibeshell/releases).
-
-| Platform | Desktop app | Headless/native CLI |
-| --- | --- | --- |
-| Windows x64 | `.exe` / `.msi` | `VibeShell-CLI-*-windows-x64.zip` |
-| macOS Apple Silicon | `.dmg` | `VibeShell-CLI-*-macos-arm64.tar.gz` |
-| macOS Intel | `.dmg` | `VibeShell-CLI-*-macos-x64.tar.gz` |
-| Linux x64 | `.deb` / `.AppImage` / `.rpm` | `VibeShell-CLI-*-linux-x64.tar.gz` |
-
-### Desktop installers
-
-Desktop packages contain the native CLI sidecar and canonical Skill.
-
-- **Windows:** installers expose the application directory through the user `PATH`.
-- **macOS and Linux:** application startup persists the bundled CLI at `~/.local/bin/vibeshell`.
-- The first desktop or CLI launch runs the idempotent multi-agent Skill installer.
-- The desktop updater uses the signed `latest.json` manifest published by the release workflow.
-
-After installation:
-
-```bash
-vibeshell version
-vibeshell import auto --dry-run
-vibeshell import auto
-vibeshell servers
-vibeshell ssh <server>
-```
-
-### Headless archives
-
-The standalone archives contain:
-
-- the native `vibeshell` binary;
-- `install.sh` or `install.ps1`;
-- the canonical `SKILL.md`;
-- CLI documentation.
-
-Linux and macOS:
-
-```bash
-./install.sh
-```
-
-The default destination is `~/.local/bin/vibeshell`. Override it when appropriate:
-
-```bash
-VIBESHELL_INSTALL_DIR=/usr/local/bin ./install.sh
-```
-
-Windows PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-No Node.js or npm runtime is required after installation.
-
-## Build From Source
-
-### Prerequisites
-
-- Node.js 22 recommended; Node.js 18 or newer is required by the current frontend toolchain.
-- Rust stable.
-- Tauri 2 platform prerequisites for your operating system.
-- Visual Studio Build Tools with the C++ workload on Windows.
-
-```bash
-git clone https://github.com/veithly/vibeshell.git
+git clone --branch dev https://github.com/veithly/vibeshell.git
 cd vibeshell
 npm ci
-npm run build
-cargo check --workspace
-cargo test --workspace
+npm run tauri -- dev
 ```
 
-Run the frontend and desktop app in development:
+Before a PR: `node scripts/check-release.mjs`, `npm test`, `npm run build`, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo test --workspace --locked`. SSH changes also have a loopback-only Docker fixture: `bash scripts/test-ssh-compatibility.sh`. Never run credential tests against a real saved-server store.
 
-```bash
-npm run dev
-npx tauri dev
-```
+**All normal PRs target `dev`.** `main` receives tested release promotions from this repository's `dev`; `master` is historical. Build commands do not authorize replacing an installed app or ending someone's SSH sessions.
 
-Build the desktop package with its target-suffixed native CLI sidecar:
+CI builds and releases are **manual-only**. Maintainers run CI on the PR head before merging; pushing code or a version tag does not compile or publish. Release runs from `main` and defaults to a draft unless publication is explicitly selected. Required checks, signatures and complete-source validation remain in place.
 
-```bash
-npm run build:desktop
-```
+Docker inventory improvements and the remaining container-session/proxy work are tracked in the [September issue review](docs/ISSUE_TRIAGE_2026-09.md). A Docker plugin command is not a persistent container session; an SSH SOCKS forwarding listener is not an outbound proxy setting.
 
-Build only the standalone CLI:
+[Contributing](CONTRIBUTING.md) · [Architecture](AGENTS.md) · [Release process](docs/RELEASING.md) · [Collaboration API](docs/AGENT_COLLABORATION.md)
 
-```bash
-cargo build --release --package vshell --bin vibeshell
-```
+Report security concerns through [private security reporting](https://github.com/veithly/vibeshell/security/advisories/new), not with real credentials in an issue. Approval controls are not a sandbox; protected input cannot prevent a remote program from echoing it. Do not automatically replay a mutating command after an ambiguous response loss.
 
-Prepare a sidecar explicitly for the current or a selected target:
+## License
 
-```bash
-node scripts/prepare-sidecar.mjs
-node scripts/prepare-sidecar.mjs --target aarch64-apple-darwin
-```
-
-Windows NSIS/MSI packaging:
-
-```powershell
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/build-msi.ps1 -NoPause
-```
-
-## CI And Release
-
-GitHub Actions verify:
-
-- TypeScript type checking, frontend tests, and the Vite production build.
-- Rust `cargo check` and `cargo test` on Linux, Windows, and macOS.
-- An additional Rust target check for the iOS arm64 simulator.
-- Linux `cargo clippy -- -D warnings`.
-- Updater signing-key validity before release builds start.
-- Windows x64, macOS arm64, macOS x64, and Linux x64 desktop packages.
-- Target-specific native CLI sidecars inside desktop installers.
-- Standalone headless archives containing the binary, installer, README, and canonical Skill.
-- Final signed updater manifest publication after every platform succeeds.
-
-The release workflow supports version tags and manual patch, minor, or major version bumps.
-
-## Project Layout
-
-```text
-src/                         React frontend
-src/components/              Terminal, SFTP, settings, tunnels, files, agents
-src/stores/                  Zustand application state
-src/i18n/                    English and Simplified Chinese locales
-src/lib/tauri.ts             safeInvoke and IPC helpers
-src-tauri/                   Shared Rust/Tauri backend
-src-tauri/src/ssh/           SSH client and host fingerprints
-src-tauri/src/session/       Persistent session manager
-src-tauri/src/sftp/          SFTP operations and sync helpers
-src-tauri/src/tunnel/        Local, remote, and dynamic forwarding modules
-src-tauri/src/ssh_import/    OpenSSH, PuTTY, and Tabby importers
-src-tauri/src/cloud_sync/    Encrypted Gist/WebDAV sync and portable files
-src-tauri/src/coding_agent/  Local agent launch and Git workspace inspection
-src-tauri/src/mcp/           Optional Agent Gateway and tools
-src-tauri/src/install/       Native CLI and multi-agent Skill installer
-cli/                         Native CLI and headless daemon
-skills/vibeshell/            Canonical Coding Agent Skill
-.claude/skills/              Claude-compatible Skill mirror
-.codex/skills/               Codex-compatible Skill mirror
-scripts/                     Build, sidecar, installer, and release tooling
-docs/                        Design notes, plans, mobile notes, and screenshots
-```
-
-## Contributing
-
-Issues and pull requests are welcome. The most useful contributions are small, verified, and explicit about platform behavior.
-
-1. Search existing issues and code paths first.
-2. Keep behavior changes narrow and preserve existing user data.
-3. Add focused tests for changed behavior, especially across Windows, macOS, and Linux.
-4. Run `npm run build`, `npm test`, `cargo check --workspace`, and `cargo test --workspace` before opening a pull request.
-5. Call out security, migration, or destructive-operation implications in the pull request description.
-
-If VibeShell improves your remote workflow, a star helps other terminal-first and agent-powered developers discover the project.
+VibeShell 1.1.0 and later are distributed as a whole under **GPL-3.0-only**. See [LICENSE](LICENSE), [NOTICE](NOTICE) and the [preserved MIT notice](licenses/legacy-MIT.txt). Earlier MIT permissions are not revoked; third-party components keep their own licenses. Release downloads include corresponding source and notices. No warranty is provided to the extent permitted by law.

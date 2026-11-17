@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ArrowRightLeft, Plus, Trash2, Play, Square, Globe, ArrowUpRight, ArrowDownLeft, RefreshCw, ChevronDown } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, formatFileSize } from '../../lib/utils';
 import { useTunnelStore } from '../../stores/tunnelStore';
 import type { TunnelType, TunnelConfigInput } from '../../types/tunnel';
 
@@ -237,8 +237,8 @@ export default function TunnelPanel({ serverId, sessionId }: TunnelPanelProps) {
                     </div>
                     {activeTunnel && (
                       <div className="text-tokyo-comment mt-0.5">
-                        <span className="text-tokyo-cyan">&uarr;{formatBytes(activeTunnel.bytesIn)}</span>
-                        {' '}<span className="text-tokyo-magenta">&darr;{formatBytes(activeTunnel.bytesOut)}</span>
+                        <span className="text-tokyo-cyan">&uarr;{formatFileSize(activeTunnel.bytesIn)}</span>
+                        {' '}<span className="text-tokyo-magenta">&darr;{formatFileSize(activeTunnel.bytesOut)}</span>
                         {' '}&middot; {activeTunnel.activeConnections} conn
                       </div>
                     )}
@@ -263,7 +263,7 @@ export default function TunnelPanel({ serverId, sessionId }: TunnelPanelProps) {
                       </button>
                     )}
                     <button
-                      onClick={() => deleteConfig(config.id)}
+                      onClick={() => void deleteConfig(config.id).catch(() => { /* error handled in store */ })}
                       className="p-1.5 rounded-md hover:bg-tokyo-red/10 text-tokyo-comment hover:text-tokyo-red transition-colors cursor-pointer"
                       title="Delete config"
                     >
@@ -278,10 +278,4 @@ export default function TunnelPanel({ serverId, sessionId }: TunnelPanelProps) {
       </div>
     </div>
   );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}K`;
-  return `${(bytes / 1048576).toFixed(1)}M`;
 }
