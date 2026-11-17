@@ -5,6 +5,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useServerStore, type Server } from '../../stores/serverStore';
 import { safeInvoke } from '../../lib/tauri';
 import { useRuntimeCapabilitiesStore } from '../../stores/runtimeCapabilitiesStore';
+import { useSshKeyPicker, getFileName } from '../../hooks/useSshKeyPicker';
 
 interface ConnectDialogProps {
   isOpen: boolean;
@@ -34,10 +35,19 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // SSH Key file state
-  const [keyPath, setKeyPath] = useState<string | null>(null);
-  const [keyContent, setKeyContent] = useState<string | null>(null);
-  const [isLoadingKey, setIsLoadingKey] = useState(false);
+  // SSH key file state (native picker flow shared with AddServerDialog)
+  const {
+    keyPath,
+    keyContent,
+    isLoadingKey,
+    browseForSshKey,
+    setKeyContent,
+    setKey,
+    reset: resetKeyPicker,
+  } = useSshKeyPicker({
+    onBrowseStart: () => setError(null),
+    onError: setError,
+  });
   const [usingSavedCredentials, setUsingSavedCredentials] = useState(false);
   const [isLoadingCredentials, setIsLoadingCredentials] = useState(false);
 
@@ -49,9 +59,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
       setShowPassword(false);
       setIsConnecting(false);
       setError(null);
-      setKeyPath(null);
-      setKeyContent(null);
-      setIsLoadingKey(false);
+      resetKeyPicker();
       setUsingSavedCredentials(false);
       setIsLoadingCredentials(true);
 
@@ -69,7 +77,6 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
           } | null>('get_credential', { request: { serverName: server.name } });
 
           if (result.success && result.data) {
-            console.log('[ConnectDialog] Found saved credentials for', server.name);
             const cred = result.data;
 
             if (cred.auth_type === 'password') {
@@ -78,15 +85,12 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
               setUsingSavedCredentials(true);
             } else if (cred.auth_type === 'key' || cred.auth_type === 'key_with_passphrase') {
               // Key auth - set the key content and path
-              setKeyContent(cred.credential);
-              setKeyPath(cred.key_path);
+              setKey(cred.key_path, cred.credential);
               if (cred.passphrase) {
                 setPassword(cred.passphrase);
               }
               setUsingSavedCredentials(true);
             }
-          } else {
-            console.log('[ConnectDialog] No saved credentials for', server.name);
           }
         } catch (err) {
           console.error('[ConnectDialog] Error loading credentials:', err);
@@ -97,37 +101,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
 
       loadCredentials();
     }
-  }, [isOpen, server?.id, server?.name]);
-
-  // Browse for SSH key file
-  const handleBrowseKey = useCallback(async () => {
-    setIsLoadingKey(true);
-    setError(null);
-
-    try {
-      const result = await safeInvoke<string | null>('pick_ssh_key_file');
-
-      if (result.success && result.data) {
-        setKeyPath(result.data);
-
-        // Read the key file content
-        const readResult = await safeInvoke<string>('read_ssh_key_file', { path: result.data });
-
-        if (readResult.success) {
-          setKeyContent(readResult.data);
-          console.log('[ConnectDialog] SSH key loaded successfully');
-        } else {
-          setError(`Failed to read key file: ${readResult.error.message}`);
-          setKeyPath(null);
-        }
-      }
-    } catch (err) {
-      console.error('[ConnectDialog] Error browsing for key:', err);
-      setError(err instanceof Error ? err.message : 'Failed to browse for key file');
-    } finally {
-      setIsLoadingKey(false);
-    }
-  }, []);
+  }, [isOpen, server?.id, server?.name, resetKeyPicker, setKey]);
 
   const handleConnect = useCallback(async () => {
     if (!server) return;
@@ -145,18 +119,10 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
       return;
     }
 
-    console.log('[ConnectDialog] handleConnect called for server:', server.name);
     setIsConnecting(true);
     setError(null);
 
     try {
-      console.log('[ConnectDialog] Calling connectWithCredentials:', {
-        serverName: server.name,
-        authType: isKeyAuth ? 'key' : 'password',
-        hasPassword: !!password,
-        hasKeyContent: !!keyContent,
-      });
-
       // For key auth, pass the key content as credential and password as passphrase
       // (an empty passphrase means the key is unencrypted, so send undefined).
       // For password auth, pass the password as credential
@@ -173,13 +139,8 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
         forceNew
       );
 
-      console.log('[ConnectDialog] connectWithCredentials result:', session);
-
       if (session) {
-        console.log('[ConnectDialog] Connection successful, session.id:', session.id);
-        console.log('[ConnectDialog] Calling onConnected with sessionId:', session.id);
         onConnected(session.id);
-        console.log('[ConnectDialog] Closing dialog');
         onClose();
       } else {
         console.error('[ConnectDialog] Connection failed: session is null');
@@ -201,13 +162,6 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
       handleConnect();
     }
   }, [handleConnect, isConnecting, password, keyContent, server?.auth_type]);
-
-  // Helper to get filename from path
-  const getFileName = (path: string | null): string => {
-    if (!path) return '';
-    const parts = path.replace(/\\/g, '/').split('/');
-    return parts[parts.length - 1] || path;
-  };
 
   if (!isOpen || !server) return null;
 
@@ -331,7 +285,7 @@ export function ConnectDialog({ isOpen, server, forceNew = false, onClose, onCon
                 </div>
                 <button
                   type="button"
-                  onClick={handleBrowseKey}
+                  onClick={browseForSshKey}
                   disabled={isLoadingKey || isConnecting}
                   className={cn(
                     'flex items-center justify-center gap-2 px-3 py-2 rounded-md',

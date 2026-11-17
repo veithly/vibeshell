@@ -17,9 +17,7 @@ interface WorkspaceToolbarProps {
  * Desktop overflow menu for low-frequency workspace actions. Mirrors the
  * dropdown pattern from MobileWorkspaceActions (pointerdown-outside close,
  * Escape close, focus restored to the trigger) but uses desktop-sized
- * icon-button styling and a denser menu. High-frequency actions (Quick Cmd,
- * SFTP, split panes) stay as direct buttons in the parent toolbar; everything
- * else lives here.
+ * icon-button styling and a denser menu. History remains directly accessible; other workspace actions live here.
  */
 export function WorkspaceToolbar({ label, items, anyPressed = false }: WorkspaceToolbarProps) {
   const [open, setOpen] = useState(false);
@@ -69,7 +67,7 @@ export function WorkspaceToolbar({ label, items, anyPressed = false }: Workspace
         <div
           role="menu"
           aria-label={label}
-          className="absolute right-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
+          className="absolute right-0 top-full z-50 mt-1 max-h-[70vh] w-56 overflow-y-auto rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
         >
           {items.map((item) => (
             <button

@@ -1,0 +1,29 @@
+name: PR Target
+
+# Never check out or run the PR head in this metadata-only workflow.
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  target:
+    name: PR Target
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const normal = pr.base.ref === 'dev';
+            const promotion = pr.base.ref === 'main'
+              && pr.head.ref === 'dev'
+              && pr.head.repo?.full_name === context.payload.repository.full_name;
+            if (!normal && !promotion) {
+              core.setFailed('Feature, fix and documentation PRs must target dev. Only same-repository dev → main release promotions target main. Please change the PR base.');
+            } else {
+              core.info(promotion ? 'Validated dev → main release promotion.' : 'Validated dev integration PR.');
+            }

@@ -1,6 +1,6 @@
-use anyhow::Result;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use anyhow::Context;
+use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -21,8 +21,8 @@ pub(crate) fn fingerprint_path(app_data_dir: &Path) -> PathBuf {
 /// one data directory with the desktop application.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn default_app_data_dir() -> Result<PathBuf> {
-    let base_dirs = directories::BaseDirs::new()
-        .context("Could not determine platform base directories")?;
+    let base_dirs =
+        directories::BaseDirs::new().context("Could not determine platform base directories")?;
     Ok(base_dirs.data_dir().join(APP_BUNDLE_IDENTIFIER))
 }
 

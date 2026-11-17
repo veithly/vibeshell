@@ -1,8 +1,19 @@
 import { useEffect, useRef, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/utils';
-import { useSettingsStore, themes } from '../../stores/settingsStore';
-import { categoryInfo, type CommandCategory } from './completionData';
+import { useSettingsStore, themes, type ThemeDefinition } from '../../stores/settingsStore';
+import { categoryInfo, categoryThemeColor, type CommandCategory } from './completionData';
+
+type ThemeColors = ThemeDefinition['colors'];
+
+/**
+ * Resolve a category's accent color from the active theme so badges and icons
+ * follow the user's theme instead of hardcoded hex values.
+ */
+const getCategoryColor = (
+  category: CommandCategory | undefined,
+  themeColors: ThemeColors
+): string => (category ? themeColors[categoryThemeColor[category]] ?? themeColors.accent : themeColors.accent);
 
 /**
  * Type of completion item for icon display
@@ -62,7 +73,7 @@ const CompletionIcon = memo(function CompletionIcon({
   category?: CommandCategory;
   isHistory?: boolean;
   fileExtension?: string;
-  themeColors: { fg: string; fgDark: string; accent: string };
+  themeColors: ThemeColors;
 }) {
   // History icon
   if (isHistory || type === 'history') {
@@ -104,7 +115,7 @@ const CompletionIcon = memo(function CompletionIcon({
         className="w-4 h-4 flex-shrink-0"
         viewBox="0 0 16 16"
         fill="none"
-        style={{ color: '#e0af68' }}
+        style={{ color: themeColors.yellow }}
       >
         <path
           d="M2 4.5A1.5 1.5 0 0 1 3.5 3H6l1 2h5.5A1.5 1.5 0 0 1 14 6.5v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12.5v-8z"
@@ -120,15 +131,15 @@ const CompletionIcon = memo(function CompletionIcon({
       if (!fileExtension) return themeColors.fgDark;
       const ext = fileExtension.toLowerCase();
       // Color by extension type
-      if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) return '#7aa2f7';
-      if (['.py'].includes(ext)) return '#9ece6a';
-      if (['.rs'].includes(ext)) return '#ff9e64';
-      if (['.go'].includes(ext)) return '#7dcfff';
-      if (['.json', '.yaml', '.yml', '.toml'].includes(ext)) return '#e0af68';
+      if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) return themeColors.accent;
+      if (['.py'].includes(ext)) return themeColors.green;
+      if (['.rs'].includes(ext)) return themeColors.orange;
+      if (['.go'].includes(ext)) return themeColors.cyan;
+      if (['.json', '.yaml', '.yml', '.toml'].includes(ext)) return themeColors.yellow;
       if (['.md', '.txt', '.doc'].includes(ext)) return themeColors.fg;
-      if (['.css', '.scss', '.less'].includes(ext)) return '#bb9af7';
-      if (['.html', '.htm'].includes(ext)) return '#f7768e';
-      if (['.sh', '.bash', '.zsh'].includes(ext)) return '#9ece6a';
+      if (['.css', '.scss', '.less'].includes(ext)) return themeColors.magenta;
+      if (['.html', '.htm'].includes(ext)) return themeColors.red;
+      if (['.sh', '.bash', '.zsh'].includes(ext)) return themeColors.green;
       return themeColors.fgDark;
     };
 
@@ -156,7 +167,7 @@ const CompletionIcon = memo(function CompletionIcon({
         className="w-4 h-4 flex-shrink-0"
         viewBox="0 0 16 16"
         fill="none"
-        style={{ color: '#bb9af7' }}
+        style={{ color: themeColors.magenta }}
       >
         <text
           x="8"
@@ -199,7 +210,7 @@ const CompletionIcon = memo(function CompletionIcon({
   }
 
   // Default command icon with category coloring
-  const categoryColor = category ? categoryInfo[category]?.color : themeColors.accent;
+  const categoryColor = getCategoryColor(category, themeColors);
 
   return (
     <svg
@@ -237,7 +248,7 @@ const HighlightedText = memo(function HighlightedText({
   text: string;
   matchRanges?: Array<{ start: number; end: number }>;
   input?: string;
-  themeColors: { fg: string; fgDark: string; accent: string };
+  themeColors: ThemeColors;
 }) {
   // If we have explicit match ranges, use them
   if (matchRanges && matchRanges.length > 0) {
@@ -496,17 +507,20 @@ export const CompletionPopup = memo(function CompletionPopup({
               </div>
 
               {/* Category badge */}
-              {item.category && !item.isHistory && (
-                <div
-                  className="text-xs px-1.5 py-0.5 rounded flex-shrink-0"
-                  style={{
-                    backgroundColor: `${categoryInfo[item.category]?.color || themeColors.accent}15`,
-                    color: categoryInfo[item.category]?.color || themeColors.accent,
-                  }}
-                >
-                  {categoryInfo[item.category]?.label || item.category}
-                </div>
-              )}
+              {item.category && !item.isHistory && (() => {
+                const badgeColor = getCategoryColor(item.category, themeColors);
+                return (
+                  <div
+                    className="text-xs px-1.5 py-0.5 rounded flex-shrink-0"
+                    style={{
+                      backgroundColor: `${badgeColor}15`,
+                      color: badgeColor,
+                    }}
+                  >
+                    {categoryInfo[item.category]?.label || item.category}
+                  </div>
+                );
+              })()}
             </div>
           );
         })}

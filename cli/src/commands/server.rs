@@ -75,8 +75,13 @@ pub fn add(args: AddServerArgs) -> Result<()> {
         .unwrap_or_else(|| host.clone());
 
     let identity_path = args.identity.as_deref();
-    let (auth_type, credential, passphrase, key_path, saved_credentials) =
-        resolve_credentials(identity_path)?;
+    let ResolvedCredentials {
+        auth_type,
+        credential,
+        passphrase,
+        key_path,
+    } = resolve_credentials(identity_path)?;
+    let saved_credentials = credential.is_some();
 
     let spec = AddServerSpec {
         name: name.clone(),
@@ -84,6 +89,7 @@ pub fn add(args: AddServerArgs) -> Result<()> {
         port,
         username: username.clone(),
         auth_type: auth_type.to_string(),
+        credential_id: None,
         group_id: None,
         group_name: args.group,
         tags: args.tags,
@@ -122,7 +128,11 @@ pub fn add(args: AddServerArgs) -> Result<()> {
     }
 }
 
-pub fn delete(name: &str) -> Result<()> {
+pub fn delete(name: &str, confirmed: bool) -> Result<()> {
+    // Refuse before starting a daemon or sending any mutation.
+    if !confirmed {
+        bail!("Deletion closes active sessions and removes saved credentials. Confirm with --yes");
+    }
     let name = name.trim();
     if name.is_empty() {
         bail!("Server name is required");
@@ -130,6 +140,7 @@ pub fn delete(name: &str) -> Result<()> {
 
     match ipc_support::send(&IpcMessage::DeleteServer {
         name: name.to_string(),
+        confirmed,
     })? {
         IpcMessage::Ok => {
             println!("Deleted server '{name}'");
@@ -142,15 +153,14 @@ pub fn delete(name: &str) -> Result<()> {
     }
 }
 
-fn resolve_credentials(
-    identity: Option<&Path>,
-) -> Result<(
-    &'static str,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    bool,
-)> {
+struct ResolvedCredentials {
+    auth_type: &'static str,
+    credential: Option<String>,
+    passphrase: Option<String>,
+    key_path: Option<String>,
+}
+
+fn resolve_credentials(identity: Option<&Path>) -> Result<ResolvedCredentials> {
     if let Some(path) = identity {
         let key = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read identity file {}", path.display()))?;
@@ -159,27 +169,33 @@ fn resolve_credentials(
         }
         let passphrase =
             env_nonempty("VIBESHELL_KEY_PASSPHRASE").or_else(|| env_nonempty("SSH_KEY_PASSPHRASE"));
-        Ok((
-            "key_with_passphrase",
-            Some(key),
+        Ok(ResolvedCredentials {
+            auth_type: "key_with_passphrase",
+            credential: Some(key),
             passphrase,
-            Some(path.display().to_string()),
-            true,
-        ))
+            key_path: Some(path.display().to_string()),
+        })
     } else if let Some(password) =
         env_nonempty("SSH_PASSWORD").or_else(|| env_nonempty("VIBESHELL_PASSWORD"))
     {
-        Ok(("password", Some(password), None, None, true))
+        Ok(ResolvedCredentials {
+            auth_type: "password",
+            credential: Some(password),
+            passphrase: None,
+            key_path: None,
+        })
     } else {
-        Ok(("password", None, None, None, false))
+        Ok(ResolvedCredentials {
+            auth_type: "password",
+            credential: None,
+            passphrase: None,
+            key_path: None,
+        })
     }
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]
@@ -187,9 +203,21 @@ mod tests {
     use super::env_nonempty;
 
     #[test]
-    fn env_nonempty_treats_blank_as_unset() {
+    fn env_nonempty_preserves_exact_secret_bytes() {
         std::env::set_var("VIBESHELL_TEST_EMPTY_SECRET", "   ");
+        assert!(env_nonempty("VIBESHELL_TEST_EMPTY_SECRET").as_deref() == Some("   "));
+        std::env::set_var("VIBESHELL_TEST_EMPTY_SECRET", " secret \n");
+        assert!(env_nonempty("VIBESHELL_TEST_EMPTY_SECRET").as_deref() == Some(" secret \n"));
+        std::env::set_var("VIBESHELL_TEST_EMPTY_SECRET", "");
         assert!(env_nonempty("VIBESHELL_TEST_EMPTY_SECRET").is_none());
         std::env::remove_var("VIBESHELL_TEST_EMPTY_SECRET");
+    }
+
+    #[test]
+    fn deletion_without_confirmation_never_contacts_service() {
+        assert!(super::delete("anything", false)
+            .unwrap_err()
+            .to_string()
+            .contains("--yes"));
     }
 }

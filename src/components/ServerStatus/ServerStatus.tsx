@@ -14,7 +14,7 @@ import {
   Loader2,
   GripHorizontal,
 } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, formatFileSize } from '../../lib/utils';
 import { safeInvoke } from '../../lib/tauri';
 
 // =============================================================================
@@ -82,18 +82,6 @@ export const refreshIntervalOptions: { value: RefreshInterval; label: string; ms
 // =============================================================================
 // Helper Functions
 // =============================================================================
-
-/**
- * Format bytes to human readable format
- */
-function formatBytes(bytes: number, decimals = 1): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-}
 
 /**
  * Format uptime to human readable format
@@ -237,6 +225,8 @@ export function ServerStatus({
     setLastUpdated(null);
     prevNetworkRef.current.clear();
     setNetworkRates(new Map());
+    // Invalidate any in-flight status fetch from the previous session.
+    fetchRequestIdRef.current += 1;
   }, [sessionId, defaultCollapsed, defaultRefreshInterval]);
 
   // Resize drag state
@@ -248,6 +238,11 @@ export function ServerStatus({
   // Reference to the previous network stats for calculating rates
   const prevNetworkRef = useRef<Map<string, { rx: number; tx: number; time: number }>>(new Map());
   const [networkRates, setNetworkRates] = useState<Map<string, { rxRate: number; txRate: number }>>(new Map());
+
+  // Request id for staleness protection: only the latest fetchStatus call may
+  // land results, so a slow response from a previous session (or a manual
+  // refresh racing an interval tick) cannot overwrite fresh state.
+  const fetchRequestIdRef = useRef(0);
 
   // Handle resize dragging
   useEffect(() => {
@@ -288,6 +283,7 @@ export function ServerStatus({
   const fetchStatus = useCallback(async () => {
     if (!sessionId) return;
 
+    const requestId = ++fetchRequestIdRef.current;
     setIsLoading(true);
     setError(null);
 
@@ -295,6 +291,9 @@ export function ServerStatus({
       const result = await safeInvoke<ServerStatus>('get_server_status', {
         request: { sessionId },
       });
+
+      // A newer request (session switch / manual refresh) superseded this one.
+      if (fetchRequestIdRef.current !== requestId) return;
 
       if (result.success) {
         setStatus(result.data);
@@ -326,10 +325,13 @@ export function ServerStatus({
         throw new Error(result.error.message);
       }
     } catch (err) {
-      console.error('[ServerStatus] Failed to fetch status:', err);
+      if (fetchRequestIdRef.current !== requestId) return;
+      console.warn('[ServerStatus] Failed to fetch status:', err);
       setError(err instanceof Error ? err.message : 'Failed to fetch server status');
     } finally {
-      setIsLoading(false);
+      if (fetchRequestIdRef.current === requestId) {
+        setIsLoading(false);
+      }
     }
   }, [sessionId]);
 
@@ -346,7 +348,12 @@ export function ServerStatus({
     // Set up interval
     const intervalMs = refreshIntervalOptions.find((opt) => opt.value === refreshInterval)?.ms;
     if (intervalMs) {
-      const timer = setInterval(fetchStatus, intervalMs);
+      const timer = setInterval(() => {
+        // Skip ticks while the window is hidden to avoid pointless IPC when
+        // the app is in the background (same pattern as App.tsx session sync).
+        if (document.hidden) return;
+        fetchStatus();
+      }, intervalMs);
       return () => clearInterval(timer);
     }
   }, [isCollapsed, refreshInterval, fetchStatus]);
@@ -547,14 +554,14 @@ export function ServerStatus({
                     <div className="flex justify-between">
                       <span>Used / Total</span>
                       <span className="text-tokyo-fg">
-                        {formatBytes(status.memory.used)} / {formatBytes(status.memory.total)}
+                        {formatFileSize(status.memory.used)} / {formatFileSize(status.memory.total)}
                       </span>
                     </div>
                     {status.memory.swapTotal > 0 && (
                       <div className="flex justify-between">
                         <span>Swap</span>
                         <span className="text-tokyo-fg">
-                          {formatBytes(status.memory.swapUsed)} / {formatBytes(status.memory.swapTotal)}
+                          {formatFileSize(status.memory.swapUsed)} / {formatFileSize(status.memory.swapTotal)}
                         </span>
                       </div>
                     )}
@@ -572,7 +579,7 @@ export function ServerStatus({
                               {disk.mountPoint}
                             </span>
                             <span className="text-tokyo-fg">
-                              {formatBytes(disk.used)} / {formatBytes(disk.total)}
+                              {formatFileSize(disk.used)} / {formatFileSize(disk.total)}
                             </span>
                           </div>
                           <ProgressBar value={disk.usagePercent} showPercent={false} />
@@ -597,13 +604,13 @@ export function ServerStatus({
                               <div>
                                 <span className="text-tokyo-comment">RX: </span>
                                 <span className="text-tokyo-green">
-                                  {rates ? `${formatBytes(rates.rxRate)}/s` : formatBytes(iface.rxBytes)}
+                                  {rates ? `${formatFileSize(rates.rxRate)}/s` : formatFileSize(iface.rxBytes)}
                                 </span>
                               </div>
                               <div>
                                 <span className="text-tokyo-comment">TX: </span>
                                 <span className="text-tokyo-cyan">
-                                  {rates ? `${formatBytes(rates.txRate)}/s` : formatBytes(iface.txBytes)}
+                                  {rates ? `${formatFileSize(rates.txRate)}/s` : formatFileSize(iface.txBytes)}
                                 </span>
                               </div>
                             </div>

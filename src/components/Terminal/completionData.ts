@@ -2,6 +2,7 @@
  * Command completion data source for terminal autocomplete functionality.
  * Contains common shell commands, their descriptions, and subcommands.
  */
+import type { ThemeDefinition } from '../../stores/settingsStore';
 
 /**
  * Represents a command suggestion with metadata.
@@ -36,16 +37,32 @@ export type CommandCategory =
 /**
  * Category display information.
  */
-export const categoryInfo: Record<CommandCategory, { label: string; color: string }> = {
-  navigation: { label: 'Navigation', color: '#7aa2f7' },
-  file: { label: 'Files', color: '#9ece6a' },
-  text: { label: 'Text', color: '#e0af68' },
-  system: { label: 'System', color: '#f7768e' },
-  network: { label: 'Network', color: '#7dcfff' },
-  vcs: { label: 'Git', color: '#ff9e64' },
-  container: { label: 'Container', color: '#bb9af7' },
-  package: { label: 'Package', color: '#73daca' },
-  misc: { label: 'Misc', color: '#a9b1d6' },
+export const categoryInfo: Record<CommandCategory, { label: string }> = {
+  navigation: { label: 'Navigation' },
+  file: { label: 'Files' },
+  text: { label: 'Text' },
+  system: { label: 'System' },
+  network: { label: 'Network' },
+  vcs: { label: 'Git' },
+  container: { label: 'Container' },
+  package: { label: 'Package' },
+  misc: { label: 'Misc' },
+};
+
+/**
+ * Key of a theme color used to render each category's accent, so category
+ * badges follow the active theme instead of hardcoded hex values.
+ */
+export const categoryThemeColor: Record<CommandCategory, keyof ThemeDefinition['colors']> = {
+  navigation: 'accent',
+  file: 'green',
+  text: 'yellow',
+  system: 'red',
+  network: 'cyan',
+  vcs: 'orange',
+  container: 'magenta',
+  package: 'cyan',
+  misc: 'fgDark',
 };
 
 /**

@@ -1,0 +1,23 @@
+VibeShell
+Copyright (c) 2026 Rick (veithly) and VibeShell contributors.
+
+Beginning with version 1.1.0, VibeShell as a whole is distributed under the
+GNU General Public License, version 3 only (SPDX: GPL-3.0-only).
+The complete license is in LICENSE. There is no warranty, to the extent
+permitted by applicable law. You may redistribute and modify the program
+under the conditions of that license.
+
+Earlier versions were distributed under MIT. This change does not revoke
+permissions already granted for those versions. The original MIT notice
+is retained in licenses/legacy-MIT.txt for previously MIT-licensed portions.
+Git history preserves individual authorship, including the Unix shell
+selection contribution by FellowTraveler. Third-party components retain
+their own licenses and copyright notices; the project's GPL notice does
+not relicense them.
+
+Source and build instructions: https://github.com/veithly/vibeshell
+For a released binary, use its matching vX.Y.Z source tag, Cargo.lock,
+package-lock.json and .github/workflows/release.yml. Release distributions
+include license notices and a matching source archive. The release source
+bundle includes vendored Rust dependencies and npm package source archives;
+see its SOURCE-README.txt for reconstruction instructions.

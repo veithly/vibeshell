@@ -1607,17 +1607,19 @@ fn synced_grant_permissions(installation: &PluginInstallationSyncPayload) -> Res
             .map_err(|error| anyhow!("Synced external plugin manifest is invalid: {error}"))?;
             manifest.permissions
         }
-        _ => crate::plugins::builtin_catalog()
-            .map_err(|error| anyhow!("Built-in plugin catalog is invalid: {error}"))?
-            .into_iter()
-            .find(|manifest| manifest.id == installation.plugin_id)
-            .ok_or_else(|| {
-                anyhow!(
-                    "Synced built-in plugin {} is unknown on this device",
-                    installation.plugin_id
-                )
-            })?
-            .permissions,
+        _ => {
+            crate::plugins::builtin_catalog()
+                .map_err(|error| anyhow!("Built-in plugin catalog is invalid: {error}"))?
+                .into_iter()
+                .find(|manifest| manifest.id == installation.plugin_id)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Synced built-in plugin {} is unknown on this device",
+                        installation.plugin_id
+                    )
+                })?
+                .permissions
+        }
     };
 
     serde_json::to_string(&permissions).map_err(|error| anyhow!("Failed to encode grants: {error}"))
@@ -1683,7 +1685,8 @@ fn reference_is_tombstoned(
     conn: &Connection,
     entity_kind: SyncEntityKind,
     entity_id: Option<&str>,
-) -> Result<bool> {    let Some(entity_id) = entity_id else {
+) -> Result<bool> {
+    let Some(entity_id) = entity_id else {
         return Ok(false);
     };
     Ok(entity_state(conn, entity_kind, entity_id)?
@@ -2358,7 +2361,9 @@ mod tests {
         );
 
         // Deleting emits a tombstone like every other entity.
-        database.plugin_installation_delete("docker-containers").unwrap();
+        database
+            .plugin_installation_delete("docker-containers")
+            .unwrap();
         pending(&database)
             .into_iter()
             .find(|change| {
@@ -3564,8 +3569,7 @@ mod tests {
         let (_dir, database) = test_database();
         // Leave a real scheduling margin: validation samples `now` after this line,
         // so a +1 ms boundary makes the test race the wall clock on slower CI hosts.
-        let too_far_future =
-            Utc::now().timestamp_millis() + MAX_REMOTE_CLOCK_SKEW_MILLIS + 60_000;
+        let too_far_future = Utc::now().timestamp_millis() + MAX_REMOTE_CLOCK_SKEW_MILLIS + 60_000;
         let future = remote_upsert(
             SyncEntityKind::Group,
             "future-group",

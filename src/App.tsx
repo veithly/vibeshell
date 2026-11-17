@@ -1,7 +1,6 @@
 import { useCallback, useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Zap,
   FolderOpen,
   Settings as SettingsIcon,
   ArrowLeft,
@@ -11,10 +10,7 @@ import {
   ExternalLink,
   Rows2,
   PanelRightClose,
-  Loader2,
   X,
-  Bot,
-  Code2,
   FileDiff,
   Blocks,
   Store,
@@ -46,14 +42,12 @@ import { AddServerDialog } from './components/AddServerDialog';
 import { EditServerDialog } from './components/EditServerDialog';
 import { ConnectDialog } from './components/ConnectDialog';
 import { SelectServerDialog } from './components/SelectServerDialog';
-import { QuickCommandDialog } from './components/QuickCommandDialog';
-import { CommandHistoryDialog } from './components/CommandHistoryDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Notifications } from './components/Notifications';
 import { AgentActivityPanel } from './components/AgentActivityPanel';
 import { AgentApprovalDialog } from './components/AgentApprovalDialog';
 import { WorkspaceChangesPanel } from './components/WorkspaceChangesPanel';
-import { MobileWorkspaceActions } from './components/MobileWorkspaceActions';
+import { isPluginCompatible, localizedPluginName } from './plugins/pluginUtils';
 import { WorkspaceToolbar } from './components/WorkspaceToolbar';
 import { FingerprintVerificationDialog, FingerprintManagerDialog } from './components/FingerprintDialog';
 import { SnippetManagerDialog } from './components/SnippetManager/SnippetManagerDialog';
@@ -69,7 +63,6 @@ import {
 import { useFileWorkspaceStore } from './stores/fileWorkspaceStore';
 import { SessionPluginDock } from './components/SessionPluginDock';
 import { PluginPanel } from './components/PluginPanel';
-import { PluginTabLauncher } from './components/PluginTabLauncher';
 import { PaneDropZone } from './components/PaneDropZone';
 import {
   parsePaneId,
@@ -117,7 +110,6 @@ function App() {
     setActiveSession,
     killSession,
     killLocalShellSession,
-    removeSession,
     connectWithCredentials,
     fetchSessions,
     syncRemoteSessions,
@@ -145,15 +137,12 @@ function App() {
 
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
   const [isConnectOpen, setIsConnectOpen] = useState(false);
-  const [isQuickCommandOpen, setIsQuickCommandOpen] = useState(false);
-  const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false);
   const [isEditServerOpen, setIsEditServerOpen] = useState(false);
   const [isSelectServerOpen, setIsSelectServerOpen] = useState(false);
-  const [sessionLauncherTab, setSessionLauncherTab] = useState<'agent' | 'local' | 'ssh' | undefined>();
   const [isSnippetManagerOpen, setIsSnippetManagerOpen] = useState(false);
   const [isTunnelPanelOpen, setIsTunnelPanelOpen] = useState(false);
   const [isSftpOpen, setIsSftpOpen] = useState(false);
-  const [isAgentActivityOpen, setIsAgentActivityOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isWorkspaceChangesOpen, setIsWorkspaceChangesOpen] = useState(false);
   const [isPluginDockOpen, setIsPluginDockOpen] = useState(false);
   const [serverToConnect, setServerToConnect] = useState<Server | null>(null);
@@ -369,15 +358,17 @@ function App() {
 
   const closeInactiveSession = useCallback(async (session: Session) => {
     if (!canCloseWorkspaceSession(session.id)) return false;
-    const success = session.sessionType === 'local'
-      ? await killLocalShellSession(session.id)
-      : await killSession(session.id);
-
-    if (!success) {
-      removeSession(session.id);
+    // killSession/killLocalShellSession remove the tab on success (and when the
+    // backend reports the session already gone). On other failures the tab is
+    // kept so the periodic sync can reconcile instead of the tab flickering
+    // back after a forced removal.
+    if (session.sessionType === 'local') {
+      await killLocalShellSession(session.id);
+    } else {
+      await killSession(session.id);
     }
     return true;
-  }, [killSession, killLocalShellSession, removeSession]);
+  }, [killSession, killLocalShellSession]);
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
@@ -413,10 +404,6 @@ function App() {
           case 'n':
             event.preventDefault();
             setIsAddServerOpen(true);
-            break;
-          case 'k':
-            event.preventDefault();
-            setIsQuickCommandOpen(true);
             break;
           case ',':
             event.preventDefault();
@@ -529,7 +516,6 @@ function App() {
   }, [workspaceReady, sessions, pluginTabs, fileTabs, detachedOwners, activeSessionId, activeFileTabId, activePluginTabId, activateFileTab, activatePluginTab, setActiveSession]);
 
   const handleConnected = useCallback((sessionId: string) => {
-    console.log('[App] handleConnected called with sessionId:', sessionId);
     activateFileTab(null);
     activatePluginTab(null);
     setActiveSession(sessionId);
@@ -537,13 +523,11 @@ function App() {
     // The Terminal component attaches after its event listener is ready so
     // the initial prompt/MOTD can be replayed without losing early output.
     setTimeout(() => {
-      console.log('[App] Focusing terminal for session:', sessionId);
       terminalRefs.current.get(sessionId)?.focus();
     }, 100);
   }, [activateFileTab, activatePluginTab, setActiveSession]);
 
   const handleConnect = useCallback(async (server: Server, options?: { forceNew?: boolean }) => {
-    console.log('[App] handleConnect called for server:', server.name);
     const forceNew = options?.forceNew ?? false;
 
     const credResult = await safeInvoke<{
@@ -557,7 +541,6 @@ function App() {
     } | null>('get_credential', { request: { serverName: server.name } });
 
     if (credResult.success && credResult.data) {
-      console.log('[App] Found saved credentials, auto-connecting...');
       const cred = credResult.data;
       const authType = (cred.auth_type === 'key' || cred.auth_type === 'key_with_passphrase') ? 'key' : 'password';
 
@@ -572,16 +555,13 @@ function App() {
       );
 
       if (session) {
-        console.log('[App] Auto-connect successful, session:', session.id);
         handleConnected(session.id);
       } else {
-        console.log('[App] Auto-connect failed, showing dialog');
         setServerToConnect(server);
         setConnectForceNew(forceNew);
         setIsConnectOpen(true);
       }
     } else {
-      console.log('[App] No saved credentials, opening connection dialog');
       setServerToConnect(server);
       setConnectForceNew(forceNew);
       setIsConnectOpen(true);
@@ -630,14 +610,9 @@ function App() {
   }, []);
 
   const handleNewSession = useCallback(() => {
-    setSessionLauncherTab(undefined);
     setIsSelectServerOpen(true);
   }, []);
 
-  const handleOpenCodingAgent = useCallback(() => {
-    setSessionLauncherTab('agent');
-    setIsSelectServerOpen(true);
-  }, []);
 
   const handleCodingAgentLaunched = useCallback((sessionId: string) => {
     activateFileTab(null);
@@ -799,33 +774,6 @@ function App() {
     });
   }, []);
 
-  const handleSaveLayout = useCallback(async () => {
-    if (!workspaceReady) return;
-    try {
-      saveWorkspaceLayout(treeRef.current, focusedPaneRef.current);
-      workspaceInitialized.current = true;
-      if ('__TAURI_INTERNALS__' in window) await withDeadline(captureWindowGeometry('main'), 1500, 'Window geometry capture timed out');
-      useNotificationStore.getState().success(t('workspaceLayout.saved'), t('workspaceLayout.savedDescription'));
-    } catch (error) { notifyError(t('workspaceLayout.saveFailed'), String(error)); }
-  }, [workspaceReady, notifyError, t]);
-
-  const handleQuickCommand = useCallback(() => {
-    setIsQuickCommandOpen(true);
-  }, []);
-
-  const handleOpenCommandHistory = useCallback(() => {
-    if (!activeSession || activeSession.sessionType !== 'ssh') {
-      notifyWarning(t('commandHistory.title'), t('commandHistory.connectFirst'));
-      return;
-    }
-    setIsCommandHistoryOpen(true);
-  }, [activeSession, notifyWarning, t]);
-
-  const handleUseHistoryCommand = useCallback((command: string) => {
-    if (!activeSessionId || activeSession?.sessionType !== 'ssh') return;
-    terminalRefs.current.get(activeSessionId)?.sendCommand(command);
-  }, [activeSession?.sessionType, activeSessionId]);
-
   const handleOpenSnippets = useCallback(() => {
     setIsSnippetManagerOpen(true);
   }, []);
@@ -850,14 +798,14 @@ function App() {
     }
 
     if (!isSftpOpen) {
-      setIsAgentActivityOpen(false);
+      setIsHistoryOpen(false);
       setIsWorkspaceChangesOpen(false);
     }
     sftpPanelRef.current?.toggle();
   }, [activeSession, isSftpOpen, notifyWarning]);
 
-  const handleOpenAgentActivity = useCallback(() => {
-    setIsAgentActivityOpen((current) => {
+  const handleOpenHistory = useCallback(() => {
+    setIsHistoryOpen((current) => {
       const next = !current;
       if (next && isSftpOpen) {
         sftpPanelRef.current?.toggle();
@@ -878,7 +826,7 @@ function App() {
     setIsWorkspaceChangesOpen((current) => {
       const next = !current;
       if (next) {
-        setIsAgentActivityOpen(false);
+        setIsHistoryOpen(false);
         if (isSftpOpen) sftpPanelRef.current?.toggle();
       }
       return next;
@@ -904,14 +852,15 @@ function App() {
     const session = sessions.find((s) => s.id === sessionId);
     setSessionToClose(null);
 
-    const success = session?.sessionType === 'local'
-      ? await killLocalShellSession(sessionId)
-      : await killSession(sessionId);
-
-    if (!success) {
-      removeSession(sessionId);
+    // The store removes the tab on success (and when the backend reports the
+    // session already gone); on other failures the tab stays so the sync poll
+    // can reconcile instead of the tab being resurrected after force-removal.
+    if (session?.sessionType === 'local') {
+      await killLocalShellSession(sessionId);
+    } else {
+      await killSession(sessionId);
     }
-  }, [sessionToClose, sessions, killSession, killLocalShellSession, removeSession]);
+  }, [sessionToClose, sessions, killSession, killLocalShellSession]);
 
   const handleCancelCloseSession = useCallback(() => {
     setSessionToClose(null);
@@ -946,7 +895,6 @@ function App() {
         activeSessionName={activeSession?.serverName}
         activeSessionType={activeSession?.sessionType}
         activeSessionState={activeSession?.state}
-        activeSessionPurpose={activeSession?.purpose}
       />
       <div
         className="app-shell absolute inset-x-0 bottom-0 top-9 z-10 flex flex-col bg-tokyo-bg"
@@ -997,152 +945,29 @@ function App() {
               onReconnectSession={handleReconnectSession}
               onOpenSessionInWindow={handleOpenSessionInWindow}
               onPaneDropTab={handlePaneDropTab}
-              onSaveLayout={() => { void handleSaveLayout(); }}
               rightActions={(
-                runtimeCapabilities.isMobile || isCompactWorkspace ? (
-                  <MobileWorkspaceActions
-                    isSftpOpen={isSftpOpen}
-                    sftpDisabled={!activeSession}
-                    labels={{
-                      sftp: t('sidebar.sftp'),
-                      more: t('common.more'),
-                    }}
-                    menuItems={[
-                      {
-                        id: 'quick-command',
-                        label: t('sidebar.quickCmd'),
-                        icon: <Zap className="h-4 w-4" />,
-                        onSelect: handleQuickCommand,
-                      },
-                      {
-                        id: 'command-history',
-                        label: t('sidebar.history'),
-                        icon: <History className="h-4 w-4" />,
-                        disabled: !activeSession || activeSession.sessionType !== 'ssh',
-                        pressed: isCommandHistoryOpen,
-                        onSelect: handleOpenCommandHistory,
-                      },
-                      {
-                        id: 'snippets',
-                        label: t('sidebar.snippets'),
-                        icon: <TerminalIcon className="h-4 w-4" />,
-                        onSelect: handleOpenSnippets,
-                      },
-                      ...(runtimeCapabilities.localShell ? [{
-                        id: 'coding-agent',
-                        label: t('codingAgent.start'),
-                        icon: <Code2 className="h-4 w-4" />,
-                        onSelect: handleOpenCodingAgent,
-                      }] : []),
-                      {
-                        id: 'workspace-changes',
-                        label: t('workspaceChanges.title'),
-                        icon: <FileDiff className="h-4 w-4" />,
-                        disabled: activeSession?.purpose !== 'coding_agent' || !activeSession.cwd,
-                        pressed: isWorkspaceChangesOpen,
-                        onSelect: handleOpenWorkspaceChanges,
-                      },
-                      ...(runtimeCapabilities.agentGateway ? [{
-                        id: 'agent-activity',
-                        label: t('agentActivity.title'),
-                        icon: <Bot className="h-4 w-4" />,
-                        pressed: isAgentActivityOpen,
-                        onSelect: handleOpenAgentActivity,
-                      }] : []),
-                      {
-                        id: 'plugin-workspace',
-                        label: t('plugins.workspace'),
-                        icon: <Blocks className="h-4 w-4" />,
-                        disabled: !activeSession,
-                        pressed: isPluginDockOpen,
-                        onSelect: () => setIsPluginDockOpen((open) => !open),
-                      },
-                      {
-                        id: 'plugin-marketplace',
-                        label: t('plugins.marketplace'),
-                        icon: <Store className="h-4 w-4" />,
-                        onSelect: goToPlugins,
-                      },
-                      {
-                        id: 'settings',
-                        label: t('sidebar.settings'),
-                        icon: <SettingsIcon className="h-4 w-4" />,
-                        onSelect: goToSettings,
-                      },
-                    ]}
-                    onToggleSftp={handleOpenSftp}
-                  />
-                ) : (
                   <div className="flex flex-shrink-0 items-center gap-0.5 border-l border-tokyo-bg-hl pl-1.5">
-                  {/* High-frequency session actions stay as direct buttons */}
-                  <button className="icon-button tooltip-button" data-tooltip={`${t('sidebar.quickCmd')} (Ctrl+K)`} onClick={handleQuickCommand} aria-label={t('sidebar.quickCmd')}>
-                    <Zap className="h-4 w-4" />
-                  </button>
                   <button
-                    className={cn('icon-button tooltip-button', isCommandHistoryOpen && 'is-active')}
+                    className={cn('icon-button tooltip-button', (runtimeCapabilities.isMobile || isCompactWorkspace) && 'h-11 w-11', isHistoryOpen && 'is-active')}
                     data-tooltip={t('sidebar.history')}
-                    onClick={handleOpenCommandHistory}
-                    disabled={!activeSession || activeSession.sessionType !== 'ssh'}
-                    aria-pressed={isCommandHistoryOpen}
+                    onClick={handleOpenHistory}
+                    aria-pressed={isHistoryOpen}
                     aria-label={t('sidebar.history')}
                   >
                     <History className="h-4 w-4" />
                   </button>
-                  <button
-                    className={cn('icon-button tooltip-button', isSftpOpen && 'is-active')}
-                    data-tooltip={t('sidebar.sftp')}
-                    onClick={handleOpenSftp}
-                    disabled={!activeSession}
-                    aria-pressed={isSftpOpen}
-                    aria-label={t('sidebar.sftp')}
-                  >
-                    <FolderOpen className="h-4 w-4" />
-                  </button>
-                  {runtimeCapabilities.localShell && (
-                    <>
-                      <button
-                        className="icon-button tooltip-button"
-                        data-tooltip={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitHorizontal')}
-                        onClick={() => { void handleSplitPane('row'); }}
-                        disabled={isCreatingTerminalPane}
-                        aria-label={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitHorizontal')}
-                      >
-                        {isCreatingTerminalPane
-                          ? <Loader2 className="h-4 w-4 animate-spin" />
-                          : <Columns2 className="h-4 w-4" />}
-                      </button>
-                      <button
-                        className="icon-button tooltip-button"
-                        data-tooltip={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitVertical')}
-                        onClick={() => { void handleSplitPane('column'); }}
-                        disabled={isCreatingTerminalPane}
-                        aria-label={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitVertical')}
-                      >
-                        {isCreatingTerminalPane
-                          ? <Loader2 className="h-4 w-4 animate-spin" />
-                          : <Rows2 className="h-4 w-4" />}
-                      </button>
-                    </>
-                  )}
-                  {activeSession && (
-                    <button
-                      className="icon-button tooltip-button"
-                      data-tooltip={t('session.openInWindow')}
-                      aria-label={t('session.openInWindow')}
-                      onClick={() => handleOpenSessionInWindow(activeSession)}
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                    </button>
-                  )}
-                  <PluginTabLauncher
-                    sessionType={activeSession ? activeSession.sessionType : null}
-                    onOpenPluginTab={handleOpenPluginTab}
-                  />
-                  {/* Lower-frequency actions collapse into an overflow menu */}
                   <WorkspaceToolbar
                     label={t('common.more')}
-                    anyPressed={isWorkspaceChangesOpen || isAgentActivityOpen || isPluginDockOpen}
+                    anyPressed={isWorkspaceChangesOpen || isPluginDockOpen}
                     items={[
+                      { id: 'sftp', label: t('sidebar.sftp'), icon: <FolderOpen className="h-4 w-4" />, disabled: !activeSession, pressed: isSftpOpen, onSelect: handleOpenSftp },
+                      ...(runtimeCapabilities.localShell ? [
+                        { id: 'split-horizontal', label: t('session.splitHorizontal'), icon: <Columns2 className="h-4 w-4" />, disabled: isCreatingTerminalPane, onSelect: () => { void handleSplitPane('row'); } },
+                        { id: 'split-vertical', label: t('session.splitVertical'), icon: <Rows2 className="h-4 w-4" />, disabled: isCreatingTerminalPane, onSelect: () => { void handleSplitPane('column'); } },
+                      ] : []),
+                      ...(activeSession ? plugins.filter((p) => isPluginCompatible(p, activeSession.sessionType)).map((p) => ({
+                        id: `plugin-${p.manifest.id}`, label: localizedPluginName(t, p), icon: <Blocks className="h-4 w-4" />, onSelect: () => handleOpenPluginTab(p.manifest.id),
+                      })) : []),
                       ...(runtimeCapabilities.backgroundTunnels ? [{
                         id: 'tunnels',
                         label: t('sidebar.tunnels'),
@@ -1156,20 +981,6 @@ function App() {
                         onSelect: handleOpenSnippets,
                       },
                       {
-                        id: 'command-history',
-                        label: t('sidebar.history'),
-                        icon: <History className="h-4 w-4" />,
-                        disabled: !activeSession || activeSession.sessionType !== 'ssh',
-                        pressed: isCommandHistoryOpen,
-                        onSelect: handleOpenCommandHistory,
-                      },
-                      ...(runtimeCapabilities.localShell ? [{
-                        id: 'coding-agent',
-                        label: t('codingAgent.start'),
-                        icon: <Code2 className="h-4 w-4" />,
-                        onSelect: handleOpenCodingAgent,
-                      }] : []),
-                      {
                         id: 'workspace-changes',
                         label: t('workspaceChanges.title'),
                         icon: <FileDiff className="h-4 w-4" />,
@@ -1177,13 +988,6 @@ function App() {
                         pressed: isWorkspaceChangesOpen,
                         onSelect: handleOpenWorkspaceChanges,
                       },
-                      ...(runtimeCapabilities.agentGateway ? [{
-                        id: 'agent-activity',
-                        label: t('agentActivity.title'),
-                        icon: <Bot className="h-4 w-4" />,
-                        pressed: isAgentActivityOpen,
-                        onSelect: handleOpenAgentActivity,
-                      }] : []),
                       {
                         id: 'plugin-workspace',
                         label: t('plugins.workspace'),
@@ -1213,7 +1017,6 @@ function App() {
                     ]}
                   />
                   </div>
-                )
               )}
             />
 
@@ -1401,13 +1204,12 @@ function App() {
                 sessionName={activeSession?.purpose === 'coding_agent' ? activeSession.serverName : undefined}
                 onClose={() => setIsWorkspaceChangesOpen(false)}
               />
-              {runtimeCapabilities.agentGateway && (
                 <AgentActivityPanel
-                  open={isAgentActivityOpen}
-                  onClose={() => setIsAgentActivityOpen(false)}
+                  open={isHistoryOpen}
+                  onClose={() => setIsHistoryOpen(false)}
                   onSessionsChanged={handleGatewaySessionsChanged}
+                  onSelectSession={handleConnected}
                 />
-              )}
             </div>
           </main>
         </div>
@@ -1439,22 +1241,8 @@ function App() {
         onConnected={handleConnected}
       />
 
-      <QuickCommandDialog
-        isOpen={isQuickCommandOpen}
-        onClose={() => setIsQuickCommandOpen(false)}
-      />
-
-      <CommandHistoryDialog
-        isOpen={isCommandHistoryOpen}
-        serverId={activeSession?.sessionType === 'ssh' ? activeSession.serverId : undefined}
-        serverName={activeSession?.sessionType === 'ssh' ? activeSession.serverName : undefined}
-        onClose={() => setIsCommandHistoryOpen(false)}
-        onUseCommand={handleUseHistoryCommand}
-      />
-
       <SelectServerDialog
         isOpen={isSelectServerOpen}
-        initialTab={sessionLauncherTab}
         initialWorkspace={activeSession?.cwd}
         onClose={() => setIsSelectServerOpen(false)}
         onSelectServer={handleConnect}

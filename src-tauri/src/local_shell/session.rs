@@ -425,11 +425,18 @@ impl LocalShellSession {
 
     /// Detach a client
     pub fn detach(&self) {
-        let _ = self
-            .client_count
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_sub(1)
-            });
+        let mut current = self.client_count.load(Ordering::Relaxed);
+        while current > 0 {
+            match self.client_count.compare_exchange_weak(
+                current,
+                current - 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     /// Get client count

@@ -39,6 +39,20 @@ export interface VerifyFingerprintResponse {
 }
 
 /**
+ * Result of a handshake-only host-key probe (`probe_host_key`).
+ * The probe performs key exchange + host-key check only — no authentication,
+ * so no credentials ever reach the wire.
+ */
+export interface ProbeHostKeyResponse {
+  status: 'known' | 'unknown' | 'changed';
+  fingerprint: string | null;
+  keyType: string | null;
+  storedFingerprint: string | null;
+  storedKeyType: string | null;
+  storedAt: number | null;
+}
+
+/**
  * Pending verification request
  */
 export interface PendingVerification {
@@ -53,6 +67,44 @@ export interface PendingVerification {
   storedAt?: number;
   onAccept: () => void;
   onReject: () => void;
+}
+
+/**
+ * Details parsed from a backend HOST_KEY_UNKNOWN / HOST_KEY_CHANGED error.
+ * The structured error is emitted by the backend connect wrapper when the
+ * handshake is refused by the host-key policy (e.g. a key that changed after
+ * the probe, or an untrusted jump host).
+ */
+export interface HostKeyErrorInfo {
+  kind: 'unknown' | 'changed';
+  host?: string;
+  port?: number;
+  fingerprint?: string;
+  keyType?: string;
+  storedFingerprint?: string;
+  storedKeyType?: string;
+}
+
+/**
+ * Parse the machine-readable host-key rejection emitted by the backend.
+ * Format: first line carries the HOST_KEY_* marker, following `key: value`
+ * lines carry host/port/fingerprints (see HostKeyRejection::error_message).
+ */
+export function parseHostKeyError(message: string): HostKeyErrorInfo | null {
+  const kind = message.match(/HOST_KEY_(UNKNOWN|CHANGED)/)?.[1];
+  if (!kind) return null;
+  const line = (name: string): string | undefined =>
+    message.match(new RegExp(`^${name}: (.*)$`, 'm'))?.[1]?.trim();
+  const port = line('port');
+  return {
+    kind: kind.toLowerCase() as 'unknown' | 'changed',
+    host: line('host'),
+    port: port ? Number(port) : undefined,
+    fingerprint: line('presented-fingerprint'),
+    keyType: line('presented-key-type'),
+    storedFingerprint: line('stored-fingerprint'),
+    storedKeyType: line('stored-key-type'),
+  };
 }
 
 /**
@@ -81,6 +133,20 @@ interface FingerprintStore {
     fingerprint: string,
     algorithm: string
   ) => Promise<VerifyFingerprintResponse>;
+  /**
+   * Probe a server's host key (handshake only, no credentials sent).
+   * Returns null when the probe could not run (e.g. host unreachable);
+   * the backend still enforces TOFU fail-closed on the real connect.
+   */
+  probeHostKey: (host: string, port: number) => Promise<ProbeHostKeyResponse | null>;
+  /**
+   * Open the host-key verification dialog and resolve once the user decides.
+   * Resolves true when approved (the fingerprint is persisted by then via
+   * acceptPendingVerification) and false when rejected.
+   */
+  requestHostKeyApproval: (
+    verification: Omit<PendingVerification, 'onAccept' | 'onReject'>
+  ) => Promise<boolean>;
   /** Save a fingerprint (trust it) */
   saveFingerprint: (
     host: string,
@@ -150,6 +216,31 @@ export const useFingerprintStore = create<FingerprintStore>((set, get) => ({
       return result.data;
     }
     return null;
+  },
+
+  probeHostKey: async (host: string, port: number) => {
+    const result = await safeInvoke<ProbeHostKeyResponse>('probe_host_key', {
+      request: { host, port },
+    });
+
+    if (result.success) {
+      return result.data;
+    }
+
+    console.warn('[fingerprintStore] probe_host_key failed:', result.error.message);
+    return null;
+  },
+
+  requestHostKeyApproval: (
+    verification: Omit<PendingVerification, 'onAccept' | 'onReject'>
+  ) => {
+    return new Promise<boolean>((resolve) => {
+      get().setPendingVerification({
+        ...verification,
+        onAccept: () => resolve(true),
+        onReject: () => resolve(false),
+      });
+    });
   },
 
   verifyFingerprint: async (

@@ -14,7 +14,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { safeInvoke } from '../../lib/tauri';
-import { cn } from '../../lib/utils';
+import { cn, formatFileSize } from '../../lib/utils';
 import {
   ARCHIVE_PREVIEW_LIMIT_BYTES,
   BINARY_PREVIEW_LIMIT_BYTES,
@@ -44,13 +44,6 @@ interface SftpFileContent {
 interface FileWorkspaceProps {
   tab: FileWorkspaceTab;
   isActive: boolean;
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  return `${(bytes / (1024 ** unitIndex)).toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function localDownloadPath(directory: string, name: string): string {

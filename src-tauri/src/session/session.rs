@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -44,6 +44,8 @@ pub struct Session {
     // Broadcast channel for output to all clients
     output_tx: broadcast::Sender<Vec<u8>>,
 
+    cli_typing: broadcast::Sender<String>,
+
     // Buffered output replay so late listeners still receive the initial shell prompt.
     output_replay: Arc<Mutex<OutputReplayBuffer>>,
 
@@ -73,11 +75,36 @@ impl Session {
             ssh_client: Arc::new(Mutex::new(None)),
             input_tx,
             output_tx,
+            cli_typing: broadcast::channel(128).0,
             output_replay: Arc::new(Mutex::new(OutputReplayBuffer::default())),
             output_forwarder_started: Arc::new(Mutex::new(false)),
             client_count: Arc::new(RwLock::new(0)),
             last_activity: Arc::new(RwLock::new(Instant::now())),
         }
+    }
+
+    pub fn subscribe_cli_typing(&self) -> broadcast::Receiver<String> {
+        self.cli_typing.subscribe()
+    }
+
+    /// Decoration only: transmit line shape, never input contents/escape codes.
+    pub fn mark_cli_typing(&self, data: &[u8]) {
+        let Ok(text) = std::str::from_utf8(data) else {
+            return;
+        };
+        let text = text.trim_end_matches(['\r', '\n']);
+        if text.is_empty()
+            || text
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\r')
+        {
+            return;
+        }
+        let shape = text
+            .chars()
+            .map(|c| if c == '\r' || c == '\n' { c } else { ' ' })
+            .collect();
+        let _ = self.cli_typing.send(shape);
     }
 
     pub async fn mark_activity(&self) {
@@ -111,7 +138,16 @@ impl Session {
     }
 
     pub async fn get_state(&self) -> SessionState {
-        self.state.read().await.clone()
+        let state = self.state.read().await.clone();
+        if state == SessionState::Connected {
+            let client = self.get_ssh_client().await;
+            if let Some(client) = client {
+                if !client.is_shell_open().await {
+                    return SessionState::Disconnected;
+                }
+            }
+        }
+        state
     }
 
     pub async fn get_info(&self) -> SessionInfo {
@@ -138,14 +174,21 @@ impl Session {
         replay.snapshot()
     }
 
+    /// Snapshot and subscribe under the publishing lock: no gap or duplicate
+    /// between buffered and live bytes when a second client attaches.
+    pub async fn subscribe_with_replay(&self) -> (Vec<Vec<u8>>, broadcast::Receiver<Vec<u8>>) {
+        let replay = self.output_replay.lock().await;
+        (replay.snapshot(), self.subscribe())
+    }
+
     pub async fn publish_output(&self, data: Vec<u8>) {
         {
             let mut replay = self.output_replay.lock().await;
             replay.push(&data);
+            let _ = self.output_tx.send(data);
         }
 
         self.mark_activity().await;
-        let _ = self.output_tx.send(data);
     }
 
     pub async fn try_start_output_forwarder(&self) -> bool {
@@ -212,13 +255,18 @@ impl Session {
 
     /// Disconnect the SSH session
     pub async fn disconnect(&self) -> Result<()> {
-        let mut ssh_guard = self.ssh_client.lock().await;
-        if let Some(ref mut client) = *ssh_guard {
-            client.disconnect().await?;
-        }
-        *ssh_guard = None;
+        // Always retire the client, including when the transport has already
+        // failed. Do not hold the session lock during network teardown.
+        let client = self.ssh_client.lock().await.take();
         self.set_state(SessionState::Disconnected).await;
-        Ok(())
+        match client {
+            Some(mut client) => client.disconnect().await,
+            None => Ok(()),
+        }
+    }
+
+    pub async fn get_ssh_client(&self) -> Option<SshClient> {
+        self.ssh_client.lock().await.clone()
     }
 
     /// Get the SSH session handle Arc for tunnel/forwarding operations
@@ -256,12 +304,31 @@ impl Session {
                 Ok(output)
             }
             Err(error) => {
-                if is_ssh_channel_or_transport_error(&error) {
+                if !client.is_connected().await {
                     self.set_state(SessionState::Error).await;
                 }
                 Err(error)
             }
         }
+    }
+
+    /// Both local GUI and daemon-backed GUI use the same quick-command limits.
+    pub async fn exec_quick_command(
+        &self,
+        command: &str,
+    ) -> Result<crate::ssh::client::CommandResult> {
+        let client = self
+            .get_ssh_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("SSH client not connected"))?;
+        let result = client
+            .exec_command_result_with_limits(command, None, Duration::from_secs(10), 1024 * 1024)
+            .await;
+        self.mark_activity().await;
+        if result.is_err() && !client.is_connected().await {
+            self.set_state(SessionState::Error).await;
+        }
+        result
     }
 
     /// Open an SFTP subsystem session on a new SSH channel.
@@ -278,25 +345,13 @@ impl Session {
         match client.open_sftp_session().await {
             Ok(sftp) => Ok(sftp),
             Err(error) => {
-                if is_ssh_channel_or_transport_error(&error) {
+                if !client.is_connected().await {
                     self.set_state(SessionState::Error).await;
                 }
                 Err(error)
             }
         }
     }
-}
-
-fn is_ssh_channel_or_transport_error(error: &Error) -> bool {
-    error.chain().any(|cause| {
-        let message = cause.to_string().to_ascii_lowercase();
-        message.contains("failed to open exec channel")
-            || message.contains("failed to open sftp channel")
-            || message.contains("connection closed")
-            || message.contains("connection reset")
-            || message.contains("broken pipe")
-            || message.contains("senderror")
-    })
 }
 
 #[cfg(test)]

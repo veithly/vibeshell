@@ -11,7 +11,7 @@
 //! common destructive shell idioms; user-supplied `custom_patterns` and
 //! `allow_patterns` are treated as case-insensitive keyword substrings.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use serde::{Deserialize, Serialize};
@@ -106,11 +106,13 @@ impl Default for TrackedInput {
 #[derive(Debug, Clone, Default)]
 pub struct AgentInputTracker {
     buffers: HashMap<String, TrackedInput>,
+    sensitive_sessions: HashSet<String>,
 }
 
 pub struct AgentInputCheckpoint {
     session_id: String,
     input: Option<TrackedInput>,
+    sensitive: bool,
 }
 
 /// Coordinates mixed human/AI input without letting approval in one session
@@ -140,10 +142,31 @@ impl SharedAgentInputTracker {
         keys: &[String],
         append_enter: bool,
     ) -> (AgentInputCheckpoint, Vec<TrackedAgentCommand>) {
+        let (checkpoint, commands, _) = self
+            .checkpoint_and_observe_sensitive(session_id, data, keys, append_enter, false)
+            .await;
+        (checkpoint, commands)
+    }
+
+    pub async fn checkpoint_and_observe_sensitive(
+        &self,
+        session_id: &str,
+        data: &str,
+        keys: &[String],
+        append_enter: bool,
+        sensitive: bool,
+    ) -> (AgentInputCheckpoint, Vec<TrackedAgentCommand>, bool) {
         let mut tracker = self.tracker.lock().await;
         let checkpoint = tracker.checkpoint(session_id);
+        if sensitive {
+            tracker.sensitive_sessions.insert(session_id.to_string());
+        }
+        let redact = tracker.sensitive_sessions.contains(session_id);
         let commands = tracker.observe(session_id, data, keys, append_enter);
-        (checkpoint, commands)
+        if !tracker.buffers.contains_key(session_id) {
+            tracker.sensitive_sessions.remove(session_id);
+        }
+        (checkpoint, commands, redact)
     }
 
     pub async fn restore(&self, checkpoint: AgentInputCheckpoint) {
@@ -156,10 +179,17 @@ impl AgentInputTracker {
         AgentInputCheckpoint {
             session_id: session_id.to_string(),
             input: self.buffers.get(session_id).cloned(),
+            sensitive: self.sensitive_sessions.contains(session_id),
         }
     }
 
     fn restore(&mut self, checkpoint: AgentInputCheckpoint) {
+        if checkpoint.sensitive {
+            self.sensitive_sessions
+                .insert(checkpoint.session_id.clone());
+        } else {
+            self.sensitive_sessions.remove(&checkpoint.session_id);
+        }
         if let Some(input) = checkpoint.input {
             self.buffers.insert(checkpoint.session_id, input);
         } else {
@@ -192,6 +222,7 @@ impl AgentInputTracker {
                 ch if !ch.is_control() => input.buffer.push(ch),
                 _ => input.is_verifiable = false,
             }
+            input.is_verifiable &= input.buffer.len() <= MAX_TRACKED_COMMAND_BYTES;
             trim_tracked_buffer(&mut input.buffer);
         }
 
@@ -210,6 +241,7 @@ impl AgentInputTracker {
                 "ctrl-d" | "ctrl-z" => {}
                 _ => input.is_verifiable = false,
             }
+            input.is_verifiable &= input.buffer.len() <= MAX_TRACKED_COMMAND_BYTES;
             trim_tracked_buffer(&mut input.buffer);
         }
 
@@ -703,6 +735,44 @@ mod tests {
             assert_eq!(s1[0].command, "rm -rf /tmp/a");
             assert!(s2.is_empty());
         });
+    }
+
+    #[tokio::test]
+    async fn secret_redaction_survives_split_enter_and_failed_input_rollback() {
+        let tracker = SharedAgentInputTracker::default();
+        let (_, commands, redact) = tracker
+            .checkpoint_and_observe_sensitive("secret", "temporary-secret", &[], false, true)
+            .await;
+        assert!(commands.is_empty() && redact);
+        let (checkpoint, commands, redact) = tracker
+            .checkpoint_and_observe_sensitive("secret", "\r", &[], false, false)
+            .await;
+        assert!(redact);
+        assert_eq!(commands.len(), 1);
+        tracker.restore(checkpoint).await;
+        let (_, commands, redact) = tracker
+            .checkpoint_and_observe_sensitive("secret", "", &["enter".into()], false, false)
+            .await;
+        assert!(redact && commands.len() == 1);
+        let (_, commands, redact) = tracker
+            .checkpoint_and_observe_sensitive("secret", "printf next\r", &[], false, false)
+            .await;
+        assert!(!redact);
+        assert_eq!(commands[0].command, "printf next");
+    }
+
+    #[test]
+    fn oversized_input_is_never_misrepresented_as_fully_verified() {
+        let mut tracker = AgentInputTracker::default();
+        let commands = tracker.observe(
+            "oversize",
+            &("界".repeat(MAX_TRACKED_COMMAND_BYTES) + "\n"),
+            &[],
+            false,
+        );
+        assert_eq!(commands.len(), 1);
+        assert!(!commands[0].is_verifiable);
+        assert!(commands[0].command.len() <= MAX_TRACKED_COMMAND_BYTES);
     }
 
     #[test]

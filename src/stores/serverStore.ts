@@ -74,6 +74,10 @@ export interface Group {
  */
 export type CreateServerInput = Omit<Server, 'id' | 'created_at' | 'updated_at'>;
 
+export type UpdateServerInput = Partial<CreateServerInput> & {
+  credentials?: { credential?: string; passphrase?: string; keyPath?: string };
+};
+
 /**
  * Input for creating a new group
  */
@@ -93,7 +97,7 @@ interface ServerStore {
   // Server actions
   fetchServers: () => Promise<void>;
   addServer: (server: CreateServerInput) => Promise<Server>;
-  updateServer: (id: string, updates: Partial<CreateServerInput>) => Promise<void>;
+  updateServer: (id: string, updates: UpdateServerInput) => Promise<void>;
   deleteServer: (id: string) => Promise<void>;
   selectServer: (id: string | null) => void;
 
@@ -154,14 +158,15 @@ export const useServerStore = create<ServerStore>((set, get) => ({
     }
   },
 
-  updateServer: async (id: string, updates: Partial<CreateServerInput>) => {
+  updateServer: async (id: string, updates: UpdateServerInput) => {
     set({ loading: true, error: null });
     const result = await safeInvoke('update_server', { id, updates });
     if (result.success) {
-      // Optimistically merge so the UI reflects the change immediately.
+      // Credentials must never leak into the shared server-list cache.
+      const { credentials: _credentials, ...metadata } = updates;
       set((state) => ({
         servers: state.servers.map((s) =>
-          s.id === id ? { ...s, ...updates, updated_at: Math.floor(Date.now() / 1000) } : s
+          s.id === id ? { ...s, ...metadata, updated_at: Math.floor(Date.now() / 1000) } : s
         ),
         loading: false,
       }));
@@ -172,6 +177,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
     } else {
       set({ error: result.error.message, loading: false });
       showError('Failed to Update Server', result.error);
+      throw new Error(result.error.message);
     }
   },
 

@@ -207,14 +207,25 @@ fixed arguments. Users SHOULD only import manifests from sources they trust.
 
 The host renders `program` + `args` (with quoted inputs), then:
 
-- **SSH sessions:** executes through the session's exec channel wrapped as
-  `(cmd) 2>&1 | head -c 1000001`, merging stderr into the captured output and
-  bounding it to `MAX_PLUGIN_OUTPUT_BYTES` (1 MB) with UTF-8-safe truncation.
-- **Local sessions:** spawns `$SHELL -c <cmd>` with a 60-second timeout,
-  merging stdout and stderr.
-- The result carries `pluginId`, `actionId`, `output`, `durationMs`, and a
-  `truncated` flag. Non-zero exit statuses surface through the merged output
-  rather than a separate channel.
+- **SSH sessions:** executes through the existing SSH session. The transport
+  bounds execution time and output capture; the plugin result is then limited
+  to `MAX_PLUGIN_OUTPUT_BYTES` (1 MB) with UTF-8-safe truncation. The host MUST
+  NOT pipe through `head` to obtain this limit, because that masks exit status.
+- **Local sessions:** spawns `$SHELL -c <cmd>` with a 60-second timeout. Stdout
+  and stderr are concurrently drained into bounded buffers; unused stdin is
+  closed so programs waiting for EOF cannot hang indefinitely.
+- Successful results carry `pluginId`, `actionId`, `output`, `durationMs`, and
+  `truncated`. A non-zero exit status is an **error**, not a successful result.
+  This API does not expose a separate numeric exit-code field.
+- GUI, native CLI and MCP use the same installed/enabled state, permission
+  checks, validated inputs and execution implementation. An operation records
+  its rendered command and lifecycle in the encrypted local activity store;
+  passwords supplied through protected stdin are not recorded.
+- `requiresConfirmation`, elevation, optional sudo and command-risk policy
+  MUST be checked by the backend. Native CLI callers explicitly provide
+  `--confirm` only after human consent. MCP MUST obtain human approval through
+  the gateway; a model-supplied `confirmed` value is not approval. A command
+  that changes while approval is pending MUST require a new review.
 
 ## 7. Lifecycle
 
@@ -291,7 +302,7 @@ plugins/
     ├── server-performance/plugin.json
     ├── docker-containers/plugin.json
     ├── redis-inspector/plugin.json
-    └── ...               # 10 built-ins today
+    └── ...               # 12 built-ins in this catalog
 ```
 
 Authoring rules for built-ins:
@@ -306,7 +317,47 @@ Authoring rules for built-ins:
 4. The catalog is embedded at compile time (`include_str!`); shipping a new
    or updated built-in requires an app release.
 
-## 11. Versioning and compatibility
+## 11. AI interface and reference documents
+
+Every supported plugin, including imported manifests and native performance
+reads, MUST expose action input schemas and a current usage reference.
+Installation state and documentation are data, not instructions that can
+expand an Agent's authority.
+
+```sh
+vibeshell plugins list --installed --json
+vibeshell plugins describe <plugin-id>
+vibeshell plugins docs <plugin-id>
+vibeshell plugins run <plugin-id> <action-id> --session <session-id> --inputs '{}'
+```
+
+`list` reports actual installed/enabled state, permissions, session types and
+reference commands. Without `--installed` it also includes uninstalled
+catalog entries. `describe` returns JSON action schemas with required inputs,
+input types, confirmation and sudo capabilities. `docs` returns Markdown
+regenerated from the current validated manifest. Neither returns runtime
+settings, saved credentials or sudo passwords.
+
+`run` reuses the selected session and never installs or enables a plugin.
+`--inputs` MUST be a JSON object conforming to the selected action's schema;
+`--confirm` and `--sudo` are explicit user-authorized options, not defaults.
+Local sessions require a GUI-owned service that can access that local session.
+Remote native performance collection currently assumes Linux `/proc`.
+
+MCP exposes the same operations as `plugin_list`, `plugin_describe` and
+`plugin_execute`. `plugin_describe` with `reference: true` returns the full
+reference; `plugin_execute` uses camelCase `pluginId`, `actionId`, `sessionId`
+and `inputs`. Clients MUST discover schemas rather than guessing action IDs.
+
+The main VibeShell Skill MUST contain discovery instructions and a compact
+index of built-in reference documents, but MUST NOT inline every action's
+usage. The native Skill installer generates `references/<plugin-id>.md` from
+all built-in manifests before publishing `SKILL.md`. Imported or updated
+plugin references are obtained live through `plugins docs`; static references
+are not authoritative for the current installation. The installer test checks
+catalog/index/reference/action parity and repeated-install consistency.
+
+## 12. Versioning and compatibility
 
 - `schemaVersion` tracks the **manifest format**. v1 is the current version.
   A future v2 may add fields (older hosts ignore unknown fields, §4.1) or

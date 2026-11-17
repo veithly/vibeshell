@@ -25,6 +25,7 @@ use crate::sftp::helpers::{
     resolve_remote_path, resolve_remote_upload_path, sftp_delete_path, sftp_mkdir_recursive,
     write_remote_file,
 };
+use crate::sftp::sync::{download_remote_file_streaming, upload_local_file_streaming};
 use crate::sftp::{
     default_upload_ignore_config, effective_directory_transfer_options, load_upload_ignore_config,
     save_upload_ignore_config, transfer_directory_to_local, transfer_directory_to_sftp,
@@ -107,13 +108,6 @@ pub struct SftpPwdRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SftpStatRequest {
-    pub session_id: String,
-    pub path: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct SftpReadFileRequest {
     pub session_id: String,
     pub path: String,
@@ -172,8 +166,15 @@ pub struct SftpExtractRequest {
 
 /// Data for an active SFTP session
 pub struct SftpSessionData {
-    /// The real SFTP session (only for SSH sessions, None for local)
-    pub sftp: Option<SftpSession>,
+    /// The real SFTP session (only for SSH sessions, None for local).
+    ///
+    /// Wrapped in an `Arc` so commands can clone the handle out of the session
+    /// mutex, release the lock, and then run long transfers. Concurrent
+    /// requests on one `SftpSession` are safe: russh-sftp allocates request
+    /// IDs atomically and routes responses per request, and per-command
+    /// operations (list, rename, transfer, ...) each open their own remote
+    /// file handles.
+    pub sftp: Option<Arc<SftpSession>>,
     /// The user's home directory on the remote server (resolved on init)
     pub home_dir: String,
     /// Current working directory on the remote server
@@ -254,6 +255,24 @@ async fn get_sftp_data(
             session_id
         )
     })
+}
+
+/// Narrow-scope preparation for a remote file operation.
+///
+/// Pure function over the session data so callers can hold the session mutex
+/// only for the duration of this call (clone the `Arc<SftpSession>` handle and
+/// resolve the effective remote path) and then run arbitrarily long transfers
+/// without blocking other SFTP commands on the same session.
+pub(crate) fn prepare_remote_file_access(
+    data: &SftpSessionData,
+    requested_path: &str,
+) -> Result<(Arc<SftpSession>, String), String> {
+    let sftp = data
+        .sftp
+        .clone()
+        .ok_or("SFTP not initialized for this SSH session")?;
+    let path = resolve_remote_path(requested_path, &data.home_dir, &data.current_path);
+    Ok((sftp, path))
 }
 
 // ==================== Local filesystem helpers ====================
@@ -470,48 +489,47 @@ async fn execute_ssh_command(
         .map_err(|e| format!("Failed to execute command: {}", e))
 }
 
+/// Quoting prevents shell injection; a ./ prefix separately prevents utility
+/// option injection (including tar checkpoint options and a lone '-' stream).
+fn archive_operand(path: &str) -> Result<String, String> {
+    if path.is_empty() || path.contains('\0') {
+        return Err("Archive paths must not be empty or contain NUL".into());
+    }
+    Ok(if path.starts_with('-') {
+        format!("./{path}")
+    } else {
+        path.to_string()
+    })
+}
+
 fn build_compress_command(request: &SftpCompressRequest) -> Result<String, String> {
     if request.paths.is_empty() {
-        return Err("No files to compress".to_string());
+        return Err("No files to compress".into());
     }
-
+    let mut parent: Option<&str> = None;
+    let mut names = Vec::new();
+    for source in &request.paths {
+        let source = source.trim_end_matches('/');
+        let (directory, name) = source
+            .rsplit_once('/')
+            .map(|(dir, name)| (if dir.is_empty() { "/" } else { dir }, name))
+            .unwrap_or((".", source));
+        crate::sftp::helpers::validate_remote_entry_name(name)?;
+        if parent.is_some_and(|old| old != directory) {
+            return Err(
+                "Select files from the same directory to avoid ambiguous archive members".into(),
+            );
+        }
+        parent = Some(directory);
+        names.push(shell_escape(&format!("./{name}")));
+    }
+    let directory = shell_escape(&archive_operand(parent.unwrap_or("."))?);
+    let archive = shell_escape(&archive_operand(&request.archive_path)?);
+    let names = names.join(" ");
     match request.format.as_str() {
-        "tar.gz" | "tgz" => {
-            let escaped_paths: Vec<String> = request
-                .paths
-                .iter()
-                .map(|p| {
-                    let name = p.rsplit('/').next().unwrap_or(p);
-                    shell_escape(name)
-                })
-                .collect();
-
-            let first_path = &request.paths[0];
-            let parent_dir = if let Some(pos) = first_path.rfind('/') {
-                &first_path[..pos]
-            } else {
-                "."
-            };
-
-            Ok(format!(
-                "cd {} && tar -czf {} {}",
-                shell_escape(parent_dir),
-                shell_escape(&request.archive_path),
-                escaped_paths.join(" ")
-            ))
-        }
-        "zip" => {
-            let escaped_paths: Vec<String> =
-                request.paths.iter().map(|p| shell_escape(p)).collect();
-
-            Ok(format!(
-                "which zip > /dev/null 2>&1 && zip -r {} {} || (echo 'zip not found, falling back to tar.gz' && tar -czf {} {})",
-                shell_escape(&request.archive_path),
-                escaped_paths.join(" "),
-                shell_escape(&request.archive_path.replace(".zip", ".tar.gz")),
-                escaped_paths.join(" ")
-            ))
-        }
+        "tar.gz" | "tgz" => Ok(format!("cd {directory} && tar -czf {archive} {names}")),
+        // A failed ZIP command must not silently produce a different format.
+        "zip" => Ok(format!("cd {directory} && zip -r {archive} {names}")),
         _ => Err(format!(
             "Unsupported compression format: {}",
             request.format
@@ -519,9 +537,64 @@ fn build_compress_command(request: &SftpCompressRequest) -> Result<String, Strin
     }
 }
 
+#[cfg(test)]
+mod archive_safety_tests {
+    use super::*;
+    #[test]
+    fn archive_names_cannot_be_utility_options_and_zip_has_no_fallback() {
+        let mut request = SftpCompressRequest {
+            session_id: "test".into(),
+            paths: vec!["/tmp/--checkpoint-action=exec=command".into()],
+            archive_path: "-archive.tar.gz".into(),
+            format: "tar.gz".into(),
+        };
+        let command = build_compress_command(&request).unwrap();
+        assert!(command.contains("'./--checkpoint-action=exec=command'"));
+        assert!(command.contains("'./-archive.tar.gz'"));
+        request.format = "zip".into();
+        assert!(!build_compress_command(&request).unwrap().contains("||"));
+        request.paths.push("/another/file".into());
+        assert!(build_compress_command(&request).is_err());
+        assert!(archive_operand("").is_err());
+        assert!(archive_operand("bad\0path").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn real_tar_preserves_quoted_unicode_and_dash_prefixed_members() {
+        let directory = tempfile::tempdir().unwrap();
+        let name = "-中文 ' quoted.txt";
+        let source = directory.path().join(name);
+        std::fs::write(&source, b"archive-content").unwrap();
+        let archive = directory.path().join("archive.tar.gz");
+        let request = SftpCompressRequest {
+            session_id: "test".into(),
+            paths: vec![source.to_string_lossy().into_owned()],
+            archive_path: archive.to_string_lossy().into_owned(),
+            format: "tar.gz".into(),
+        };
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(build_compress_command(&request).unwrap())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let output = std::process::Command::new("tar")
+            .arg("-xOzf")
+            .arg(archive)
+            .arg(format!("./{name}"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"archive-content");
+    }
+}
+
 fn build_extract_command(request: &SftpExtractRequest) -> Result<String, String> {
-    let archive = &request.archive_path;
-    let dest = &request.destination_path;
+    let archive_path = archive_operand(&request.archive_path)?;
+    let destination = archive_operand(&request.destination_path)?;
+    let archive = &archive_path;
+    let dest = &destination;
 
     let command = if archive.ends_with(".tar.gz") || archive.ends_with(".tgz") {
         format!(
@@ -648,7 +721,7 @@ pub async fn sftp_init(
         return Ok(true);
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return match ipc_send(IpcMessage::SftpInit {
             session_id: request.session_id,
         })
@@ -683,7 +756,7 @@ pub async fn sftp_init(
     );
 
     let data = Arc::new(TokioMutex::new(SftpSessionData {
-        sftp: Some(sftp),
+        sftp: Some(Arc::new(sftp)),
         home_dir: home_dir.clone(),
         current_path: home_dir,
         connected: true,
@@ -719,56 +792,70 @@ pub async fn sftp_list_dir(
         };
 
         let resolved = resolve_local_path(&requested_path, &current_path)?;
-        let metadata = std::fs::metadata(&resolved)
-            .map_err(|e| format!("Failed to access path {}: {}", resolved.display(), e))?;
 
-        if !metadata.is_dir() {
-            return Err(format!("Not a directory: {}", resolved.display()));
-        }
+        // Directory scans can touch thousands of entries; keep them off the
+        // async workers (same pattern as commands/local_files.rs).
+        let scan_path = resolved.clone();
+        let entries =
+            tauri::async_runtime::spawn_blocking(move || -> Result<Vec<SftpEntry>, String> {
+                let resolved = scan_path;
+                let metadata = std::fs::metadata(&resolved)
+                    .map_err(|e| format!("Failed to access path {}: {}", resolved.display(), e))?;
 
-        let mut entries = Vec::new();
-        let read_dir = std::fs::read_dir(&resolved)
-            .map_err(|e| format!("Failed to read directory {}: {}", resolved.display(), e))?;
+                if !metadata.is_dir() {
+                    return Err(format!("Not a directory: {}", resolved.display()));
+                }
 
-        for item in read_dir {
-            let item = item.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-            let path = item.path();
-            let meta = item
-                .metadata()
-                .map_err(|e| format!("Failed to read metadata for {}: {}", path.display(), e))?;
+                let mut entries = Vec::new();
+                let read_dir = std::fs::read_dir(&resolved).map_err(|e| {
+                    format!("Failed to read directory {}: {}", resolved.display(), e)
+                })?;
 
-            let modified_at = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+                for item in read_dir {
+                    let item =
+                        item.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+                    let path = item.path();
+                    let meta = item.metadata().map_err(|e| {
+                        format!("Failed to read metadata for {}: {}", path.display(), e)
+                    })?;
 
-            let name = item.file_name().to_string_lossy().to_string();
-            let is_directory = meta.is_dir();
-            let size = if is_directory { 0 } else { meta.len() };
+                    let modified_at = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
 
-            entries.push(SftpEntry {
-                name,
-                path: path.to_string_lossy().to_string(),
-                is_directory,
-                size,
-                modified_at,
-                permissions: local_permissions_string(&meta),
-            });
-        }
+                    let name = item.file_name().to_string_lossy().to_string();
+                    let is_directory = meta.is_dir();
+                    let size = if is_directory { 0 } else { meta.len() };
 
-        entries.sort_by(|a, b| {
-            b.is_directory
-                .cmp(&a.is_directory)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
+                    entries.push(SftpEntry {
+                        name,
+                        path: path.to_string_lossy().to_string(),
+                        is_directory,
+                        size,
+                        modified_at,
+                        permissions: local_permissions_string(&meta),
+                    });
+                }
+
+                entries.sort_by(|a, b| {
+                    b.is_directory
+                        .cmp(&a.is_directory)
+                        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                });
+
+                Ok(entries)
+            })
+            .await
+            .map_err(|e| format!("Local directory scan failed: {}", e))??;
 
         set_local_current_path(sftp_state.inner(), &request.session_id, &resolved).await;
         return Ok(entries);
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return match ipc_send(IpcMessage::SftpListDir {
             session_id: request.session_id,
             path: request.path,
@@ -817,6 +904,7 @@ pub async fn sftp_list_dir(
         if name == "." || name == ".." {
             continue;
         }
+        crate::sftp::helpers::validate_remote_entry_name(&name)?;
         let file_type = entry.file_type();
         let is_directory = file_type.is_dir();
         let metadata = entry.metadata();
@@ -874,47 +962,46 @@ pub async fn sftp_download_file(
         let source_path = resolve_local_path(&request.remote_path, &current_path)?;
         let target_path = resolve_local_path(&request.local_path, &current_path)?;
 
-        let content = std::fs::read(&source_path).map_err(|e| {
-            format!(
-                "Failed to read local source file {}: {}",
-                source_path.display(),
-                e
-            )
-        })?;
-
-        if let Some(parent) = target_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    format!(
-                        "Failed to create parent directory {}: {}",
-                        parent.display(),
-                        e
-                    )
-                })?;
-            }
-        }
-
-        std::fs::write(&target_path, &content).map_err(|e| {
-            format!(
-                "Failed to write local target file {}: {}",
-                target_path.display(),
-                e
-            )
-        })?;
-
         let filename = source_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
 
-        let mut progress = TransferProgress::new(filename, content.len() as u64);
-        progress.transferred_bytes = content.len() as u64;
+        // Local-to-local copies stream via std::fs::copy on a blocking thread:
+        // no whole-file buffer, no blocked async worker.
+        let transferred = tauri::async_runtime::spawn_blocking(move || -> Result<u64, String> {
+            if let Some(parent) = target_path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        format!(
+                            "Failed to create parent directory {}: {}",
+                            parent.display(),
+                            e
+                        )
+                    })?;
+                }
+            }
+
+            std::fs::copy(&source_path, &target_path).map_err(|e| {
+                format!(
+                    "Failed to copy {} -> {}: {}",
+                    source_path.display(),
+                    target_path.display(),
+                    e
+                )
+            })
+        })
+        .await
+        .map_err(|e| format!("Local file copy failed: {}", e))??;
+
+        let mut progress = TransferProgress::new(filename, transferred);
+        progress.transferred_bytes = transferred;
         progress.status = TransferStatus::Completed;
         return Ok(progress);
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return match ipc_send(IpcMessage::SftpDownloadFile {
             session_id: request.session_id,
             remote_path: request.remote_path,
@@ -931,37 +1018,23 @@ pub async fn sftp_download_file(
         };
     }
 
-    // SSH session - use real SFTP protocol for binary-safe download
+    // SSH session - use real SFTP protocol for binary-safe download.
+    // The session mutex is held only to clone the SFTP handle and resolve the
+    // path; the streaming transfer runs without the lock so listings, renames
+    // and other commands on this session stay responsive during big transfers.
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
-    let guard = sftp_data.lock().await;
-    let sftp = guard
-        .sftp
-        .as_ref()
-        .ok_or("SFTP not initialized for this SSH session")?;
-
-    let remote_path =
-        resolve_remote_path(&request.remote_path, &guard.home_dir, &guard.current_path);
+    let (sftp, remote_path) = {
+        let guard = sftp_data.lock().await;
+        prepare_remote_file_access(&guard, &request.remote_path)?
+    };
     info!(
         "[SFTP] Downloading {} -> {}",
         remote_path, request.local_path
     );
 
-    // Read the entire file via SFTP (binary-safe)
-    let content = sftp
-        .read(&remote_path)
-        .await
-        .map_err(|e| format!("Failed to read remote file {}: {}", remote_path, e))?;
-
-    // Write to local file
-    if let Some(parent) = Path::new(&request.local_path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
-        }
-    }
-
-    std::fs::write(&request.local_path, &content)
-        .map_err(|e| format!("Failed to write local file: {}", e))?;
+    // Stream to disk in fixed-size chunks (binary-safe, bounded memory)
+    let transferred =
+        download_remote_file_streaming(&sftp, &remote_path, Path::new(&request.local_path)).await?;
 
     let filename = std::path::Path::new(&request.remote_path)
         .file_name()
@@ -969,14 +1042,13 @@ pub async fn sftp_download_file(
         .unwrap_or("unknown")
         .to_string();
 
-    let mut progress = TransferProgress::new(filename, content.len() as u64);
-    progress.transferred_bytes = content.len() as u64;
+    let mut progress = TransferProgress::new(filename, transferred);
+    progress.transferred_bytes = transferred;
     progress.status = TransferStatus::Completed;
 
     info!(
         "[SFTP] Download complete: {} ({} bytes)",
-        remote_path,
-        content.len()
+        remote_path, transferred
     );
     Ok(progress)
 }
@@ -997,14 +1069,6 @@ pub async fn sftp_upload_file(
         let source_path = resolve_local_path(&request.local_path, &current_path)?;
         let mut target_path = resolve_local_path(&request.remote_path, &current_path)?;
 
-        let content = std::fs::read(&source_path).map_err(|e| {
-            format!(
-                "Failed to read local source file {}: {}",
-                source_path.display(),
-                e
-            )
-        })?;
-
         if target_path.is_dir() {
             let filename = source_path.file_name().ok_or_else(|| {
                 format!(
@@ -1015,39 +1079,45 @@ pub async fn sftp_upload_file(
             target_path = target_path.join(filename);
         }
 
-        if let Some(parent) = target_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    format!(
-                        "Failed to create parent directory {}: {}",
-                        parent.display(),
-                        e
-                    )
-                })?;
-            }
-        }
-
-        std::fs::write(&target_path, &content).map_err(|e| {
-            format!(
-                "Failed to write local target file {}: {}",
-                target_path.display(),
-                e
-            )
-        })?;
-
         let filename = source_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
             .to_string();
 
-        let mut progress = TransferProgress::new(filename, content.len() as u64);
-        progress.transferred_bytes = content.len() as u64;
+        // Local-to-local copies stream via std::fs::copy on a blocking thread.
+        let transferred = tauri::async_runtime::spawn_blocking(move || -> Result<u64, String> {
+            if let Some(parent) = target_path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        format!(
+                            "Failed to create parent directory {}: {}",
+                            parent.display(),
+                            e
+                        )
+                    })?;
+                }
+            }
+
+            std::fs::copy(&source_path, &target_path).map_err(|e| {
+                format!(
+                    "Failed to copy {} -> {}: {}",
+                    source_path.display(),
+                    target_path.display(),
+                    e
+                )
+            })
+        })
+        .await
+        .map_err(|e| format!("Local file copy failed: {}", e))??;
+
+        let mut progress = TransferProgress::new(filename, transferred);
+        progress.transferred_bytes = transferred;
         progress.status = TransferStatus::Completed;
         return Ok(progress);
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return match ipc_send(IpcMessage::SftpUploadFile {
             session_id: request.session_id,
             local_path: request.local_path,
@@ -1061,17 +1131,14 @@ pub async fn sftp_upload_file(
         };
     }
 
-    // SSH session - use real SFTP protocol for binary-safe upload
+    // SSH session - use real SFTP protocol for binary-safe upload.
+    // Same narrow lock scope as the download path: grab the session handle and
+    // resolve paths, then stream without holding the session mutex.
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
-    let guard = sftp_data.lock().await;
-    let sftp = guard
-        .sftp
-        .as_ref()
-        .ok_or("SFTP not initialized for this SSH session")?;
-
-    // Read local file
-    let content = std::fs::read(&request.local_path)
-        .map_err(|e| format!("Failed to read local file: {}", e))?;
+    let (sftp, resolved_remote_path) = {
+        let guard = sftp_data.lock().await;
+        prepare_remote_file_access(&guard, &request.remote_path)?
+    };
 
     let filename = std::path::Path::new(&request.local_path)
         .file_name()
@@ -1079,27 +1146,28 @@ pub async fn sftp_upload_file(
         .unwrap_or("unknown")
         .to_string();
 
-    let remote_path =
-        resolve_remote_path(&request.remote_path, &guard.home_dir, &guard.current_path);
-    let remote_path = resolve_remote_upload_path(sftp, &remote_path, &filename).await;
+    let remote_path = resolve_remote_upload_path(&sftp, &resolved_remote_path, &filename).await;
+
+    let file_size = tokio::fs::metadata(&request.local_path)
+        .await
+        .map(|meta| meta.len())
+        .map_err(|e| format!("Failed to read local file: {}", e))?;
     info!(
         "[SFTP] Uploading {} -> {} ({} bytes)",
-        request.local_path,
-        remote_path,
-        content.len()
+        request.local_path, remote_path, file_size
     );
 
-    // Write via SFTP (binary-safe, no size limits)
-    write_remote_file(sftp, &remote_path, &content).await?;
+    // Stream in fixed-size chunks (binary-safe, no size limits)
+    let transferred =
+        upload_local_file_streaming(&sftp, Path::new(&request.local_path), &remote_path).await?;
 
-    let mut progress = TransferProgress::new(filename, content.len() as u64);
-    progress.transferred_bytes = content.len() as u64;
+    let mut progress = TransferProgress::new(filename, transferred);
+    progress.transferred_bytes = transferred;
     progress.status = TransferStatus::Completed;
 
     info!(
         "[SFTP] Upload complete: {} ({} bytes)",
-        remote_path,
-        content.len()
+        remote_path, transferred
     );
     Ok(progress)
 }
@@ -1127,10 +1195,15 @@ pub async fn sftp_upload_directory(
         let source_path = resolve_local_path(&request.local_path, &current_path)?;
         let target_path = resolve_local_path(&request.remote_path, &current_path)?;
 
-        return transfer_directory_to_local(&source_path, &target_path, mode, &options);
+        // Local directory transfers walk and copy the whole tree synchronously.
+        return tauri::async_runtime::spawn_blocking(move || {
+            transfer_directory_to_local(&source_path, &target_path, mode, &options)
+        })
+        .await
+        .map_err(|e| format!("Local directory transfer failed: {}", e))?;
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return match ipc_send(IpcMessage::SftpUploadDirectory {
             session_id: request.session_id,
             local_path: request.local_path,
@@ -1151,16 +1224,15 @@ pub async fn sftp_upload_directory(
         };
     }
 
+    // Narrow lock scope: clone the handle and resolve the root, then run the
+    // whole directory transfer without holding the session mutex.
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
-    let guard = sftp_data.lock().await;
-    let sftp = guard
-        .sftp
-        .as_ref()
-        .ok_or("SFTP not initialized for this SSH session")?;
+    let (sftp, remote_path) = {
+        let guard = sftp_data.lock().await;
+        prepare_remote_file_access(&guard, &request.remote_path)?
+    };
 
     let local_path = PathBuf::from(&request.local_path);
-    let remote_path =
-        resolve_remote_path(&request.remote_path, &guard.home_dir, &guard.current_path);
 
     info!(
         "[SFTP] {} directory {} -> {}",
@@ -1169,7 +1241,7 @@ pub async fn sftp_upload_directory(
         remote_path
     );
 
-    transfer_directory_to_sftp(sftp, &local_path, &remote_path, mode, &options).await
+    transfer_directory_to_sftp(&sftp, &local_path, &remote_path, mode, &options).await
 }
 
 #[tauri::command]
@@ -1196,17 +1268,21 @@ pub async fn sftp_mkdir(
     if is_local_session(local_shell_manager.inner(), &request.session_id).await {
         let current_path = get_local_current_path(sftp_state.inner(), &request.session_id).await;
         let target_path = resolve_local_path(&request.path, &current_path)?;
-        std::fs::create_dir_all(&target_path).map_err(|e| {
-            format!(
-                "Failed to create directory {}: {}",
-                target_path.display(),
-                e
-            )
-        })?;
+        tauri::async_runtime::spawn_blocking(move || {
+            std::fs::create_dir_all(&target_path).map_err(|e| {
+                format!(
+                    "Failed to create directory {}: {}",
+                    target_path.display(),
+                    e
+                )
+            })
+        })
+        .await
+        .map_err(|e| format!("Local directory creation failed: {}", e))??;
         return Ok(());
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return expect_ipc_ok(
             "creating remote SFTP directory",
             ipc_send(IpcMessage::SftpMkdir {
@@ -1244,37 +1320,46 @@ pub async fn sftp_delete(
     if is_local_session(local_shell_manager.inner(), &request.session_id).await {
         let current_path = get_local_current_path(sftp_state.inner(), &request.session_id).await;
         let target_path = resolve_local_path(&request.path, &current_path)?;
+        let recursive = request.recursive.unwrap_or(false);
 
-        let metadata = std::fs::metadata(&target_path)
-            .map_err(|e| format!("Failed to access {}: {}", target_path.display(), e))?;
+        // Recursive deletes can walk and unlink thousands of entries.
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            let metadata = std::fs::metadata(&target_path)
+                .map_err(|e| format!("Failed to access {}: {}", target_path.display(), e))?;
 
-        if metadata.is_dir() {
-            if request.recursive.unwrap_or(false) {
-                std::fs::remove_dir_all(&target_path).map_err(|e| {
-                    format!(
-                        "Failed to remove directory {}: {}",
-                        target_path.display(),
-                        e
-                    )
-                })?;
+            if metadata.is_dir() {
+                if recursive {
+                    std::fs::remove_dir_all(&target_path).map_err(|e| {
+                        format!(
+                            "Failed to remove directory {}: {}",
+                            target_path.display(),
+                            e
+                        )
+                    })?;
+                } else {
+                    std::fs::remove_dir(&target_path).map_err(|e| {
+                        format!(
+                            "Failed to remove directory {} (set recursive=true for non-empty dirs): {}",
+                            target_path.display(),
+                            e
+                        )
+                    })?;
+                }
             } else {
-                std::fs::remove_dir(&target_path).map_err(|e| {
-                    format!(
-                        "Failed to remove directory {} (set recursive=true for non-empty dirs): {}",
-                        target_path.display(),
-                        e
-                    )
+                std::fs::remove_file(&target_path).map_err(|e| {
+                    format!("Failed to remove file {}: {}", target_path.display(), e)
                 })?;
             }
-        } else {
-            std::fs::remove_file(&target_path)
-                .map_err(|e| format!("Failed to remove file {}: {}", target_path.display(), e))?;
-        }
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| format!("Local delete failed: {}", e))??;
 
         return Ok(());
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return expect_ipc_ok(
             "deleting remote SFTP path",
             ipc_send(IpcMessage::SftpDelete {
@@ -1313,31 +1398,35 @@ pub async fn sftp_rename(
         let old_path = resolve_local_path(&request.old_path, &current_path)?;
         let new_path = resolve_local_path(&request.new_path, &current_path)?;
 
-        if let Some(parent) = new_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    format!(
-                        "Failed to create target parent directory {}: {}",
-                        parent.display(),
-                        e
-                    )
-                })?;
+        tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+            if let Some(parent) = new_path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        format!(
+                            "Failed to create target parent directory {}: {}",
+                            parent.display(),
+                            e
+                        )
+                    })?;
+                }
             }
-        }
 
-        std::fs::rename(&old_path, &new_path).map_err(|e| {
-            format!(
-                "Failed to rename {} to {}: {}",
-                old_path.display(),
-                new_path.display(),
-                e
-            )
-        })?;
+            std::fs::rename(&old_path, &new_path).map_err(|e| {
+                format!(
+                    "Failed to rename {} to {}: {}",
+                    old_path.display(),
+                    new_path.display(),
+                    e
+                )
+            })
+        })
+        .await
+        .map_err(|e| format!("Local rename failed: {}", e))??;
 
         return Ok(());
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return expect_ipc_ok(
             "renaming remote SFTP path",
             ipc_send(IpcMessage::SftpRename {
@@ -1382,7 +1471,7 @@ pub async fn sftp_pwd(
         return Ok(path);
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return match ipc_send(IpcMessage::SftpPwd {
             session_id: request.session_id,
         })
@@ -1407,96 +1496,6 @@ pub async fn sftp_pwd(
     Ok(path)
 }
 
-/// Get file/directory information via SFTP.
-#[tauri::command]
-pub async fn sftp_stat(
-    sftp_state: State<'_, Arc<SftpState>>,
-    local_shell_manager: State<'_, Arc<LocalShellManager>>,
-    _session_manager: State<'_, Arc<SessionManager>>,
-    access_state: State<'_, Arc<SessionAccessState>>,
-    request: SftpStatRequest,
-) -> Result<SftpEntry, String> {
-    if is_local_session(local_shell_manager.inner(), &request.session_id).await {
-        let current_path = get_local_current_path(sftp_state.inner(), &request.session_id).await;
-        let resolved = resolve_local_path(&request.path, &current_path)?;
-        let metadata = std::fs::metadata(&resolved)
-            .map_err(|e| format!("Failed to stat {}: {}", resolved.display(), e))?;
-
-        let modified_at = metadata
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        let name = resolved
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| resolved.to_string_lossy().to_string());
-
-        return Ok(SftpEntry {
-            name,
-            path: resolved.to_string_lossy().to_string(),
-            is_directory: metadata.is_dir(),
-            size: if metadata.is_dir() { 0 } else { metadata.len() },
-            modified_at,
-            permissions: local_permissions_string(&metadata),
-        });
-    }
-
-    if access_state.is_remote() {
-        return match ipc_send(IpcMessage::SftpStat {
-            session_id: request.session_id,
-            path: request.path,
-        })
-        .await?
-        {
-            IpcMessage::SftpStatResult { entry } => Ok(entry),
-            IpcMessage::Error { message } => Err(message),
-            other => Err(unexpected_ipc_response("stating remote SFTP path", other)),
-        };
-    }
-
-    let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
-    let guard = sftp_data.lock().await;
-    let sftp = guard
-        .sftp
-        .as_ref()
-        .ok_or("SFTP not initialized for this SSH session")?;
-
-    let path = resolve_remote_path(&request.path, &guard.home_dir, &guard.current_path);
-
-    let metadata = sftp
-        .metadata(&path)
-        .await
-        .map_err(|e| format!("Failed to stat {}: {}", path, e))?;
-
-    let is_directory = metadata.is_dir();
-    let size = if is_directory { 0 } else { metadata.len() };
-
-    let modified_at = metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    let perms = metadata.permissions();
-    let permissions = format!("{}{}", if is_directory { "d" } else { "-" }, perms);
-
-    let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-
-    Ok(SftpEntry {
-        name,
-        path,
-        is_directory,
-        size,
-        modified_at,
-        permissions,
-    })
-}
-
 /// Read file content for preview via SFTP.
 #[tauri::command]
 pub async fn sftp_read_file(
@@ -1518,59 +1517,68 @@ pub async fn sftp_read_file(
         let current_path = get_local_current_path(sftp_state.inner(), &request.session_id).await;
         let resolved = resolve_local_path(&request.path, &current_path)?;
 
-        let metadata = std::fs::metadata(&resolved)
-            .map_err(|e| format!("Failed to access file {}: {}", resolved.display(), e))?;
+        // Preview reads can pull up to 10 MB into memory; run them on a
+        // blocking thread like commands/local_files.rs does.
+        let content =
+            tauri::async_runtime::spawn_blocking(move || -> Result<SftpFileContent, String> {
+                let metadata = std::fs::metadata(&resolved)
+                    .map_err(|e| format!("Failed to access file {}: {}", resolved.display(), e))?;
 
-        if metadata.is_dir() {
-            return Err(format!(
-                "Cannot read directory as file: {}",
-                resolved.display()
-            ));
-        }
+                if metadata.is_dir() {
+                    return Err(format!(
+                        "Cannot read directory as file: {}",
+                        resolved.display()
+                    ));
+                }
 
-        let file_size = metadata.len();
-        let mime_type = get_mime_type(&resolved.to_string_lossy());
+                let file_size = metadata.len();
+                let mime_type = get_mime_type(&resolved.to_string_lossy());
 
-        if file_size > max_size && as_binary {
-            return Err(format!(
-                "File too large for preview: {} bytes (max: {} bytes)",
-                file_size, max_size
-            ));
-        }
+                if file_size > max_size && as_binary {
+                    return Err(format!(
+                        "File too large for preview: {} bytes (max: {} bytes)",
+                        file_size, max_size
+                    ));
+                }
 
-        let read_limit = if as_binary {
-            file_size
-        } else {
-            max_size.min(file_size)
-        };
-        let mut file = std::fs::File::open(&resolved)
-            .map_err(|e| format!("Failed to open file {}: {}", resolved.display(), e))?;
-        let mut bytes = Vec::with_capacity(read_limit.min(usize::MAX as u64) as usize);
-        file.by_ref()
-            .take(read_limit)
-            .read_to_end(&mut bytes)
-            .map_err(|e| format!("Failed to read file {}: {}", resolved.display(), e))?;
+                let read_limit = if as_binary {
+                    file_size
+                } else {
+                    max_size.min(file_size)
+                };
+                let mut file = std::fs::File::open(&resolved)
+                    .map_err(|e| format!("Failed to open file {}: {}", resolved.display(), e))?;
+                let mut bytes = Vec::with_capacity(read_limit.min(usize::MAX as u64) as usize);
+                file.by_ref()
+                    .take(read_limit)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| format!("Failed to read file {}: {}", resolved.display(), e))?;
 
-        let (content, truncated) = if as_binary {
-            let base64_content =
-                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
-            (base64_content, false)
-        } else {
-            let truncated = file_size > bytes.len() as u64;
-            let content = String::from_utf8_lossy(&bytes).to_string();
-            (content, truncated)
-        };
+                let (content, truncated) = if as_binary {
+                    let base64_content =
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+                    (base64_content, false)
+                } else {
+                    let truncated = file_size > bytes.len() as u64;
+                    let content = String::from_utf8_lossy(&bytes).to_string();
+                    (content, truncated)
+                };
 
-        return Ok(SftpFileContent {
-            content,
-            is_binary: as_binary,
-            size: file_size,
-            truncated,
-            mime_type,
-        });
+                Ok(SftpFileContent {
+                    content,
+                    is_binary: as_binary,
+                    size: file_size,
+                    truncated,
+                    mime_type,
+                })
+            })
+            .await
+            .map_err(|e| format!("Local file read failed: {}", e))??;
+
+        return Ok(content);
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return match ipc_send(IpcMessage::SftpReadFile {
             session_id: request.session_id,
             path: request.path,
@@ -1659,13 +1667,17 @@ pub async fn sftp_write_file(
         let current_path = get_local_current_path(sftp_state.inner(), &request.session_id).await;
         let resolved = resolve_local_path(&request.path, &current_path)?;
 
-        std::fs::write(&resolved, &request.content)
-            .map_err(|e| format!("Failed to write file {}: {}", resolved.display(), e))?;
+        tauri::async_runtime::spawn_blocking(move || {
+            std::fs::write(&resolved, &request.content)
+                .map_err(|e| format!("Failed to write file {}: {}", resolved.display(), e))
+        })
+        .await
+        .map_err(|e| format!("Local file write failed: {}", e))??;
 
         return Ok(());
     }
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return expect_ipc_ok(
             "writing remote SFTP file",
             ipc_send(IpcMessage::SftpWriteFile {
@@ -1677,21 +1689,19 @@ pub async fn sftp_write_file(
         );
     }
 
+    // Narrow lock scope: editor saves can carry megabytes of content.
     let sftp_data = get_sftp_data(sftp_state.inner(), &request.session_id).await?;
-    let guard = sftp_data.lock().await;
-    let sftp = guard
-        .sftp
-        .as_ref()
-        .ok_or("SFTP not initialized for this SSH session")?;
-
-    let path = resolve_remote_path(&request.path, &guard.home_dir, &guard.current_path);
+    let (sftp, path) = {
+        let guard = sftp_data.lock().await;
+        prepare_remote_file_access(&guard, &request.path)?
+    };
     info!(
         "[SFTP] Writing file: {} ({} bytes)",
         path,
         request.content.len()
     );
 
-    write_remote_file(sftp, &path, request.content.as_bytes()).await?;
+    write_remote_file(&sftp, &path, request.content.as_bytes()).await?;
 
     Ok(())
 }
@@ -1711,7 +1721,7 @@ pub async fn sftp_compress(
 
     let command = build_compress_command(&request)?;
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return remote_exec_command(&request.session_id, command).await;
     }
 
@@ -1740,7 +1750,7 @@ pub async fn sftp_extract(
 
     let command = build_extract_command(&request)?;
 
-    if access_state.is_remote() {
+    if access_state.is_remote_session(&request.session_id).await {
         return remote_exec_command(&request.session_id, command).await;
     }
 
@@ -1773,5 +1783,72 @@ mod tests {
         assert_eq!(shell_escape("test"), "'test'");
         assert_eq!(shell_escape("test file"), "'test file'");
         assert_eq!(shell_escape("it's"), "'it'\\''s'");
+    }
+
+    // ----- prepare_remote_file_access (narrow lock-scope state prep) -----
+
+    /// Minimal in-memory SFTP server: only the built-in INIT handshake is
+    /// needed, every operation returns "unimplemented".
+    struct NopSftpHandler;
+
+    impl russh_sftp::server::Handler for NopSftpHandler {
+        type Error = russh_sftp::protocol::StatusCode;
+
+        fn unimplemented(&self) -> Self::Error {
+            russh_sftp::protocol::StatusCode::OpUnsupported
+        }
+    }
+
+    async fn nop_sftp_session() -> SftpSession {
+        let (client_stream, server_stream) = tokio::io::duplex(64 * 1024);
+        russh_sftp::server::run(server_stream, NopSftpHandler).await;
+        SftpSession::new(client_stream)
+            .await
+            .expect("initialize nop sftp session")
+    }
+
+    #[tokio::test]
+    async fn prepare_fails_when_sftp_is_missing() {
+        let data = SftpSessionData {
+            sftp: None,
+            home_dir: "/home/user".to_string(),
+            current_path: "/home/user".to_string(),
+            connected: true,
+        };
+
+        let error = match prepare_remote_file_access(&data, "~/file.txt") {
+            Ok(_) => panic!("must fail without a session"),
+            Err(error) => error,
+        };
+        assert!(error.contains("SFTP not initialized"));
+    }
+
+    #[tokio::test]
+    async fn prepare_clones_session_and_resolves_path_without_extra_locks() {
+        let data = SftpSessionData {
+            sftp: Some(Arc::new(nop_sftp_session().await)),
+            home_dir: "/home/user".to_string(),
+            current_path: "/var/log".to_string(),
+            connected: true,
+        };
+
+        // Absolute path passes through untouched.
+        let (sftp, path) =
+            prepare_remote_file_access(&data, "/etc/hosts").expect("absolute path resolves");
+        assert_eq!(path, "/etc/hosts");
+
+        // Home-relative and cwd-relative paths resolve like SFTP commands do.
+        let (_, tilde_path) =
+            prepare_remote_file_access(&data, "~/file.txt").expect("tilde path resolves");
+        assert_eq!(tilde_path, "/home/user/file.txt");
+        let (_, relative_path) =
+            prepare_remote_file_access(&data, "app.log").expect("relative path resolves");
+        assert_eq!(relative_path, "/var/log/app.log");
+
+        // The session is shared by clone, not re-created per command, so the
+        // transfer and any other command multiplex over the same SFTP session.
+        let (again, _) =
+            prepare_remote_file_access(&data, "/etc/hosts").expect("second prep succeeds");
+        assert!(Arc::ptr_eq(&sftp, &again));
     }
 }

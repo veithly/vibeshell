@@ -43,7 +43,10 @@ impl Drop for EndpointEnvGuard {
 fn competing_processes_on_same_endpoint_have_single_winner_without_split_brain() {
     let _guard = EndpointEnvGuard::set(&unique_endpoint_name());
 
-    let database = Arc::new(Database::new().expect("database should initialize"));
+    let data = tempfile::tempdir().expect("isolated test directory");
+    let database = Arc::new(
+        Database::new_at(data.path().join("test.db")).expect("database should initialize"),
+    );
     let session_manager = Arc::new(SessionManager::new(database.clone()));
 
     let (winner_tx, winner_rx) = mpsc::channel();

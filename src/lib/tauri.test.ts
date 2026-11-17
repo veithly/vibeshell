@@ -31,6 +31,16 @@ describe('sendInputBatched', () => {
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
+  it('drops the cached native invoke when availability is reset', async () => {
+    const { safeInvoke, resetTauriAvailabilityCache } = await import('./tauri');
+    expect((await safeInvoke('first')).success).toBe(true);
+    delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+    resetTauriAvailabilityCache();
+    const result = await safeInvoke('second');
+    expect(result.success).toBe(false);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
   it('batches local shell input into one IPC call', async () => {
     const { sendInputBatched } = await import('./tauri');
 

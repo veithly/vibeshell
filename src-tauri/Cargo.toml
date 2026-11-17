@@ -3,8 +3,9 @@ name = "vibeshell-desktop"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "High-performance SSH/SFTP terminal with AI integration"
-rust-version = "1.70"
+rust-version = "1.89"
 
 [lib]
 name = "vibeshell_core"
@@ -41,12 +42,12 @@ subtle = "2"
 zeroize = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
-russh = "0.44"
-russh-keys = "0.44"
+# 0.63.1+ validates client-side channel identities (GHSA-47hw-gvq5-r2gm).
+russh = { version = "0.63.3", default-features = false, features = ["ring", "rsa", "flate2"] }
 russh-sftp = "2"
 ignore = "0.4"
 async-trait = "0.1"
-tokio = { version = "1", features = ["sync", "io-std", "io-util", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["sync", "io-std", "io-util", "rt-multi-thread", "macros", "time", "net", "process"] }
 interprocess = "2"
 axum = "0.7"
 tower = { version = "0.5", features = ["util"] }

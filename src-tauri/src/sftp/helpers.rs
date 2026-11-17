@@ -24,7 +24,8 @@ impl Default for WriteRemoteFileOptions {
 /// Resolve a path that may contain `~` against the SFTP home directory.
 /// Relative paths are resolved against `current_path`.
 pub fn resolve_remote_path(path: &str, home_dir: &str, current_path: &str) -> String {
-    let trimmed = path.trim();
+    // This is a filesystem path, not a user-facing search string.
+    let trimmed = path;
     if trimmed.is_empty() || trimmed == "~" {
         home_dir.to_string()
     } else if let Some(rest) = trimmed.strip_prefix("~/") {
@@ -40,6 +41,15 @@ pub fn resolve_remote_path(path: &str, home_dir: &str, current_path: &str) -> St
         };
         join_remote_child(base, trimmed)
     }
+}
+
+/// READDIR names must be one POSIX component, never an absolute or relative
+/// path supplied by the server. Validate before traversing or deleting entries.
+pub fn validate_remote_entry_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\0']) {
+        return Err(format!("Unsafe SFTP directory entry: {name:?}"));
+    }
+    Ok(())
 }
 
 pub fn join_remote_child(parent: &str, child_name: &str) -> String {
@@ -85,7 +95,7 @@ pub async fn resolve_remote_upload_path(
 }
 
 fn remote_parent_dir(path: &str) -> Option<String> {
-    let path = path.trim().trim_end_matches('/');
+    let path = path.trim_end_matches('/');
     if path.is_empty() || path == "/" {
         return None;
     }
@@ -199,8 +209,14 @@ pub async fn sftp_remove_recursive(
         if name == "." || name == ".." {
             continue;
         }
+        validate_remote_entry_name(&name)?;
         let child_path = join_remote_child(path, &name);
         if let Err(file_error) = sftp.remove_file(&child_path).await {
+            if entry.file_type().is_symlink() {
+                return Err(format!(
+                    "Failed to remove symlink {child_path}: {file_error}; refusing to follow it"
+                ));
+            }
             // Directory entry attributes are optional in SFTP v3. Trying
             // REMOVE first avoids relying on absent/incorrect type bits and
             // safely removes symlinks without following them.
@@ -548,6 +564,24 @@ mod tests {
             .await
             .expect("initialize test SFTP client");
         (client, state)
+    }
+
+    #[test]
+    fn rejects_directory_entry_paths_but_preserves_valid_names() {
+        for bad in ["", ".", "..", "../outside", "/absolute", "a/b", "bad\0name"] {
+            assert!(validate_remote_entry_name(bad).is_err());
+        }
+        for good in ["中文 文件", " trailing ", "-option", "a\\b"] {
+            assert!(validate_remote_entry_name(good).is_ok());
+        }
+        assert_eq!(
+            resolve_remote_path(" file ", "/home", "/work"),
+            "/work/ file "
+        );
+        assert_eq!(
+            resolve_remote_path("/work/ file ", "/home", "/work"),
+            "/work/ file "
+        );
     }
 
     #[test]

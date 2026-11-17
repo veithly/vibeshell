@@ -4,6 +4,7 @@ description = "VibeShell plugin manifest specification: validation, command rend
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
+license.workspace = true
 publish = false
 
 [dependencies]

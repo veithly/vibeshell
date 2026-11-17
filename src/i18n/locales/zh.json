@@ -59,7 +59,6 @@
   },
   "sidebar": {
     "addServer": "添加服务器",
-    "quickCmd": "快捷命令",
     "history": "指令历史",
     "sftp": "SFTP",
     "tunnels": "隧道",
@@ -160,11 +159,24 @@
     "keyLoaded": "密钥已加载: {{path}}"
   },
   "agentActivity": {
-    "title": "Agent 活动",
+    "title": "历史记录",
     "connected": "就绪",
-    "close": "关闭 Agent 活动",
-    "empty": "暂无 Agent 活动",
-    "ready": "Gateway 已就绪"
+    "close": "关闭历史记录",
+    "empty": "暂无历史记录",
+    "ready": "Gateway 已就绪",
+    "cli": "Agent（CLI）",
+    "user": "用户",
+    "legacy": "来源未知",
+    "earlier": "加载更早记录",
+    "loading": "加载中…",
+    "failed": "失败",
+    "started": "已发起",
+    "operations": {
+      "session_create": "打开会话",
+      "session_attach": "接入会话",
+      "session_kill": "关闭会话",
+      "session_detach": "离开会话"
+    }
   },
   "agentApproval": {
     "title": "确认执行 Agent 命令？",
@@ -803,12 +815,6 @@
     "noFingerprints": "暂无受信主机指纹。",
     "deleteFingerprint": "删除指纹",
     "clearAll": "清除全部"
-  },
-  "quickCommand": {
-    "title": "快捷命令",
-    "placeholder": "输入命令...",
-    "recentCommands": "最近使用的命令",
-    "noRecent": "暂无最近命令"
   },
   "commandHistory": {
     "title": "指令历史",
