@@ -27,6 +27,8 @@ vibeshell version
 vibeshell import auto --dry-run
 vibeshell import auto
 vibeshell servers
+vibeshell servers add user@host:2222 --name my-server --identity ~/.ssh/id_ed25519
+vibeshell servers delete my-server --yes
 vibeshell ssh <server>
 vibeshell sftp <server>
 vibeshell sftp --session ALIAS pwd
@@ -38,6 +40,10 @@ Commands that need an SSH/SFTP session automatically start the native local daem
 vibeshell daemon status
 vibeshell sessions
 ```
+
+`servers add` also accepts `--user`, `--port`, `--jump`, `--group`, repeatable `--tag`, `--agent-forwarding`, and `--post-login`. Passwords come from an already-set `SSH_PASSWORD` or `VIBESHELL_PASSWORD`; encrypted keys use `VIBESHELL_KEY_PASSPHRASE` or `SSH_KEY_PASSPHRASE`. Do not place actual secrets in command arguments or shell history. Secret whitespace is preserved. The profile, optional group, encrypted credentials and sync metadata commit together. Deletion requires `--yes`, closes that server's sessions, and removes its saved credentials atomically with its profile. Ambiguous names/IDs and malformed targets fail without deletion.
+
+The supported executable is `vibeshell`, not the retired `vshell` command. `vshell` remains only the internal Cargo package identifier used by existing build scripts.
 
 ## Import sources
 

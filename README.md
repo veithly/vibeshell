@@ -145,8 +145,10 @@ The desktop includes a CLI sidecar. Standalone CLI archives include `install.sh`
 ```bash
 vibeshell import auto --dry-run    # Review, then run without --dry-run to import.
 vibeshell servers
+vibeshell servers add user@host --name my-server --identity ~/.ssh/id_ed25519
 vibeshell ssh my-server
 vibeshell ssh my-server -- uname -a
+vibeshell servers delete unused-server --yes
 vibeshell sessions
 vibeshell sftp my-server ls /srv/app
 vibeshell sftp --session ALIAS pwd  # Run SFTP on the existing connection.

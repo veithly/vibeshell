@@ -145,8 +145,10 @@ SSH 在认证前检查服务器身份，经过跳板时也验证实际目标。�
 ```bash
 vibeshell import auto --dry-run    # 审阅后去掉 --dry-run 正式导入。
 vibeshell servers
+vibeshell servers add user@host --name my-server --identity ~/.ssh/id_ed25519
 vibeshell ssh my-server
 vibeshell ssh my-server -- uname -a
+vibeshell servers delete unused-server --yes
 vibeshell sessions
 vibeshell sftp my-server ls /srv/app
 vibeshell sftp --session ALIAS pwd  # 复用现有会话执行 SFTP。

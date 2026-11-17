@@ -281,7 +281,20 @@ impl Database {
 
     /// Add a new server. Generates UUID and sets timestamps automatically.
     pub fn server_add(&self, server: &mut Server) -> Result<()> {
+        self.server_add_with_credentials(server, None, None)
+    }
+
+    /// Create a profile, optional group and encrypted credential in one commit.
+    /// Neither partial rows nor sync outbox entries survive a failed mutation.
+    pub fn server_add_with_credentials(
+        &self,
+        target: &mut Server,
+        group_name: Option<&str>,
+        credentials: Option<&CredentialUpdate>,
+    ) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
+        let mut staged = target.clone();
+        let server = &mut staged;
 
         // Generate UUID if not provided
         if server.id.is_empty() {
@@ -298,6 +311,60 @@ impl Database {
         let auth_type_str = auth_type_to_string(&server.auth_type);
 
         let tx = conn.transaction()?;
+        if let Some(name) = group_name {
+            let existing: Option<String> = tx
+                .query_row("SELECT id FROM groups WHERE name = ?1", [name], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            server.group_id = Some(match existing {
+                Some(id) => id,
+                None => {
+                    let group = Group {
+                        id: Uuid::new_v4().to_string(),
+                        name: name.into(),
+                        parent_id: None,
+                        color: "#808080".into(),
+                    };
+                    tx.execute(
+                        "INSERT INTO groups (id, name, parent_id, color) VALUES (?1, ?2, ?3, ?4)",
+                        rusqlite::params![group.id, group.name, group.parent_id, group.color],
+                    )?;
+                    sync::record_group_upsert(&tx, &group)?;
+                    group.id
+                }
+            });
+        }
+        if let Some(credentials) = credentials {
+            let secret = credentials.credential.as_deref().unwrap_or_default();
+            if secret.is_empty() {
+                anyhow::bail!("A non-empty password or private key is required");
+            }
+            let phrase = credentials.passphrase.as_deref().filter(|s| !s.is_empty());
+            if auth_type_str != "password" {
+                russh::keys::decode_secret_key(secret, phrase)
+                    .map_err(|_| anyhow::anyhow!("Private key or passphrase is invalid"))?;
+            }
+            let id = Uuid::new_v4().to_string();
+            let encrypted = encrypt_credential_value(secret)?;
+            let encrypted_phrase = if auth_type_str == "password" {
+                None
+            } else {
+                phrase.map(encrypt_credential_value).transpose()?
+            };
+            let key_path = if auth_type_str == "password" {
+                None
+            } else {
+                credentials.key_path.as_deref()
+            };
+            // INSERT rather than upsert: never overwrite an orphaned or shared
+            // credential with the same name while creating a new profile.
+            tx.execute(
+                "INSERT INTO server_credentials (id, server_name, auth_type, credential, passphrase, key_path, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![id, server.name, auth_type_str, encrypted, encrypted_phrase, key_path, now],
+            )?;
+            server.credential_id = Some(id);
+        }
         tx.execute(
             r#"INSERT INTO servers
                (id, name, host, port, username, auth_type, credential_id, group_id, tags, created_at, updated_at,
@@ -323,7 +390,8 @@ impl Database {
 
         sync::record_server_upsert(&tx, server, server.created_at, server.updated_at)?;
         tx.commit()?;
-
+        // Caller state is not updated on any failure.
+        *target = staged;
         Ok(())
     }
 
@@ -461,6 +529,7 @@ impl Database {
     pub fn server_delete(&self, id: &str) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        tx.execute("DELETE FROM server_credentials WHERE server_name = (SELECT name FROM servers WHERE id = ?1)", [id])?;
         sync::detach_server_references(&tx, id, true)?;
         tx.execute("DELETE FROM servers WHERE id = ?1", [id])?;
         sync::record_local_delete(&tx, SyncEntityKind::Server, id)?;
@@ -1910,6 +1979,99 @@ mod tests {
         };
         db.server_add(&mut server).unwrap();
         server
+    }
+
+    #[test]
+    fn profile_creation_rolls_back_every_mutation_and_sync_outbox() {
+        for table in [
+            "groups",
+            "server_credentials",
+            "servers",
+            "sync_outbox",
+            "sync_entity_state",
+        ] {
+            let db = test_db();
+            db.conn.lock().unwrap().execute_batch(&format!(
+                "CREATE TRIGGER injected_failure BEFORE INSERT ON {table} BEGIN SELECT RAISE(ABORT, 'injected failure'); END;"
+            )).unwrap();
+            let result = crate::commands::server::add_server_spec(
+                &db,
+                crate::commands::server::AddServerSpec {
+                    name: "new".into(),
+                    host: "host.invalid".into(),
+                    port: 22,
+                    username: "u".into(),
+                    auth_type: "password".into(),
+                    credential: Some(" secret ".into()),
+                    group_name: Some("new-group".into()),
+                    ..Default::default()
+                },
+            );
+            assert!(result.is_err(), "failure at {table} was ignored");
+            for checked in [
+                "groups",
+                "server_credentials",
+                "servers",
+                "sync_outbox",
+                "sync_entity_state",
+            ] {
+                let count: i64 = db
+                    .conn
+                    .lock()
+                    .unwrap()
+                    .query_row(&format!("SELECT COUNT(*) FROM {checked}"), [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(count, 0, "partial {checked} after failure at {table}");
+            }
+        }
+    }
+
+    #[test]
+    fn profile_deletion_rolls_back_secrets_references_and_outbox() {
+        for (table, operation) in [
+            ("server_credentials", "DELETE"),
+            ("servers", "DELETE"),
+            ("sync_outbox", "INSERT"),
+        ] {
+            let db = test_db();
+            let server = crate::commands::server::add_server_spec(
+                &db,
+                crate::commands::server::AddServerSpec {
+                    name: "keep".into(),
+                    host: "host.invalid".into(),
+                    port: 22,
+                    username: "u".into(),
+                    auth_type: "password".into(),
+                    credential: Some(" original ".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let count = || {
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .query_row("SELECT COUNT(*) FROM sync_outbox", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap()
+            };
+            let before = count();
+            db.conn.lock().unwrap().execute_batch(&format!("CREATE TRIGGER injected_failure BEFORE {operation} ON {table} BEGIN SELECT RAISE(ABORT, 'injected failure'); END;")).unwrap();
+            assert!(db.server_delete(&server.id).is_err());
+            assert!(db.server_get(&server.id).unwrap().is_some());
+            assert!(db.credential_get("keep").unwrap().unwrap().credential == " original ");
+            assert_eq!(count(), before);
+            db.conn
+                .lock()
+                .unwrap()
+                .execute_batch("DROP TRIGGER injected_failure")
+                .unwrap();
+            db.server_delete(&server.id).unwrap();
+            assert!(db.credential_get("keep").unwrap().is_none());
+        }
     }
 
     #[test]

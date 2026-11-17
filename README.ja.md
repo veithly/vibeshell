@@ -145,8 +145,10 @@ SSH は認証前にホストを検証し、踏み台経由でも実際の接続�
 ```bash
 vibeshell import auto --dry-run    # 確認後に --dry-run を外して取り込みます。
 vibeshell servers
+vibeshell servers add user@host --name my-server --identity ~/.ssh/id_ed25519
 vibeshell ssh my-server
 vibeshell ssh my-server -- uname -a
+vibeshell servers delete unused-server --yes
 vibeshell sessions
 vibeshell sftp my-server ls /srv/app
 vibeshell sftp --session ALIAS pwd  # 既存セッションで SFTP を実行。

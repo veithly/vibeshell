@@ -125,6 +125,16 @@ pub enum IpcMessage {
     // Requests from CLI to GUI
     /// List all configured servers
     ListServers,
+    /// Add a profile through the current shared service (not the legacy CLI).
+    AddServer {
+        spec: crate::commands::server::AddServerSpec,
+    },
+    /// Deletion always requires explicit confirmation, including direct IPC.
+    DeleteServer {
+        name: String,
+        #[serde(default)]
+        confirmed: bool,
+    },
     /// List all active sessions
     ListSessions,
     SessionService {
@@ -298,6 +308,9 @@ pub enum IpcMessage {
     /// List of configured servers
     ServerList {
         servers: Vec<IpcServerInfo>,
+    },
+    ServerAdded {
+        server: IpcServerInfo,
     },
     /// List of active session IDs
     SessionList {
@@ -643,6 +656,9 @@ fn listener_options(socket_name: SocketName) -> Result<ListenerOptions<'static>>
 /// credentials never reach the log output.
 fn redact_for_log(message: &IpcMessage) -> IpcMessage {
     match message {
+        IpcMessage::AddServer { .. } => IpcMessage::AddServer {
+            spec: crate::commands::server::AddServerSpec::default(),
+        },
         IpcMessage::CreateSessionWithCredentials {
             server_name,
             auth_type,
@@ -1220,6 +1236,8 @@ impl IpcServer {
             } | IpcMessage::ExecQuickCommand {session_id, command} => descriptions.push(("cli.exec".into(), Some(session_id.clone()), command.clone())),
             IpcMessage::ListSessions if cli => descriptions.push(("cli.sessions".into(), None, "List sessions".into())),
             IpcMessage::ListServers if cli => descriptions.push(("cli.servers".into(), None, "List servers".into())),
+            IpcMessage::AddServer { .. } if cli => descriptions.push(("cli.server_add".into(), None, "Add saved server (credentials omitted)".into())),
+            IpcMessage::DeleteServer { .. } if cli => descriptions.push(("cli.server_delete".into(), None, "Delete saved server".into())),
             IpcMessage::PluginList { .. } if cli => descriptions.push(("cli.plugin_list".into(), None, "List plugins".into())),
             IpcMessage::PluginDescribe { plugin_id, .. } if cli => descriptions.push(("cli.plugin_describe".into(), None, plugin_id.clone())),
             IpcMessage::DetachSession {session_id} if cli => descriptions.push(("cli.session_detach".into(), Some(session_id.clone()), "Detach from session".into())),
@@ -1346,6 +1364,53 @@ impl IpcServer {
                 match rt.block_on(super::runtime_services::dispatch(&session_manager, request)) {
                     Ok(value) => IpcMessage::ServiceResult { value },
                     Err(message) => IpcMessage::Error { message },
+                }
+            }
+            IpcMessage::AddServer { spec } => {
+                match crate::commands::server::add_server_spec(&database, spec) {
+                    Ok(server) => IpcMessage::ServerAdded {
+                        server: IpcServerInfo {
+                            id: server.id,
+                            name: server.name,
+                            host: server.host,
+                            port: server.port,
+                            username: server.username,
+                            auth_type: auth_type_to_string(&server.auth_type).into(),
+                            group_id: server.group_id,
+                            jump_host_id: server.jump_host_id,
+                            tags: server.tags,
+                        },
+                    },
+                    Err(message) => IpcMessage::Error { message },
+                }
+            }
+            IpcMessage::DeleteServer { name, confirmed } => {
+                if !confirmed {
+                    return IpcMessage::Error {
+                        message: "Server deletion requires explicit confirmation".into(),
+                    };
+                }
+                let id = match crate::commands::server::resolve_server_id(&database, &name) {
+                    Ok(id) => id,
+                    Err(message) => return IpcMessage::Error { message },
+                };
+                match rt.block_on(session_manager.kill_by_server_id(&id)) {
+                    Ok(ids) => {
+                        for id in ids {
+                            Self::clear_sftp_context(&sftp_contexts, &id);
+                        }
+                    }
+                    Err(error) => {
+                        return IpcMessage::Error {
+                            message: format!("Failed to close sessions: {error}"),
+                        }
+                    }
+                }
+                match database.server_delete(&id) {
+                    Ok(()) => IpcMessage::Ok,
+                    Err(error) => IpcMessage::Error {
+                        message: format!("Failed to delete server: {error}"),
+                    },
                 }
             }
             IpcMessage::PluginList { installed_only } => {
@@ -2848,6 +2913,73 @@ mod tests {
             redact_for_log(&IpcMessage::ListSessions),
             IpcMessage::ListSessions
         ));
+    }
+
+    #[test]
+    fn server_mutations_are_confirmed_and_never_log_secret_payloads() {
+        let temporary = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::new_at(temporary.path().join("profiles.db")).unwrap());
+        let manager = Arc::new(SessionManager::new(db.clone()));
+        let contexts = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let send = |message| {
+            IpcServer::handle_message(
+                message,
+                true,
+                db.clone(),
+                manager.clone(),
+                contexts.clone(),
+                runtime.handle(),
+            )
+        };
+        let spec = crate::commands::server::AddServerSpec {
+            name: "profile".into(),
+            host: "host.invalid".into(),
+            port: 22,
+            username: "u".into(),
+            auth_type: "password".into(),
+            credential: Some("sentinel-password".into()),
+            passphrase: Some("sentinel-passphrase".into()),
+            post_login_command: Some("sentinel-command".into()),
+            ..Default::default()
+        };
+        let message = IpcMessage::AddServer { spec: spec.clone() };
+        assert!(!format!("{message:?}").contains("sentinel"));
+        assert!(!serde_json::to_string(&redact_for_log(&message))
+            .unwrap()
+            .contains("sentinel"));
+        assert!(matches!(send(message), IpcMessage::ServerAdded { .. }));
+        assert!(matches!(
+            send(IpcMessage::DeleteServer {
+                name: "profile".into(),
+                confirmed: false
+            }),
+            IpcMessage::Error { .. }
+        ));
+        assert!(db.credential_get("profile").unwrap().is_some());
+        let response = send(IpcMessage::AddServer {
+            spec: crate::commands::server::AddServerSpec {
+                name: "invalid-key".into(),
+                auth_type: "key".into(),
+                credential: Some("sentinel-private-key".into()),
+                ..spec
+            },
+        });
+        assert!(matches!(response, IpcMessage::Error { .. }));
+        assert!(!format!("{response:?}").contains("sentinel"));
+        assert!(matches!(
+            send(IpcMessage::DeleteServer {
+                name: "profile".into(),
+                confirmed: true
+            }),
+            IpcMessage::Ok
+        ));
+        assert!(db.credential_get("profile").unwrap().is_none());
+        assert!(
+            !serde_json::to_string(&db.agent_activity_list(None, None, 100).unwrap())
+                .unwrap()
+                .contains("sentinel")
+        );
     }
 
     #[test]
