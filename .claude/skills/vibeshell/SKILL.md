@@ -12,11 +12,33 @@ VibeShell automatically starts its local headless daemon when an SSH, SFTP, or s
 ## Before operating
 
 1. Verify the CLI is available with `vibeshell version`.
-2. Inspect configured targets with `vibeshell servers`.
-3. Prefer saved server names over raw hosts. Credentials remain local to VibeShell and must never be printed, copied into prompts, or passed on the command line.
+2. Inspect configured targets with `vibeshell servers`. Add or remove them with `vibeshell servers add` and `vibeshell servers delete` — the desktop UI is not required.
+3. Prefer saved server names over raw hosts. Credentials remain local to VibeShell and must never be printed, copied into prompts, or passed on the command line. Passwords for `servers add` come from `SSH_PASSWORD` or `VIBESHELL_PASSWORD`; keys from `--identity`.
 4. Reuse an existing session unless the user explicitly needs an independent parallel shell.
 
 Resolve the native executable in this order: `vibeshell` from `PATH`, `$HOME/.local/bin/vibeshell`, then `/Applications/VibeShell.app/Contents/MacOS/vibeshell` on macOS. Use the resolved absolute path for the rest of the workflow when necessary. If none exists, tell the user which lookup failed. Do not silently replace VibeShell with `ssh`, `scp`, or another client because that bypasses the saved VibeShell configuration and session model.
+
+## Add or delete saved servers
+
+```bash
+vibeshell servers add root@prod.example.com --name prod-web
+vibeshell servers add ubuntu@10.0.0.8:2222 --identity ~/.ssh/id_ed25519 --jump bastion --agent-forwarding
+vibeshell servers delete prod-web --yes
+```
+
+Display name defaults to the host. Secrets must not appear on the command line. Deletion requires explicit user authorization and `--yes`; it closes the profile's active sessions and removes its saved credentials. Use `vibeshell`, never the retired `vshell` executable.
+
+## Teleport profiles
+
+Use the same native CLI and shared service, not the retired `vshell` executable. The user must install a compatible `tsh` client and explicitly complete `tsh login` for the service's OS account before connecting. Never extract Teleport credentials, disable certificate checks or request additional access automatically.
+
+```bash
+vibeshell servers add alice@node-name --type teleport --proxy proxy.example:443 --name work-node
+vibeshell import teleport --proxy proxy.example:443 --user alice --dry-run --json
+vibeshell ssh work-node
+```
+
+The Unix login and a single explicit node are required; do not infer a login from the Teleport account or use label selectors/wildcards. `import auto` does not contact Teleport. File operations use real SFTP and require a standard external `sftp-server` executable on the node; unsupported configurations fail explicitly. Never substitute shell text operations or recursive `scp` for file/sync contracts. Raw SSH jump-host/port/agent-forwarding options and SSH tunnels are not supported for Teleport sessions.
 
 ## Import existing SSH configurations
 

@@ -12,6 +12,12 @@ Terminals, file editors and previews, and operations plugins can be arranged as 
 
 The performance panel opens beneath the active terminal, preserving command context and allowing the height to be adjusted. SFTP, plugin dashboards, file previews, Settings, dialogs and menus share a consistent surface/control system, with accessible hover, focus and disabled states. Existing SFTP edit, preview, archive extraction and directory synchronization functionality remains available.
 
+### Native server management and Teleport
+
+The supported `vibeshell` CLI can create saved servers and delete them with explicit confirmation. Profile, optional group, encrypted credentials and sync metadata commit atomically; secret whitespace is preserved and secret-bearing IPC/activity payloads are redacted. The retired `vshell` executable is not restored.
+
+Teleport profiles use the current shared-session owner, authenticated PTY readiness, bounded/cancellable subprocess I/O and actual command exit codes. File operations use the normal binary SFTP and ignore-aware synchronization paths rather than shell-text or recursive-copy substitutes. An explicitly logged-in compatible `tsh` client is required, and file access additionally requires an executable standard SFTP server on the node. See [Teleport support boundaries](docs/TELEPORT.md).
+
 ### Documentation and release alignment
 
 The English, Simplified Chinese and Japanese READMEs focus on practical workflows: mixing several terminals/plugins/previews in one window, command completion, editing and previewing files over SFTP, and reviewing Agent activity. Gallery images show the current interface with synthetic example data; the macOS glass screenshots were captured in an isolated virtual display rather than over an operator's desktop.

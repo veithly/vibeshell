@@ -22,6 +22,26 @@ pub struct Server {
     /// Whether to enable SSH agent forwarding
     #[serde(default)]
     pub agent_forwarding: bool,
+    /// Direct SSH versus Teleport (`tsh`) connections
+    #[serde(default)]
+    pub connection_kind: ConnectionKind,
+    /// Teleport proxy address, e.g. `teleport.example.com:443`
+    #[serde(default)]
+    pub teleport_proxy: Option<String>,
+}
+
+impl Server {
+    pub fn is_teleport(&self) -> bool {
+        self.connection_kind == ConnectionKind::Teleport
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionKind {
+    #[default]
+    Ssh,
+    Teleport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

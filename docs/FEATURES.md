@@ -22,11 +22,17 @@ Implementation: [server commands](../src-tauri/src/commands/server.rs), [session
 
 ### Importing existing configurations
 
-`vibeshell import` supports `auto`, `openssh`, `putty` and `tabby`, optional `--path`, preview-only `--dry-run` and structured `--json` output. OpenSSH parsing covers fields such as `Host`, `Include`, `IdentityFile`, `ProxyJump`, `RemoteCommand` and `ForwardAgent` metadata. It is an importer, not a complete OpenSSH configuration interpreter.
+`vibeshell import` supports `auto`, `openssh`, `putty` and `tabby`, optional `--path`, preview-only `--dry-run` and structured `--json` output. Explicit Teleport import uses `teleport --proxy HOST --user UNIX_LOGIN`; automatic discovery never contacts Teleport. OpenSSH parsing covers fields such as `Host`, `Include`, `IdentityFile`, `ProxyJump`, `RemoteCommand` and `ForwardAgent` metadata. It is an importer, not a complete OpenSSH configuration interpreter.
 
-Third-party stored passwords are not copied. Imported private-key paths reference local files; PuTTY `.ppk` keys require conversion to OpenSSH format. Review imported hosts and executable post-login settings before connecting. Use the desktop to add/edit/delete saved servers; the current CLI offers listing/import, not saved-server CRUD commands.
+Third-party stored passwords are not copied. Imported private-key paths reference local files; PuTTY `.ppk` keys require conversion to OpenSSH format. Review imported hosts and executable post-login settings before connecting. The desktop can add/edit/delete saved servers. The native CLI also supports `servers add` and explicitly confirmed `servers delete --yes`, with exact secret bytes, atomic profile/credential/outbox mutations and redacted IPC/activity output.
 
 Implementation: [importers](../src-tauri/src/ssh_import), [CLI parser](../cli/src/main.rs), [CLI installation guide](../cli/README.md).
+
+### Teleport connections
+
+Teleport profiles appear in the same connection launcher and use the current native `vibeshell` service. Authentication remains with an installed, explicitly logged-in `tsh` client. Terminal readiness is confirmed after authentication; quick/plugin commands preserve the selected node/login/proxy context and report actual exit status. Closing the owning session cancels its subprocess transports.
+
+File operations use binary SFTP, not shell-text or recursive-copy approximations. The node must allow execution of a standard external `sftp-server`; unsupported environments return an error. Ordinary overwrite protection, exact filenames, exclusion rules and sync accounting remain in effect. Raw SSH jump-host/port/agent-forwarding options, SSH tunnels through Teleport and mobile Teleport sessions are not supported. See [setup, limits and regression coverage](TELEPORT.md).
 
 ## Sessions and CLI
 
@@ -52,7 +58,7 @@ Implementation: [native CLI commands](../cli/src/commands), [IPC routing](../src
 | Commands | Purpose |
 | --- | --- |
 | `version`, `license` | Inspect the binary version and license/source notices |
-| `servers`, `import` | List saved targets and import existing profiles |
+| `servers`, `servers add`, `servers delete --yes`, `import` | List, create or explicitly delete saved targets; import existing profiles |
 | `ssh`, `ssh-session`, `attach`, `exec` | Connect, reuse a session, attach interactively or submit a command |
 | `sessions`, `kill` | Discover live reusable sessions and deliberately terminate them |
 | `send-key`, `send-secret` | Deliver named keys/literal input or protected secret stdin |

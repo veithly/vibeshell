@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use super::sync::{self, SyncEntityKind};
 use crate::storage::models::{
-    AuthType, CommandHistoryEntry, CommandSnippet, DatabaseConnection, PluginInstallation,
-    Recording, Server, TunnelConfig, TunnelType,
+    AuthType, CommandHistoryEntry, CommandSnippet, ConnectionKind, DatabaseConnection,
+    PluginInstallation, Recording, Server, TunnelConfig, TunnelType,
 };
 
 pub struct Database {
@@ -200,6 +200,8 @@ impl Database {
             "ALTER TABLE servers ADD COLUMN jump_host_id TEXT",
             "ALTER TABLE servers ADD COLUMN post_login_command TEXT",
             "ALTER TABLE servers ADD COLUMN agent_forwarding INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE servers ADD COLUMN connection_kind TEXT NOT NULL DEFAULT 'ssh'",
+            "ALTER TABLE servers ADD COLUMN teleport_proxy TEXT",
         ];
         for sql in &migrations {
             let _ = conn.execute(sql, []);
@@ -281,7 +283,24 @@ impl Database {
 
     /// Add a new server. Generates UUID and sets timestamps automatically.
     pub fn server_add(&self, server: &mut Server) -> Result<()> {
+        self.server_add_with_credentials(server, None, None)
+    }
+
+    /// Create a profile, optional group and encrypted credential in one commit.
+    /// Neither partial rows nor sync outbox entries survive a failed mutation.
+    pub fn server_add_with_credentials(
+        &self,
+        target: &mut Server,
+        group_name: Option<&str>,
+        credentials: Option<&CredentialUpdate>,
+    ) -> Result<()> {
+        crate::commands::server::validate_transport(target).map_err(anyhow::Error::msg)?;
+        if target.is_teleport() && credentials.is_some() {
+            anyhow::bail!("Teleport credentials are managed by tsh login");
+        }
         let mut conn = self.conn.lock().unwrap();
+        let mut staged = target.clone();
+        let server = &mut staged;
 
         // Generate UUID if not provided
         if server.id.is_empty() {
@@ -298,11 +317,65 @@ impl Database {
         let auth_type_str = auth_type_to_string(&server.auth_type);
 
         let tx = conn.transaction()?;
+        if let Some(name) = group_name {
+            let existing: Option<String> = tx
+                .query_row("SELECT id FROM groups WHERE name = ?1", [name], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            server.group_id = Some(match existing {
+                Some(id) => id,
+                None => {
+                    let group = Group {
+                        id: Uuid::new_v4().to_string(),
+                        name: name.into(),
+                        parent_id: None,
+                        color: "#808080".into(),
+                    };
+                    tx.execute(
+                        "INSERT INTO groups (id, name, parent_id, color) VALUES (?1, ?2, ?3, ?4)",
+                        rusqlite::params![group.id, group.name, group.parent_id, group.color],
+                    )?;
+                    sync::record_group_upsert(&tx, &group)?;
+                    group.id
+                }
+            });
+        }
+        if let Some(credentials) = credentials {
+            let secret = credentials.credential.as_deref().unwrap_or_default();
+            if secret.is_empty() {
+                anyhow::bail!("A non-empty password or private key is required");
+            }
+            let phrase = credentials.passphrase.as_deref().filter(|s| !s.is_empty());
+            if auth_type_str != "password" {
+                russh::keys::decode_secret_key(secret, phrase)
+                    .map_err(|_| anyhow::anyhow!("Private key or passphrase is invalid"))?;
+            }
+            let id = Uuid::new_v4().to_string();
+            let encrypted = encrypt_credential_value(secret)?;
+            let encrypted_phrase = if auth_type_str == "password" {
+                None
+            } else {
+                phrase.map(encrypt_credential_value).transpose()?
+            };
+            let key_path = if auth_type_str == "password" {
+                None
+            } else {
+                credentials.key_path.as_deref()
+            };
+            // INSERT rather than upsert: never overwrite an orphaned or shared
+            // credential with the same name while creating a new profile.
+            tx.execute(
+                "INSERT INTO server_credentials (id, server_name, auth_type, credential, passphrase, key_path, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![id, server.name, auth_type_str, encrypted, encrypted_phrase, key_path, now],
+            )?;
+            server.credential_id = Some(id);
+        }
         tx.execute(
             r#"INSERT INTO servers
                (id, name, host, port, username, auth_type, credential_id, group_id, tags, created_at, updated_at,
-                jump_host_id, post_login_command, agent_forwarding)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"#,
+                jump_host_id, post_login_command, agent_forwarding, connection_kind, teleport_proxy)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)"#,
             rusqlite::params![
                 server.id,
                 server.name,
@@ -318,12 +391,15 @@ impl Database {
                 server.jump_host_id,
                 server.post_login_command,
                 server.agent_forwarding as i32,
+                connection_kind_to_string(&server.connection_kind),
+                server.teleport_proxy,
             ],
         )?;
 
         sync::record_server_upsert(&tx, server, server.created_at, server.updated_at)?;
         tx.commit()?;
-
+        // Caller state is not updated on any failure.
+        *target = staged;
         Ok(())
     }
 
@@ -339,6 +415,10 @@ impl Database {
         server: &Server,
         update: Option<&CredentialUpdate>,
     ) -> Result<()> {
+        crate::commands::server::validate_transport(server).map_err(anyhow::Error::msg)?;
+        if server.is_teleport() && update.is_some() {
+            anyhow::bail!("Teleport credentials are managed by tsh login");
+        }
         let mut conn = self.conn.lock().unwrap();
 
         let now = Utc::now().timestamp();
@@ -346,11 +426,14 @@ impl Database {
         let auth_type_str = auth_type_to_string(&server.auth_type);
 
         let tx = conn.transaction()?;
-        let (old_name, old_auth): (String, String) = tx.query_row(
-            "SELECT name, auth_type FROM servers WHERE id = ?1",
+        let (old_name, old_auth, old_transport): (String, String, String) = tx.query_row(
+            "SELECT name, auth_type, connection_kind FROM servers WHERE id = ?1",
             [&server.id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
+        if old_transport != connection_kind_to_string(&server.connection_kind) {
+            anyhow::bail!("Create a new profile to change its transport; existing credentials and live sessions are preserved");
+        }
         let same_auth_family = (old_auth == "password") == (auth_type_str == "password");
         if !same_auth_family && update.is_none() {
             anyhow::bail!("Changing authentication requires a new password or private key; existing credentials were not changed");
@@ -430,7 +513,8 @@ impl Database {
             r#"UPDATE servers SET
                name = ?2, host = ?3, port = ?4, username = ?5, auth_type = ?6,
                credential_id = ?7, group_id = ?8, tags = ?9, updated_at = ?10,
-               jump_host_id = ?11, post_login_command = ?12, agent_forwarding = ?13
+               jump_host_id = ?11, post_login_command = ?12, agent_forwarding = ?13,
+               connection_kind = ?14, teleport_proxy = ?15
                WHERE id = ?1"#,
             rusqlite::params![
                 server.id,
@@ -446,6 +530,8 @@ impl Database {
                 server.jump_host_id,
                 server.post_login_command,
                 server.agent_forwarding as i32,
+                connection_kind_to_string(&server.connection_kind),
+                server.teleport_proxy,
             ],
         )?;
 
@@ -461,6 +547,7 @@ impl Database {
     pub fn server_delete(&self, id: &str) -> Result<()> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        tx.execute("DELETE FROM server_credentials WHERE server_name = (SELECT name FROM servers WHERE id = ?1)", [id])?;
         sync::detach_server_references(&tx, id, true)?;
         tx.execute("DELETE FROM servers WHERE id = ?1", [id])?;
         sync::record_local_delete(&tx, SyncEntityKind::Server, id)?;
@@ -494,6 +581,11 @@ impl Database {
             jump_host_id: row.get(11).unwrap_or(None),
             post_login_command: row.get(12).unwrap_or(None),
             agent_forwarding: agent_forwarding_int != 0,
+            connection_kind: string_to_connection_kind(
+                &row.get::<_, String>(14)
+                    .unwrap_or_else(|_| "ssh".to_string()),
+            ),
+            teleport_proxy: row.get(15).unwrap_or(None),
         })
     }
 }
@@ -515,6 +607,20 @@ fn string_to_auth_type(s: &str) -> AuthType {
         // (an empty passphrase means an unencrypted key).
         "key" | "key_with_passphrase" => AuthType::KeyWithPassphrase,
         _ => AuthType::Password, // Default fallback
+    }
+}
+
+fn connection_kind_to_string(kind: &ConnectionKind) -> &'static str {
+    match kind {
+        ConnectionKind::Ssh => "ssh",
+        ConnectionKind::Teleport => "teleport",
+    }
+}
+
+fn string_to_connection_kind(value: &str) -> ConnectionKind {
+    match value {
+        "teleport" => ConnectionKind::Teleport,
+        _ => ConnectionKind::Ssh,
     }
 }
 
@@ -1893,6 +1999,8 @@ mod tests {
 
     fn credential_test_server(db: &Database, name: &str, auth_type: AuthType) -> Server {
         let mut server = Server {
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
             id: String::new(),
             name: name.into(),
             host: "test.invalid".into(),
@@ -1910,6 +2018,99 @@ mod tests {
         };
         db.server_add(&mut server).unwrap();
         server
+    }
+
+    #[test]
+    fn profile_creation_rolls_back_every_mutation_and_sync_outbox() {
+        for table in [
+            "groups",
+            "server_credentials",
+            "servers",
+            "sync_outbox",
+            "sync_entity_state",
+        ] {
+            let db = test_db();
+            db.conn.lock().unwrap().execute_batch(&format!(
+                "CREATE TRIGGER injected_failure BEFORE INSERT ON {table} BEGIN SELECT RAISE(ABORT, 'injected failure'); END;"
+            )).unwrap();
+            let result = crate::commands::server::add_server_spec(
+                &db,
+                crate::commands::server::AddServerSpec {
+                    name: "new".into(),
+                    host: "host.invalid".into(),
+                    port: 22,
+                    username: "u".into(),
+                    auth_type: "password".into(),
+                    credential: Some(" secret ".into()),
+                    group_name: Some("new-group".into()),
+                    ..Default::default()
+                },
+            );
+            assert!(result.is_err(), "failure at {table} was ignored");
+            for checked in [
+                "groups",
+                "server_credentials",
+                "servers",
+                "sync_outbox",
+                "sync_entity_state",
+            ] {
+                let count: i64 = db
+                    .conn
+                    .lock()
+                    .unwrap()
+                    .query_row(&format!("SELECT COUNT(*) FROM {checked}"), [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(count, 0, "partial {checked} after failure at {table}");
+            }
+        }
+    }
+
+    #[test]
+    fn profile_deletion_rolls_back_secrets_references_and_outbox() {
+        for (table, operation) in [
+            ("server_credentials", "DELETE"),
+            ("servers", "DELETE"),
+            ("sync_outbox", "INSERT"),
+        ] {
+            let db = test_db();
+            let server = crate::commands::server::add_server_spec(
+                &db,
+                crate::commands::server::AddServerSpec {
+                    name: "keep".into(),
+                    host: "host.invalid".into(),
+                    port: 22,
+                    username: "u".into(),
+                    auth_type: "password".into(),
+                    credential: Some(" original ".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let count = || {
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .query_row("SELECT COUNT(*) FROM sync_outbox", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap()
+            };
+            let before = count();
+            db.conn.lock().unwrap().execute_batch(&format!("CREATE TRIGGER injected_failure BEFORE {operation} ON {table} BEGIN SELECT RAISE(ABORT, 'injected failure'); END;")).unwrap();
+            assert!(db.server_delete(&server.id).is_err());
+            assert!(db.server_get(&server.id).unwrap().is_some());
+            assert!(db.credential_get("keep").unwrap().unwrap().credential == " original ");
+            assert_eq!(count(), before);
+            db.conn
+                .lock()
+                .unwrap()
+                .execute_batch("DROP TRIGGER injected_failure")
+                .unwrap();
+            db.server_delete(&server.id).unwrap();
+            assert!(db.credential_get("keep").unwrap().is_none());
+        }
     }
 
     #[test]
@@ -2026,6 +2227,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
 
         db.server_add(&mut server).unwrap();
@@ -2097,6 +2300,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
         let mut server_b = Server {
             name: "history-b".to_string(),
@@ -2165,6 +2370,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
 
         let mut server2 = Server {
@@ -2182,6 +2389,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
 
         db.server_add(&mut server1).unwrap();

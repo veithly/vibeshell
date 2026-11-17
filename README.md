@@ -191,6 +191,7 @@ The native CLI needs no Node.js and also works on headless machines. After insta
 vibeshell import auto --dry-run
 vibeshell import auto
 vibeshell servers
+vibeshell servers add user@host --name staging --identity ~/.ssh/id_ed25519
 vibeshell ssh staging
 ```
 
@@ -204,6 +205,10 @@ vibeshell plugins list --installed --json
 ```
 
 [CLI installation and commands](cli/README.md) · [Feature and platform details](docs/FEATURES.md) · [Changelog](CHANGELOG.md)
+
+### Teleport nodes
+
+The development branch supports Teleport profiles in the desktop and native `vibeshell` CLI. Log in with `tsh`, add a node with `vibeshell servers add alice@node --type teleport --proxy proxy.example:443`, and use the same terminal, command and file workflows. File operations require a standard external SFTP server on the node; unsupported configurations fail explicitly. [Setup and supported scope](docs/TELEPORT.md).
 
 <a id="development"></a>
 ## Develop and contribute

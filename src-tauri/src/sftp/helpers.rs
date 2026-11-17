@@ -269,12 +269,18 @@ pub async fn sftp_delete_path(
 
 /// Recursively create directories via SFTP (equivalent to mkdir -p)
 pub async fn sftp_mkdir_recursive(sftp: &SftpSession, path: &str) -> Result<(), String> {
+    sftp_mkdir_recursive_counted(sftp, path).await.map(|_| ())
+}
+
+/// Count only successful MKDIR operations, not directories that already exist.
+pub async fn sftp_mkdir_recursive_counted(sftp: &SftpSession, path: &str) -> Result<usize, String> {
     // Try creating the directory directly first (fast path for single-level creation)
     if sftp.create_dir(path).await.is_ok() {
-        return Ok(());
+        return Ok(1);
     }
 
     // Walk path components and create each missing directory
+    let mut created = 0;
     let mut current = String::new();
     for component in path.split('/') {
         if component.is_empty() {
@@ -300,10 +306,12 @@ pub async fn sftp_mkdir_recursive(sftp: &SftpSession, path: &str) -> Result<(), 
                     current, create_error
                 ));
             }
+        } else {
+            created += 1;
         }
     }
 
-    Ok(())
+    Ok(created)
 }
 
 #[cfg(test)]

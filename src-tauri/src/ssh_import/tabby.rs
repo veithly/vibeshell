@@ -148,6 +148,8 @@ pub(super) fn parse(path: &Path, warnings: &mut Vec<String>) -> Result<Vec<Impor
             post_login_command: yaml_scripts(options).into_iter().next(),
             agent_forwarding: yaml_bool(options, "agentForward").unwrap_or(false),
             tags,
+            connection_kind: crate::storage::ConnectionKind::Ssh,
+            teleport_proxy: None,
         });
     }
 

@@ -28,7 +28,7 @@ use crate::sftp::helpers::{
 use crate::sftp::{
     effective_directory_transfer_options, transfer_directory_to_sftp, DirectoryTransferMode,
 };
-use crate::storage::models::{AuthType, Server};
+use crate::storage::models::{AuthType, ConnectionKind, Server};
 use crate::storage::Database;
 
 use super::approval::{AgentApprovalManager, ApprovalOutcome, ApprovalRequest};
@@ -835,6 +835,8 @@ async fn tool_server_add(state: &McpState, args: &Value) -> Result<String, Strin
         jump_host_id: None,
         post_login_command: None,
         agent_forwarding: false,
+        connection_kind: ConnectionKind::Ssh,
+        teleport_proxy: None,
     };
 
     state
@@ -1001,35 +1003,10 @@ async fn tool_session_create(state: &McpState, args: &Value) -> Result<String, S
         }
     }
 
-    // Look up saved credentials for this server
-    let cred = state
-        .database
-        .credential_get(&server_name)
-        .map_err(|e| format!("Failed to look up credentials: {}", e))?
-        .ok_or_else(|| {
-            format!(
-                "No saved credentials for server '{}'. Please save credentials in the VibeShell GUI first.",
-                server_name
-            )
-        })?;
-
-    // Convert the stored credential. Imported profiles may keep only a local
-    // private-key path, which is resolved immediately before connecting.
-    let ssh_cred = crate::session::SshCredential::from_stored(cred).map_err(|error| {
-        format!(
-            "Failed to load credentials for '{}': {}",
-            server_name, error
-        )
-    })?;
-
     // Create a real terminal session so the GUI and Agent share the same PTY.
     let session = state
         .session_manager
-        .create_with_credentials(
-            &server_name,
-            ssh_cred,
-            Some(crate::ssh::PtyConfig::default()),
-        )
+        .create_saved(&server_name, Some(crate::ssh::PtyConfig::default()))
         .await
         .map_err(|e| format!("Failed to connect to '{}': {}", server_name, e))?;
 

@@ -154,6 +154,8 @@ pub(super) fn parse(path: &Path, warnings: &mut Vec<String>) -> Result<Vec<Impor
             post_login_command: remote_command.filter(|value| !value.eq_ignore_ascii_case("none")),
             agent_forwarding: forward_agent.unwrap_or(false),
             tags: vec!["import:openssh".to_string()],
+            connection_kind: crate::storage::ConnectionKind::Ssh,
+            teleport_proxy: None,
         });
     }
 

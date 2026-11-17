@@ -536,7 +536,7 @@ mod tests {
         sync::atomic::{AtomicBool, Ordering},
     };
 
-    use crate::storage::{AuthType, CommandSnippet, Server};
+    use crate::storage::{AuthType, CommandSnippet, ConnectionKind, Server};
 
     use super::*;
 
@@ -677,6 +677,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: Some("secret-command".to_string()),
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
         source.server_add(&mut server).unwrap();
 
@@ -778,6 +780,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
         database.server_add(&mut server).unwrap();
 

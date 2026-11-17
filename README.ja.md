@@ -191,6 +191,7 @@ AI も連携させるなら、サーバー設定の後に上記の [AI 連携](#
 vibeshell import auto --dry-run
 vibeshell import auto
 vibeshell servers
+vibeshell servers add user@host --name staging --identity ~/.ssh/id_ed25519
 vibeshell ssh staging
 ```
 
@@ -204,6 +205,10 @@ vibeshell plugins list --installed --json
 ```
 
 [CLI のインストールとコマンド](cli/README.md) · [機能・プラットフォーム詳細](docs/FEATURES.md) · [変更履歴](CHANGELOG.md)
+
+### Teleport ノード
+
+開発ブランチでは、デスクトップとネイティブ `vibeshell` CLI で Teleport 接続を管理できます。`tsh` でログインしてから `vibeshell servers add alice@node --type teleport --proxy proxy.example:443` で登録し、同じターミナル・コマンド・ファイル操作を利用します。ファイル操作にはノード上で実行できる標準 SFTP サーバーが必要です。未対応の構成は明示的にエラーを返します。[設定と対応範囲](docs/TELEPORT.md)。
 
 <a id="development"></a>
 ## 開発とコントリビューション

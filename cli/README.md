@@ -27,6 +27,8 @@ vibeshell version
 vibeshell import auto --dry-run
 vibeshell import auto
 vibeshell servers
+vibeshell servers add user@host:2222 --name my-server --identity ~/.ssh/id_ed25519
+vibeshell servers delete my-server --yes
 vibeshell ssh <server>
 vibeshell sftp <server>
 vibeshell sftp --session ALIAS pwd
@@ -39,7 +41,13 @@ vibeshell daemon status
 vibeshell sessions
 ```
 
+`servers add` also accepts `--user`, `--port`, `--jump`, `--group`, repeatable `--tag`, `--agent-forwarding`, and `--post-login`. Passwords come from an already-set `SSH_PASSWORD` or `VIBESHELL_PASSWORD`; encrypted keys use `VIBESHELL_KEY_PASSPHRASE` or `SSH_KEY_PASSPHRASE`. Do not place actual secrets in command arguments or shell history. Secret whitespace is preserved. The profile, optional group, encrypted credentials and sync metadata commit together. Deletion requires `--yes`, closes that server's sessions, and removes its saved credentials atomically with its profile. Ambiguous names/IDs and malformed targets fail without deletion.
+
+The supported executable is `vibeshell`, not the retired `vshell` command. `vshell` remains only the internal Cargo package identifier used by existing build scripts.
+
 ## Import sources
+
+Teleport nodes can be added with `vibeshell servers add alice@node --type teleport --proxy proxy.example:443` or previewed with `vibeshell import teleport --proxy proxy.example:443 --user alice --dry-run`. Run `tsh login` explicitly first. The Unix login is required; automatic import never contacts Teleport. Terminal and command operations share the current service, while file operations require a standard external `sftp-server` executable on the node. See [Teleport setup and transport boundaries](../docs/TELEPORT.md).
 
 ```bash
 vibeshell import openssh --path ~/.ssh/config

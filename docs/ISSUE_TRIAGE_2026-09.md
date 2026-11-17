@@ -2,6 +2,10 @@
 
 Reviewed on **2026-09-29**. This document distinguishes implemented changes from proposed work. The application version remains 1.1.0; changing source does not update an installed application or publish a release.
 
+## November 17 integration follow-up
+
+The September decisions below are historical. PR #10 now preserves exact credentials, commits metadata/credentials/outbox atomically, redacts secret-bearing payloads and requires explicit deletion confirmation in the current native `vibeshell` CLI. It was merged after manual CI on the corrected head. PR #11's revision replaces shell-based file approximations with real SFTP, bounds and cancels subprocess I/O, verifies authenticated PTY readiness, and routes CLI/MCP/quick/plugin operations through the current shared session. See [Teleport support and verification boundaries](TELEPORT.md). These source changes do not publish or install a new release.
+
 ## Pull requests
 
 | PR | Decision | Evidence and remaining work |
