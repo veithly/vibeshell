@@ -27,6 +27,8 @@ import {
 import { IntegrationCard } from './IntegrationCard';
 import { CustomThemeEditor } from './CustomThemeEditor';
 import { AppearanceModeControl } from './AppearanceModeControl';
+import { GatewayPortControl } from './GatewayPortControl';
+import { NetworkProxyControl } from './NetworkProxyControl';
 import {
   Monitor,
   Palette,
@@ -1421,6 +1423,9 @@ export function Settings() {
       {/* Security Section */}
       {/* ================================================================== */}
       <SecuritySection />
+      <SettingsSection icon={<Shield className="h-5 w-5" />} title="Outbound proxy" description="Choose the route for VibeShell's native network traffic.">
+        <NetworkProxyControl />
+      </SettingsSection>
 
       {/* ================================================================== */}
       {/* Session Recording Section */}
@@ -1472,6 +1477,8 @@ export function Settings() {
               <dd className="font-mono text-xs text-tokyo-fg">{gatewayStatus?.protocolVersion ?? t('common.loading')}</dd>
             </div>
           </dl>
+          {gatewayStatus?.error && <p role="alert" className="px-4 py-2 text-sm text-tokyo-red">{gatewayStatus.error}</p>}
+          <GatewayPortControl />
         </div>
         </SettingsSection>
 

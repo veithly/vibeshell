@@ -48,6 +48,7 @@ import { AgentApprovalDialog } from './components/AgentApprovalDialog';
 import { WorkspaceChangesPanel } from './components/WorkspaceChangesPanel';
 import { isPluginCompatible, localizedPluginName } from './plugins/pluginUtils';
 import { WorkspaceToolbar } from './components/WorkspaceToolbar';
+import { ContainerPanel } from './components/ContainerPanel';
 import { FingerprintVerificationDialog, FingerprintManagerDialog } from './components/FingerprintDialog';
 import { SnippetManagerDialog } from './components/SnippetManager/SnippetManagerDialog';
 import { TunnelPanelDialog } from './components/TunnelPanel/TunnelPanelDialog';
@@ -141,6 +142,7 @@ function App() {
   const [isSnippetManagerOpen, setIsSnippetManagerOpen] = useState(false);
   const [isTunnelPanelOpen, setIsTunnelPanelOpen] = useState(false);
   const [isSftpOpen, setIsSftpOpen] = useState(false);
+  const [containerParentId, setContainerParentId] = useState<string | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isWorkspaceChangesOpen, setIsWorkspaceChangesOpen] = useState(false);
   const [isPluginDockOpen, setIsPluginDockOpen] = useState(false);
@@ -604,6 +606,13 @@ function App() {
       return;
     }
 
+    if (session.container) {
+      const parent = useSessionStore.getState().getSession(session.container.parent_session_id);
+      if (parent?.state === 'connected') setContainerParentId(parent.id);
+      else notifyWarning('Container parent disconnected', 'Reconnect the host session, then select the container again. This container tab will never reconnect as a host shell.');
+      return;
+    }
+
     const server = await resolveServerForSession(session);
     if (!server) {
       notifyWarning('Server Not Found', `Could not find a saved server for ${session.serverName}.`);
@@ -930,7 +939,7 @@ function App() {
                     data-tooltip={t('sidebar.sftp')}
                     aria-label={t('sidebar.sftp')}
                     aria-pressed={isSftpOpen}
-                    disabled={!activeSession || activeSession.state !== 'connected'}
+                    disabled={!activeSession || activeSession.state !== 'connected' || !!activeSession.container}
                     onClick={handleOpenSftp}
                   >
                     <FolderOpen className="h-4 w-4" aria-hidden="true" />
@@ -960,12 +969,14 @@ function App() {
                     label={t('common.more')}
                     anyPressed={isWorkspaceChangesOpen || isPluginDockOpen}
                     items={[
+                      { id: 'containers', label: 'Docker containers', icon: <Blocks className="h-4 w-4" />, disabled: !activeSession || activeSession.sessionType !== 'ssh' || activeSession.state !== 'connected' || !!activeSession.container, onSelect: () => { if (activeSession) setContainerParentId(activeSession.id); } },
                       ...(activeSession ? plugins.filter((p) => p.manifest.id !== 'server-performance' && isPluginCompatible(p, activeSession.sessionType)).map((p) => ({
                         id: `plugin-${p.manifest.id}`, label: localizedPluginName(t, p), icon: <Blocks className="h-4 w-4" />, onSelect: () => handleOpenPluginTab(p.manifest.id),
                       })) : []),
                       ...(runtimeCapabilities.backgroundTunnels ? [{
                         id: 'tunnels',
                         label: t('sidebar.tunnels'),
+                        disabled: !!activeSession?.container,
                         icon: <ArrowRightLeft className="h-4 w-4" />,
                         onSelect: handleOpenTunnels,
                       }] : []),
@@ -1192,14 +1203,15 @@ function App() {
                 </div>
               </div>
 
-              <SftpPanel
+              {!activeSession?.container && <SftpPanel
                 ref={sftpPanelRef}
                 sessionId={activeSession?.id}
                 sessionType={activeSession?.sessionType}
                 defaultCollapsed={true}
                 dock="right"
                 onCollapsedChange={handleSftpCollapsedChange}
-              />
+              />}
+              {containerParentId && <ContainerPanel key={containerParentId} parentId={containerParentId} onConnected={handleConnected} onClose={() => setContainerParentId(null)} />}
               <WorkspaceChangesPanel
                 open={isWorkspaceChangesOpen}
                 cwd={activeSession?.purpose === 'coding_agent' ? activeSession.cwd : undefined}

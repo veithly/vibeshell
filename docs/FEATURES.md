@@ -36,6 +36,14 @@ File operations use binary SFTP, not shell-text or recursive-copy approximations
 
 ## Sessions and CLI
 
+### Independent Docker sessions
+
+**More → Docker containers** lists running containers and a collapsed stopped group on a connected SSH host. Opening a container creates an independently owned PTY tied to its full immutable ID, optional user and working directory. CLI terminal input, MCP/quick exec and plugins preserve this container context, including when the GUI attaches to daemon-owned sessions. Closing a child does not stop the container or host; container exit and parent disconnect do not fall back to a host shell. This supports direct SSH parents; container SFTP/tunnels, nested children and Teleport/local parents fail explicitly rather than being approximated. [Setup and acceptance tests](NETWORK_AND_CONTAINERS.md#persistent-docker-sessions--9).
+
+### Outbound routing
+
+Settings and `vibeshell proxy` configure Direct, System environment or Custom HTTP/HTTPS/SOCKS4/4a/5/5h routes. Native SSH probes/authentication, cloud sync, database clients, AI requests, consented remote Markdown images and signed updates use the selected policy. Proxy errors never fall back to direct access, passwords are encrypted locally, and host-key/TLS/update-signature checks remain enforced. External commands and the system browser have their own networking; the integrated external `tsh` transport refuses incompatible proxy configurations. Existing connections must be reconnected to change route. [Protocol and scope details](NETWORK_AND_CONTAINERS.md#outbound-network-route--12).
+
 ### Ownership and execution context
 
 | Surface | Execution context | Important consequence |
@@ -61,6 +69,8 @@ Implementation: [native CLI commands](../cli/src/commands), [IPC routing](../src
 | `servers`, `servers add`, `servers delete --yes`, `import` | List, create or explicitly delete saved targets; import existing profiles |
 | `ssh`, `ssh-session`, `attach`, `exec` | Connect, reuse a session, attach interactively or submit a command |
 | `sessions`, `kill` | Discover live reusable sessions and deliberately terminate them |
+| `containers list`, `containers open` | Discover containers and open a persistent child of an existing SSH session |
+| `proxy show`, `proxy set` | Inspect or persist device-local outbound routing without exposing proxy passwords |
 | `send-key`, `send-secret` | Deliver named keys/literal input or protected secret stdin |
 | `sftp` | Direct or interactive file operations |
 | `rg` | Remote search, using ripgrep with grep fallback |
@@ -104,6 +114,8 @@ The History panel identifies user and CLI-originated operations with different c
 Guarded agent requests are reviewed through an approval dialog. Settings include the guard switch, independent-exec coverage and custom force-review/allow patterns. Broad allow patterns or temporary automatic approval change the protection level. Plugin execution also checks installed/enabled state, declared/granted permissions, session type, input schema, confirmation and sudo eligibility. Reading a reference does not install or authorize a plugin.
 
 The desktop gateway binds to loopback and uses an authentication token. Its local discovery manifest contains sensitive connection material. Do not paste it into public documentation, expose the gateway to a network, or replace token-based access with an unauthenticated endpoint. The installed native CLI Skill remains the straightforward agent workflow.
+
+The Gateway port can be persisted in Settings: `0` selects automatically and `1–65535` fixes the port after restart. Occupied ports leave the app and Settings accessible with an error; no alternate port or privilege escalation is attempted.
 
 Approval classification is not a sandbox, malware detector or universal proof of safety. Submission and completion are different history states. Sensitive terminal output can still be recorded or displayed if a remote program echoes it.
 
@@ -259,4 +271,4 @@ Implementation and workflow: [capability contract](../src-tauri/src/platform/cap
 
 ### Explicit non-claims
 
-VibeShell does not currently promise universal MFA/hardware-token/Teleport support, a persistent Docker/Kubernetes shell, a remote plugin registry, native translucent material on every platform, built-in terminal recording playback, encryption of all settings/files, a live-session cloud backup, or full metric parity across local operating systems. These limits are part of the feature description, not hidden behind screenshots.
+VibeShell does not currently promise universal MFA/hardware-token/Teleport support, persistent Kubernetes shells, container SFTP or every Docker shell/parent transport, a remote plugin registry, native translucent material on every platform, built-in terminal recording playback, encryption of all settings/files, a live-session cloud backup, or full metric parity across local operating systems. These limits are part of the feature description, not hidden behind screenshots.

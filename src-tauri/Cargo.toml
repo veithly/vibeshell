@@ -51,7 +51,10 @@ tokio = { version = "1", features = ["sync", "io-std", "io-util", "rt-multi-thre
 interprocess = "2"
 axum = "0.7"
 tower = { version = "0.5", features = ["util"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "socks"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
+percent-encoding = "2"
 glob = "0.3"
 serde_yaml = "0.9"
 

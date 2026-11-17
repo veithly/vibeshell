@@ -226,8 +226,14 @@ async fn pg_connect(endpoint: &DbEndpoint) -> Result<tokio_postgres::Client> {
             config.dbname("postgres");
         }
     }
+    let stream = crate::network::connect(
+        &crate::network::Route::current()?,
+        &endpoint.host,
+        endpoint.port,
+    )
+    .await?;
     let (client, connection) = config
-        .connect(tokio_postgres::NoTls)
+        .connect_raw(stream, tokio_postgres::NoTls)
         .await
         .map_err(|error| anyhow!("PostgreSQL connection failed: {error}"))?;
     tokio::spawn(async move {
@@ -288,10 +294,14 @@ async fn pg_query(
         .map_err(|_| anyhow!("PostgreSQL query timed out after 15s"))?
 }
 
-async fn mysql_connect(endpoint: &DbEndpoint) -> Result<mysql_async::Conn> {
+async fn mysql_connect(
+    endpoint: &DbEndpoint,
+) -> Result<(mysql_async::Conn, crate::network::TcpBridge)> {
+    let bridge = crate::network::TcpBridge::start(&endpoint.host, endpoint.port).await?;
     let builder = mysql_async::OptsBuilder::default()
-        .ip_or_hostname(endpoint.host.as_str())
-        .tcp_port(endpoint.port)
+        .ip_or_hostname("127.0.0.1")
+        .tcp_port(bridge.port)
+        .prefer_socket(false)
         .user(Some(endpoint.username.as_str()))
         .pass(if endpoint.password.is_empty() {
             None
@@ -299,9 +309,10 @@ async fn mysql_connect(endpoint: &DbEndpoint) -> Result<mysql_async::Conn> {
             Some(endpoint.password.as_str())
         })
         .db_name(endpoint.database.as_deref());
-    mysql_async::Conn::new(builder)
+    let conn = mysql_async::Conn::new(builder)
         .await
-        .map_err(|error| anyhow!("MySQL connection failed: {error}"))
+        .map_err(|error| anyhow!("MySQL connection failed: {error}"))?;
+    Ok((conn, bridge))
 }
 
 fn mysql_value_to_json(value: mysql_async::Value) -> Value {
@@ -366,7 +377,7 @@ async fn mysql_query(
     use mysql_async::prelude::Queryable;
 
     let run = async {
-        let mut conn = mysql_connect(endpoint).await?;
+        let (mut conn, _bridge) = mysql_connect(endpoint).await?;
         let mut result = conn
             .query_iter(sql)
             .await

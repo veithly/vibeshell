@@ -47,6 +47,7 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Shared state for the MCP server
 #[derive(Clone)]
 pub struct McpState {
+    owner_routing: bool,
     /// Database for server configurations
     pub database: Arc<Database>,
     /// Session manager for SSH sessions
@@ -61,6 +62,7 @@ impl McpState {
     pub fn new(database: Arc<Database>, session_manager: Arc<SessionManager>) -> Self {
         let agent_input_tracker = session_manager.agent_input_tracker.clone();
         Self {
+            owner_routing: false,
             database,
             session_manager,
             activity_emitter: None,
@@ -75,6 +77,11 @@ impl McpState {
         emitter: Arc<dyn Fn(AgentActivityEvent) + Send + Sync>,
     ) -> Self {
         self.activity_emitter = Some(emitter);
+        self
+    }
+
+    pub fn with_owner_routing(mut self) -> Self {
+        self.owner_routing = true;
         self
     }
 
@@ -211,6 +218,10 @@ pub struct McpServer {
 }
 
 impl McpServer {
+    pub fn with_owner_routing(mut self) -> Self {
+        self.state.owner_routing = true;
+        self
+    }
     /// Create a new MCP server with the given database and session manager
     pub fn new(database: Arc<Database>, session_manager: Arc<SessionManager>) -> Self {
         Self {
@@ -472,7 +483,7 @@ async fn handle_tools_call(
 
     match result {
         Ok(content) => {
-            let session_id = if name == "session_create" {
+            let session_id = if matches!(name, "session_create" | "container_open") {
                 serde_json::from_str::<Value>(&content)
                     .ok()
                     .and_then(|value| value.get("id").and_then(Value::as_str).map(str::to_string))
@@ -584,6 +595,48 @@ pub async fn execute_tool_public(
 }
 
 async fn execute_tool(state: &McpState, name: &str, args: &Value) -> Result<String, String> {
+    if state.owner_routing && owner_tool(name) {
+        let field = if name.starts_with("container_") {
+            "parent_session_id"
+        } else if name == "plugin_execute" && args.get("sessionId").is_some() {
+            "sessionId"
+        } else {
+            "session_id"
+        };
+        if let Some(reference) = args.get(field).and_then(Value::as_str) {
+            if state.session_manager.resolve(reference).await.is_err() {
+                let sessions = owner_sessions().await?;
+                let matches: Vec<_> = sessions
+                    .iter()
+                    .filter(|s| {
+                        s.id == reference || (reference.len() >= 4 && s.id.starts_with(reference))
+                    })
+                    .collect();
+                let session = match matches.as_slice() {
+                    [session] => session,
+                    [] => return Err("Session is not present in the owning service".into()),
+                    _ => return Err("Ambiguous owner session reference".into()),
+                };
+                let mut arguments = args.clone();
+                arguments[field] = json!(session.id);
+                match crate::commands::session::ipc_send(crate::ipc::IpcMessage::McpSessionCall {
+                    tool: name.into(),
+                    arguments: arguments.into(),
+                })
+                .await?
+                {
+                    crate::ipc::IpcMessage::ServiceResult { value } => {
+                        return value
+                            .as_str()
+                            .map(str::to_owned)
+                            .ok_or_else(|| "Invalid owner response".into())
+                    }
+                    crate::ipc::IpcMessage::Error { message } => return Err(message),
+                    _ => return Err("Update the VibeShell service for MCP owner routing".into()),
+                }
+            }
+        }
+    }
     match name {
         "plugin_list" => serde_json::to_string(&crate::plugins::agent::list(
             &state.database,
@@ -659,6 +712,42 @@ async fn execute_tool(state: &McpState, name: &str, args: &Value) -> Result<Stri
 
         // Session Management
         "session_list" => tool_session_list(state).await,
+        "container_list" => {
+            let id = args
+                .get("parent_session_id")
+                .and_then(Value::as_str)
+                .ok_or("parent_session_id is required")?;
+            let parent = state
+                .session_manager
+                .resolve(id)
+                .await
+                .map_err(|e| e.to_string())?;
+            serde_json::to_string(
+                &state
+                    .session_manager
+                    .list_containers(&parent.id)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())
+        }
+        "container_open" => {
+            let mut request: crate::session::container::ContainerOpenRequest =
+                serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
+            request.parent_session_id = state
+                .session_manager
+                .resolve(&request.parent_session_id)
+                .await
+                .map_err(|e| e.to_string())?
+                .id
+                .clone();
+            let session = state
+                .session_manager
+                .create_container(request)
+                .await
+                .map_err(|e| e.to_string())?;
+            serde_json::to_string(&session.get_info().await).map_err(|e| e.to_string())
+        }
         "session_create" => tool_session_create(state, args).await,
         "session_attach" => tool_session_attach(state, args).await,
         "session_detach" => tool_session_detach(state, args).await,
@@ -783,6 +872,57 @@ async fn resolve_session(
         .resolve(reference)
         .await
         .map_err(|e| e.to_string())
+}
+
+fn owner_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "container_list"
+            | "container_open"
+            | "session_attach"
+            | "session_detach"
+            | "session_kill"
+            | "session_send_input"
+            | "session_read"
+            | "session_resize"
+            | "exec"
+            | "rg"
+            | "plugin_execute"
+            | "sftp_ls"
+            | "sftp_read"
+            | "sftp_write"
+            | "sftp_upload"
+            | "sftp_download"
+            | "sftp_upload_directory"
+            | "sftp_sync_directory"
+            | "sftp_mkdir"
+            | "sftp_rm"
+            | "sftp_mv"
+            | "get_content"
+            | "edit_file"
+            | "add_file"
+    )
+}
+
+async fn owner_sessions() -> Result<Vec<crate::ipc::IpcSessionInfo>, String> {
+    match crate::commands::session::ipc_send(crate::ipc::IpcMessage::ListSessions).await? {
+        crate::ipc::IpcMessage::SessionList { sessions } => Ok(sessions),
+        crate::ipc::IpcMessage::Error { message } => Err(message),
+        _ => Err("Cannot list sessions from their owner".into()),
+    }
+}
+
+/// Called only by the private per-user IPC owner. Deliberately has no GUI
+/// approval bypass: guarded operations without an approval UI fail closed.
+pub(crate) async fn execute_owner_tool(
+    state: &McpState,
+    name: &str,
+    args: &Value,
+) -> Result<String, String> {
+    if !owner_tool(name) || state.owner_routing {
+        return Err("Unsupported owner-routed tool".into());
+    }
+    execute_tool(state, name, args).await
 }
 
 async fn tool_server_add(state: &McpState, args: &Value) -> Result<String, String> {
@@ -956,7 +1096,28 @@ async fn tool_server_delete(state: &McpState, args: &Value) -> Result<String, St
 // === Session Management Tool Implementations ===
 
 async fn tool_session_list(state: &McpState) -> Result<String, String> {
-    let sessions = state.session_manager.list().await;
+    let mut sessions = state.session_manager.list().await;
+    if state.owner_routing {
+        let remote = owner_sessions().await?;
+        for info in remote {
+            if !sessions.iter().any(|s| s.id == info.id) {
+                sessions.push(crate::session::SessionInfo {
+                    id: info.id,
+                    server_id: info.server_id,
+                    server_name: info.server_name,
+                    container: info.container,
+                    state: match info.state.as_str() {
+                        "connected" => crate::session::SessionState::Connected,
+                        "connecting" => crate::session::SessionState::Connecting,
+                        "error" => crate::session::SessionState::Error,
+                        _ => crate::session::SessionState::Disconnected,
+                    },
+                    created_at: info.created_at,
+                    clients: info.clients,
+                });
+            }
+        }
+    }
     let session_ids: Vec<&str> = sessions.iter().map(|session| session.id.as_str()).collect();
     let compact: Vec<Value> = sessions
         .iter()
@@ -966,6 +1127,7 @@ async fn tool_session_list(state: &McpState) -> Result<String, String> {
                 "server": &session.server_name,
                 "state": &session.state,
                 "clients": session.clients,
+                "container": &session.container,
             })
         })
         .collect();

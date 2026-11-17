@@ -206,6 +206,10 @@ vibeshell plugins list --installed --json
 
 [CLI 安装和更多命令](cli/README.md) · [功能与平台说明](docs/FEATURES.md) · [更新记录](CHANGELOG.md)
 
+### 容器会话与网络设置
+
+**容器也能单独开终端。** 在 SSH 会话的 **更多 → Docker containers** 中选择运行中的容器，终端、原生 CLI、MCP 和插件命令会保持在该容器内；已停止的容器不会被自动启动。设置中还可配置 HTTP/HTTPS/SOCKS 出站代理和固定 Agent Gateway 端口。[配置方法与支持范围](docs/NETWORK_AND_CONTAINERS.md)。
+
 ### Teleport 节点
 
 开发分支支持在桌面和原生 `vibeshell` CLI 中管理 Teleport 连接。先用 `tsh` 登录，再执行 `vibeshell servers add alice@node --type teleport --proxy proxy.example:443`，即可沿用终端、命令和文件工作流。文件操作要求节点提供可执行的标准 SFTP 服务端；不支持的配置会明确报错。[配置方法与支持范围](docs/TELEPORT.md)。

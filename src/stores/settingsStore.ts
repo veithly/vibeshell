@@ -28,6 +28,8 @@ export interface AiTool {
 
 /** Status of the Agent Gateway hosted by the VibeShell GUI. */
 export interface AgentGatewayStatus {
+  configuredPort?: number;
+  error?: string | null;
   running: boolean;
   endpoint: string | null;
   manifestPath: string;

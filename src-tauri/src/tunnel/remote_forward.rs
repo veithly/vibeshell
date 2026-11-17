@@ -92,8 +92,9 @@ pub(crate) async fn run_remote_forward(
                 connections.spawn(async move {
                     let _active = ActiveConnection::new(&stats.active_connections);
                     let result = async {
-                        let tcp = tokio::time::timeout(Duration::from_secs(10),
-                            tokio::net::TcpStream::connect((host.as_str(), local_port)))
+                        let route = crate::network::Route::current()?;
+                        let tcp = tokio::time::timeout(Duration::from_secs(15),
+                            crate::network::connect(&route, host.as_str(), local_port))
                             .await.context("Local forward destination timed out")??;
                         bridge(channel.into_stream(), tcp, &stats.bytes_in, &stats.bytes_out).await?;
                         Ok::<(), anyhow::Error>(())

@@ -131,6 +131,8 @@ Click the performance icon and **CPU, memory, disk and network panels open benea
 
 For a closer look, open a tool for the current session: inspect Docker logs, explore a database, check listening ports, or manage services and scheduled jobs.
 
+**Open a container as its own terminal.** From an SSH session, choose **More → Docker containers** and select a running container. Its terminal, native CLI, MCP and plugin commands stay in that container; stopped containers stay stopped. Settings also provides HTTP/HTTPS/SOCKS outbound routing and a persistent Agent Gateway port. [Setup and supported scope](docs/NETWORK_AND_CONTAINERS.md).
+
 <details>
 <summary>Explore all 12 built-in operations plugins</summary>
 

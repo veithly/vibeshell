@@ -57,6 +57,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Configure application outbound routing (not the Teleport server proxy).
+    Proxy {
+        #[command(subcommand)]
+        command: commands::proxy::ProxyCommand,
+    },
+    /// Discover containers and open independent container sessions.
+    Containers {
+        #[command(subcommand)]
+        command: commands::container::ContainerCommand,
+    },
     /// Show version information
     Version,
 
@@ -634,6 +644,8 @@ fn run() -> Result<()> {
     }
 
     match cli.command {
+        Some(Commands::Proxy { command }) => commands::proxy::run(command),
+        Some(Commands::Containers { command }) => commands::container::run(command),
         Some(Commands::Plugins { command }) => commands::plugins::run(command),
         Some(Commands::SendSecret { session_id, enter }) => {
             use std::io::{IsTerminal, Read};

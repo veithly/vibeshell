@@ -10,6 +10,7 @@ pub mod ipc;
 pub mod local_shell;
 pub mod logging;
 pub mod mcp;
+pub mod network;
 pub mod platform;
 pub mod plugins;
 pub mod remote_tools;
@@ -197,6 +198,8 @@ fn get_agent_gateway_status(gateway: tauri::State<'_, AgentGateway>) -> AgentGat
 #[cfg(any(target_os = "android", target_os = "ios"))]
 fn get_agent_gateway_status() -> AgentGatewayStatus {
     AgentGatewayStatus {
+        configured_port: 0,
+        error: None,
         running: false,
         endpoint: None,
         manifest_path: String::new(),
@@ -249,6 +252,7 @@ pub fn run() {
             }
 
             let database = Arc::new(Database::new_at(platform::database_path(&app_data_dir))?);
+            network::initialize(database.clone());
             let session_manager = Arc::new(SessionManager::new(database.clone()));
             let sftp_state = Arc::new(SftpState::new());
             let fingerprint_state =
@@ -424,6 +428,15 @@ pub fn run() {
             get_app_version,
             get_runtime_capabilities,
             get_agent_gateway_status,
+            commands::container::container_list,
+            commands::container::container_open,
+            commands::settings::get_gateway_port,
+            commands::settings::set_gateway_port,
+            commands::network::get_network_proxy,
+            commands::network::set_network_proxy,
+            commands::network::network_request,
+            commands::network::network_cancel,
+            commands::network::network_check_update,
             // Agent command guard
             cancel_agent_auto_approve,
             get_agent_guard_config,

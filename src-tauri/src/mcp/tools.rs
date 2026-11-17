@@ -35,6 +35,8 @@ impl ToolDefinition {
 /// Returns all tool definitions for the MCP server
 pub fn get_tool_definitions() -> Vec<ToolDefinition> {
     vec![
+        ToolDefinition::new("container_list", "List running and stopped Docker containers on an existing SSH session. Does not start containers or elevate permissions.", json!({"type":"object","properties":{"parent_session_id":{"type":"string"}},"required":["parent_session_id"],"additionalProperties":false})),
+        ToolDefinition::new("container_open", "Open an independent persistent PTY in a running Docker container. Returns a session ID for terminal, exec and plugin operations scoped to the immutable container ID. Closing it does not stop the container. Container SFTP and host tunnels are explicitly unsupported.", json!({"type":"object","properties":{"parent_session_id":{"type":"string"},"container":{"type":"string"},"user":{"type":"string"},"workdir":{"type":"string"},"shell":{"type":"string","enum":["/bin/sh","/bin/bash","/bin/ash","/bin/zsh"]}},"required":["parent_session_id","container"],"additionalProperties":false})),
         plugin_list_tool(),
         plugin_describe_tool(),
         plugin_execute_tool(),
@@ -969,7 +971,7 @@ mod tests {
         let tools = get_tool_definitions();
 
         // Includes the three shared plugin discovery/execution tools.
-        assert_eq!(tools.len(), 31);
+        assert_eq!(tools.len(), 33);
         for name in ["plugin_list", "plugin_describe", "plugin_execute"] {
             assert!(tools.iter().any(|tool| tool.name == name));
         }
@@ -1025,7 +1027,7 @@ mod tests {
     #[test]
     fn compact_definitions_drop_repeated_schema_prose() {
         let tools = get_compact_tool_definitions();
-        assert_eq!(tools.len(), 31);
+        assert_eq!(tools.len(), 33);
         let encoded = serde_json::to_string(&tools).unwrap();
         assert!(!encoded.contains("Filter servers by group ID"));
         assert!(!encoded.contains("\"default\""));

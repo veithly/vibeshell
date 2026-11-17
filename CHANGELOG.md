@@ -2,6 +2,10 @@
 
 ## 1.2.0 — Unreleased
 
+### Container sessions, outbound routing and Gateway preferences
+
+Running Docker containers can open as independent persistent child sessions, with a shared immutable container context across terminal/CLI/MCP/plugin execution and explicit teardown isolation. Native outbound requests support HTTP/HTTPS/SOCKS4/4a/5/5h routing, encrypted proxy credentials and fail-closed errors. Agent Gateway ports are configurable and persisted, with occupied-port errors that leave Settings accessible. See [setup and support boundaries](docs/NETWORK_AND_CONTAINERS.md). These changes do not publish a release or replace an installed application.
+
 ### A more flexible, translucent desktop workspace
 
 The macOS desktop uses native translucent window materials, with light, dark and system-following appearances. The tab strip shares the window titlebar; SFTP, performance, history and more actions have compact icon-only controls. Theme selection and separate window/terminal background controls live in Settings, rather than being scattered through the top-level menu. The terminal remains readable over translucent surfaces, with reduced-transparency fallbacks.

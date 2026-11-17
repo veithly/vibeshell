@@ -76,6 +76,7 @@ impl TeleportTarget {
         timeout: Duration,
         cap: usize,
     ) -> Result<crate::ssh::client::CommandResult> {
+        crate::network::require_native_route_compatible_transport("Teleport tsh")?;
         let output = process::run(
             &self.binary,
             &self.ssh_args(false, command),
@@ -100,6 +101,7 @@ impl TeleportTarget {
     }
 
     pub async fn open_sftp(&self) -> Result<russh_sftp::client::SftpSession> {
+        crate::network::require_native_route_compatible_transport("Teleport tsh")?;
         // Execute a real protocol server; never approximate SFTP with cat/ls/scp.
         // No path supplied by a file request is interpolated into this command.
         const SERVER: &str = "if command -v sftp-server >/dev/null 2>&1; then exec sftp-server; fi; for p in /usr/lib/openssh/sftp-server /usr/libexec/openssh/sftp-server /usr/lib/ssh/sftp-server /usr/libexec/sftp-server; do if test -x \"$p\"; then exec \"$p\"; fi; done; printf '%s\\n' 'VibeShell: a standard sftp-server executable is required on this Teleport node' >&2; exit 127";
@@ -200,6 +202,7 @@ pub fn parse_tsh_ls_json(json: &str) -> Result<Vec<String>> {
 /// Import requires an explicit proxy and Unix login. A Teleport identity such
 /// as an email address is not an operating-system login and must not be guessed.
 pub fn preview_nodes(proxy: &str, login: &str) -> Result<Vec<String>> {
+    crate::network::require_native_route_compatible_transport("Teleport tsh")?;
     let target = TeleportTarget::new(proxy, login, "preview")?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

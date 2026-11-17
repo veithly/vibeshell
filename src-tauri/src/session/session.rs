@@ -20,6 +20,8 @@ pub enum SessionState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<super::container::ContainerContext>,
     pub id: String,
     pub server_id: String,
     pub server_name: String,
@@ -29,6 +31,7 @@ pub struct SessionInfo {
 }
 
 pub struct Session {
+    pub container: Option<super::container::ContainerContext>,
     teleport_target: Mutex<Option<crate::teleport::TeleportTarget>>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     teleport_pty: Mutex<Option<Arc<crate::teleport::TeleportPty>>>,
@@ -70,6 +73,7 @@ impl Session {
         output_tx: broadcast::Sender<Vec<u8>>,
     ) -> Self {
         Self {
+            container: None,
             teleport_target: Mutex::new(None),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             teleport_pty: Mutex::new(None),
@@ -165,7 +169,7 @@ impl Session {
                     return SessionState::Disconnected;
                 }
             }
-            let client = self.get_ssh_client().await;
+            let client = self.ssh_client.lock().await.clone();
             if let Some(client) = client {
                 if !client.is_shell_open().await {
                     return SessionState::Disconnected;
@@ -177,6 +181,7 @@ impl Session {
 
     pub async fn get_info(&self) -> SessionInfo {
         SessionInfo {
+            container: self.container.clone(),
             id: self.id.clone(),
             server_id: self.server_id.clone(),
             server_name: self.server_name.clone(),
@@ -313,6 +318,10 @@ impl Session {
     }
 
     pub async fn get_ssh_client(&self) -> Option<SshClient> {
+        // A host handle would bypass container scope for tunnels and probes.
+        if self.container.is_some() {
+            return None;
+        }
         self.ssh_client.lock().await.clone()
     }
 
@@ -320,6 +329,9 @@ impl Session {
     pub async fn get_ssh_handle_arc(
         &self,
     ) -> Option<Arc<tokio::sync::Mutex<Option<russh::client::Handle<ClientHandler>>>>> {
+        if self.container.is_some() {
+            return None;
+        }
         let ssh_guard = self.ssh_client.lock().await;
         (*ssh_guard).as_ref().map(|client| client.session_arc())
     }
@@ -337,6 +349,17 @@ impl Session {
         command: &str,
         stdin: Option<&str>,
     ) -> Result<String> {
+        let wrapped = self
+            .container
+            .as_ref()
+            .map(|context| context.command(command, false));
+        let command = wrapped.as_deref().unwrap_or(command);
+        if self.container.is_some() {
+            anyhow::ensure!(
+                self.get_state().await == SessionState::Connected,
+                "Container session is closed; no host command was executed"
+            );
+        }
         if let Some(target) = self.teleport_target().await {
             let result = target
                 .exec(command, stdin, Duration::from_secs(60), 8 * 1024 * 1024)
@@ -378,6 +401,17 @@ impl Session {
         &self,
         command: &str,
     ) -> Result<crate::ssh::client::CommandResult> {
+        let wrapped = self
+            .container
+            .as_ref()
+            .map(|context| context.command(command, false));
+        let command = wrapped.as_deref().unwrap_or(command);
+        if self.container.is_some() {
+            anyhow::ensure!(
+                self.get_state().await == SessionState::Connected,
+                "Container session is closed; no host command was executed"
+            );
+        }
         if let Some(target) = self.teleport_target().await {
             let result = target
                 .exec(command, None, Duration::from_secs(10), 1024 * 1024)
@@ -386,8 +420,10 @@ impl Session {
             return result;
         }
         let client = self
-            .get_ssh_client()
+            .ssh_client
+            .lock()
             .await
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("SSH client not connected"))?;
         let result = client
             .exec_command_result_with_limits(command, None, Duration::from_secs(10), 1024 * 1024)
@@ -402,6 +438,7 @@ impl Session {
     /// Open an SFTP subsystem session on a new SSH channel.
     /// Returns an SftpSession for performing file operations via the SFTP protocol.
     pub async fn open_sftp_session(&self) -> Result<russh_sftp::client::SftpSession> {
+        anyhow::ensure!(self.container.is_none(), "Container SFTP is not supported; the host filesystem is never substituted. Use commands inside the container session.");
         if let Some(target) = self.teleport_target().await {
             return target.open_sftp().await;
         }

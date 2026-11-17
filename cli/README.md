@@ -45,6 +45,12 @@ vibeshell sessions
 
 The supported executable is `vibeshell`, not the retired `vshell` command. `vshell` remains only the internal Cargo package identifier used by existing build scripts.
 
+## Container sessions and network settings
+
+Use `vibeshell containers list --session ID` and `vibeshell containers open --session ID CONTAINER` to open a persistent child of a connected SSH session. The returned session ID works with `attach`, `ssh-session` and plugins. Container identity is preserved across GUI/CLI/MCP ownership; closing it does not stop the container. Container SFTP is explicitly unavailable rather than exposing host files.
+
+Use `vibeshell proxy show` or `vibeshell proxy set --mode custom --url socks5h://127.0.0.1:1080` for the device-local outbound route. Authenticated proxies accept `--username` and protected `--password-stdin`, never a password flag or URL credential. New connections use the saved policy without direct fallback. [Detailed setup, protocol matrix and boundaries](../docs/NETWORK_AND_CONTAINERS.md).
+
 ## Import sources
 
 Teleport nodes can be added with `vibeshell servers add alice@node --type teleport --proxy proxy.example:443` or previewed with `vibeshell import teleport --proxy proxy.example:443 --user alice --dry-run`. Run `tsh login` explicitly first. The Unix login is required; automatic import never contacts Teleport. Terminal and command operations share the current service, while file operations require a standard external `sftp-server` executable on the node. See [Teleport setup and transport boundaries](../docs/TELEPORT.md).

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { networkFetch, checkRoutedUpdate } from '../lib/network';
 import { invokeOrThrow } from '../lib/tauri';
 import type { DownloadEvent } from '@tauri-apps/plugin-updater';
 
@@ -197,7 +198,7 @@ async function fetchLatestRelease(): Promise<AppRelease> {
   const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(GITHUB_LATEST_RELEASE_API, {
+    const response = await networkFetch(GITHUB_LATEST_RELEASE_API, {
       headers: {
         Accept: 'application/vnd.github+json',
       },
@@ -215,8 +216,7 @@ async function fetchLatestRelease(): Promise<AppRelease> {
 }
 
 async function fetchSignedUpdaterRelease(): Promise<AppRelease | null> {
-  const { check } = await import('@tauri-apps/plugin-updater');
-  const update = await check({ timeout: REQUEST_TIMEOUT_MS });
+  const update = await checkRoutedUpdate(REQUEST_TIMEOUT_MS);
   if (!update) {
     return null;
   }
@@ -345,11 +345,8 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
     set({ installing: true, installProgress: 0, error: null });
 
     try {
-      const [{ check }, { relaunch }] = await Promise.all([
-        import('@tauri-apps/plugin-updater'),
-        import('@tauri-apps/plugin-process'),
-      ]);
-      const update = await check({ timeout: REQUEST_TIMEOUT_MS });
+      const { relaunch } = await import('@tauri-apps/plugin-process');
+      const update = await checkRoutedUpdate(REQUEST_TIMEOUT_MS);
 
       if (!update) {
         throw new Error('No signed update is available for this version.');
