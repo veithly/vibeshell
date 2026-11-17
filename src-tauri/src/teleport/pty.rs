@@ -343,11 +343,11 @@ mod tests {
         let target = TeleportTarget::new("proxy", "u", "node").unwrap();
         let (tx, mut rx) = mpsc::channel(16);
         let pty = connect_command(
-            command("import sys; sys.stdout.write('READY'); sys.stdout.flush(); input();"),
+            command("import sys; sys.stdout.write('\\x1b]999;vibeshell-ready;fixture\\x07'); sys.stdout.flush(); input();"),
             target,
             80,
             24,
-            b"READY".to_vec(),
+            b"\x1b]999;vibeshell-ready;fixture\x07".to_vec(),
             tx,
             Duration::from_secs(5),
         )
@@ -355,7 +355,9 @@ mod tests {
         .unwrap();
         assert!(pty.is_alive());
         pty.resize(100, 30).unwrap();
-        pty.write(b"hello\n").await.unwrap();
+        // Match an actual terminal Enter key. LF alone does not submit a
+        // cooked Windows console input line; CR works on ConPTY and Unix PTYs.
+        pty.write(b"hello\r").await.unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
             while pty.is_alive() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -364,7 +366,7 @@ mod tests {
         .await
         .unwrap();
         while let Ok(data) = rx.try_recv() {
-            assert!(!String::from_utf8_lossy(&data).contains("READY"));
+            assert!(!String::from_utf8_lossy(&data).contains("vibeshell-ready;"));
         }
         for (code, timeout) in [
             (
