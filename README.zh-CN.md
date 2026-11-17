@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme/hero.svg" width="100%" alt="VibeShell：把终端、文件、运维面板和 AI 组合成你的工作区。" />
+  <img src="assets/readme/hero.svg" width="100%" alt="VibeShell：AI 工具无缝接入，自己用也爱不释手的 SSH 终端管理工具。" />
 </p>
 
 <p align="center">
@@ -10,16 +10,65 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-355ac5?style=flat" alt="GPL-3.0-only" /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/veithly/vibeshell/releases"><strong>下载安装</strong></a> · <a href="#start-here">快速上手</a> · <a href="cli/README.md">CLI 指南</a> · <a href="docs/FEATURES.md">完整功能</a>
+  <a href="https://github.com/veithly/vibeshell/releases"><strong>下载安装</strong></a> · <a href="#ai-integration">AI 接入</a> · <a href="#ssh-workspace">SSH 工作台</a> · <a href="#start-here">快速上手</a> · <a href="cli/README.md">CLI 指南</a> · <a href="docs/FEATURES.md">完整功能</a>
 </p>
 
 <p align="center"><sub>支持社区 · <a href="https://linux.do">linux.do</a></sub></p>
 
-**VibeShell 是把 SSH、本地终端、SFTP 和 AI 协作放在一起的桌面工作区。** 一边看日志，一边改配置；输入命令时查看提示，选中文件即可编辑、预览或解压。**一个主窗口里就能同时摆下多个终端、插件和文件预览**，不用反复切换页面。
+**AI 工具无缝接入，自己用也爱不释手的 SSH 终端管理工具。**
 
-![VibeShell 最新 macOS 夜间毛玻璃主题：在一个窗口里组合两个 SSH 终端、Markdown 预览和 Docker 插件](assets/readme/glass-showcase.png)
+VibeShell 把服务器管理、SSH 会话、SFTP 和运维插件连成一套工作流：让 Claude Code、Codex、Cursor 等 AI 工具通过 Skill 与原生 CLI 操作已保存的服务器；你也能在同一个工作区里查看执行过程，随时亲自接手。
 
-## 一个主窗口，自由组合多个工作面板
+**交给 AI，不必来回复制命令和输出；自己上手，不必在终端、文件传输和监控工具之间反复切换。**
+
+![VibeShell SSH 工作台：在一个窗口里同时使用多个终端、文件预览和运维插件](assets/readme/glass-showcase.png)
+
+<a id="ai-integration"></a>
+## 让你常用的 AI，直接用上 SSH 工作台
+
+### 接上已有 AI 工具，不必换工作流
+
+VibeShell 不要求你换一个聊天客户端。给现有工具安装 **VibeShell Skill**，Agent 就能按说明调用原生 CLI：发现已保存的服务器、复用 SSH 会话、查询日志、读写远程文件、传输目录，以及发现和执行运维插件。
+
+内置 Skill 安装入口覆盖 **Claude Code、Codex、Cursor、OpenCode、Pi、Gemini CLI、Windsurf** 等工具。使用你自己的 AI 工具、登录和模型配置；服务器连接由 VibeShell 管理，不用把 SSH 密码或私钥贴进对话。
+
+安装 VibeShell 后，在 **设置 → 技能** 中选择目标工具安装；也可以用 CLI 检查并安装，例如接入 Claude Code：
+
+```bash
+vibeshell version
+vibeshell tools
+vibeshell install claude-code
+```
+
+其他工具使用 `tools` 列出的 ID，例如 `codex`、`cursor` 或 `opencode`；`vibeshell install all` 可为检测到的工具批量安装。让目标客户端加载新 Skill 后，就可以这样交代任务：
+
+> 用 VibeShell 检查已保存的 staging 服务器：复用现有会话，查看服务状态和最近的错误日志，先给我排查结论，不要重启服务。
+
+需要协议级接入时，本地 **MCP 网关**也提供会话、文件与插件工具。原生 CLI 可脱离桌面独立运行，不依赖 Node.js。[接入与协作说明](docs/AGENT_COLLABORATION.md) · [Agent Skill](skills/vibeshell/SKILL.md) · [CLI 指南](cli/README.md)
+
+<a id="shared-sessions"></a>
+### AI 在操作，你能看见，也能接手
+
+**不是让 AI 在另一个看不见的终端里忙。** 通过 CLI 的 `ssh` / `ssh-session`，Agent 可以复用你正在用的交互式 SSH 会话；命令和输出在桌面终端可见，`cd`、`export` 的上下文继续保留。需要独立并行工作时，再用 `--new` 新建会话。
+
+历史面板用不同颜色区分 **User** 与 **Agent（CLI）**，记录关联具体会话，点击即可返回。Agent 新建的连接会出现为独立标签，不抢走你正在看的页面。你可以先手动定位问题，再交给 AI 继续分析；也可以看着它执行，然后自己接着操作。
+
+需要确认的受保护 Gateway 操作会进入审批流程。MCP 与插件的独立执行不等于共享交互 Shell，具体上下文和权限规则见[协作指南](docs/AGENT_COLLABORATION.md)。
+
+### 编程 Agent、终端和代码审阅，放在一起
+
+本地开发时，从 **＋ → Coding Agent** 启动 **Claude Code、Codex、OpenCode 或 Pi**，选择项目、任务和工具支持的启动模式。旁边打开 **工作区变更**，查看 Git 分支、修改文件和逐行差异；SSH 终端与远程文件仍可放在同一个工作区，方便衔接开发和运维。
+
+![编程 Agent 与 Git 变更审阅并排，直接查看修改文件和逐行差异](assets/readme/agent-review.png)
+
+<a id="ssh-workspace"></a>
+## 不开 AI，它也是你的主力 SSH 终端
+
+**AI 是加成，不是使用门槛。** 多会话 SSH、连接管理、SFTP、命令补全、运维面板和隧道都能独立使用；日常连服务器、改配置、看日志，不需要先配置模型或 AI 账号。
+
+**服务器多，也能找得快。** 按名称搜索，用分组和标签区分环境；导入 OpenSSH、PuTTY、Tabby 配置，保留跳板机等连接信息。返回已有会话与新建连接有独立入口，不必每次重新填写 IP 和登录参数。
+
+### 一个主窗口，自由组合多个工作面板
 
 左边同时查看两台服务器的终端，右边打开 Markdown 操作手册和 Docker 插件。**这些都是同一个大窗口里的独立工作区域**，既能同时观察，也能分别操作，不必在多个页面间来回切换。
 
@@ -32,7 +81,7 @@
 
 [了解多分栏布局与拖拽操作](docs/window-management.md)
 
-## 少记几个参数，少敲几遍命令
+### 少记几个参数，少敲几遍命令
 
 忘记子命令或选项时，不用先切出去搜索。VibeShell 会在输入位置显示**命令、子命令、参数说明和历史候选**，支持模糊匹配与行内提示；常用命令还能保存为可搜索的片段。
 
@@ -48,7 +97,7 @@
 
 本地补全不需要 AI 账号。需要更灵活的建议时，可在设置中接入自己的 OpenAI 兼容或 Claude 接口，开启 **AI 指令预测**。预测只提供建议，不会自动执行；启用后会将当前输入和近期命令上下文发送给所选服务。
 
-## SFTP 不只是传文件：直接改、直接看、直接解压
+### SFTP 不只是传文件：直接改、直接看、直接解压
 
 打开文件夹图标就能浏览当前服务器的文件。**双击文件进入工作区，修改后直接保存回服务器**，不用先下载、换编辑器、再上传。
 
@@ -76,11 +125,14 @@
 
 </details>
 
-## 终端下方看性能，服务详情用面板
+### 终端下方看性能，服务详情用面板
 
 点击性能图标，**CPU、内存、磁盘和网络面板就在终端下方展开**。不用离开当前命令，拖动边界即可调整高度，再点一次收起。
 
 需要深入检查时，在当前会话打开内置工具：看 Docker 日志和容器状态，浏览数据库，检查端口，或管理服务与定时任务。
+
+<details>
+<summary>查看全部 12 个内置运维插件</summary>
 
 | 内置工具 | 常用功能 |
 | --- | --- |
@@ -97,26 +149,13 @@
 | 计划任务 | cron、systemd timers 与用户任务编辑 |
 | Systemd 服务 | 状态查看、启动、停止与重启 |
 
+</details>
+
 ![最新 Docker 面板：容器列表、筛选、资源指标与逐项操作](assets/readme/plugins.png)
 
 这 **12 个内置插件**也能通过 CLI 和 MCP 被 Agent 发现和使用；插件市场支持导入声明式 JSON 插件。各工具需要目标环境中相应的程序和权限，[插件参考](docs/FEATURES.md#operations-plugins)列出了具体依赖。
 
-<a id="shared-sessions"></a>
-## 你和 Agent，接着同一份工作往下做
-
-让 Agent 检查日志，你不用再把终端输出复制过去；它通过 VibeShell CLI 使用已有会话，**命令和输出仍在你看得到的终端里**。`cd` 和 `export` 的上下文继续保留，只有明确使用 `--new` 才另开 Shell。
-
-**谁做了什么，一眼能分清。** 历史面板用不同颜色区分 User 与 Agent（CLI），每条记录关联具体会话；点击记录中的会话就能返回。Agent 新建连接会出现为独立标签，不抢走你正在看的页面。
-
-本地开发则可以直接启动 **Claude Code、Codex、OpenCode 或 Pi**：选项目、填任务、选择工具支持的启动模式，再打开**工作区变更**检查分支和逐行差异。已有工具的安装、登录和订阅继续使用你自己的配置。
-
-![编程 Agent 与 Git 差异审阅并排，使用最新窗口主题](assets/readme/agent-review.png)
-
-命令审批会展示需要确认的操作与原因，由你决定是否继续。普通 SSH、文件和运维功能都可以独立使用，不必启用 AI。[Agent Skill](skills/vibeshell/SKILL.md) · [协作指南](docs/AGENT_COLLABORATION.md)
-
-## 把日常重复操作交给工具
-
-**连接不用从头配置。** 按名称搜索服务器，用分组和标签整理环境；支持从 OpenSSH、PuTTY、Tabby 导入配置，以及跳板机和登录后命令。返回已有会话与新建连接有独立入口。
+### 常用操作和个人习惯，都照顾到
 
 **常用操作不再反复输入。** 命令片段按分类和标签保存；本地转发、反向转发和 SOCKS5 隧道可以保存配置；SSH 输出可录制为本地日志。
 
@@ -143,6 +182,8 @@
 | Linux x64 | `.AppImage` / `.deb` | `.tar.gz` |
 
 桌面端点击 **＋ → SSH** 添加或选择服务器，核对首次连接指纹后即可开始。**本地 Shell** 和 **Coding Agent** 也在同一个新建入口中。
+
+准备把 AI 也接进来？完成服务器配置后，按上面的 [AI 接入](#ai-integration) 安装 Skill，就能让它使用这些服务器与会话。
 
 原生 CLI 不依赖 Node.js，也可在没有桌面的环境中使用。安装后，先导入已有配置，再选择服务器：
 

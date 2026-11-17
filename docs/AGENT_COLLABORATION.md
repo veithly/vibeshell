@@ -1,4 +1,4 @@
-# Human–Agent collaboration in VibeShell 1.1
+# Human–Agent collaboration in VibeShell
 
 [Overview](../README.md) · [简体中文](../README.zh-CN.md) · [Plugin specification](plugin-spec.md)
 

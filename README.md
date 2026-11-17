@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme/hero.svg" width="100%" alt="VibeShell: bring terminals, files, operations dashboards and AI into your workspace." />
+  <img src="assets/readme/hero.svg" width="100%" alt="VibeShell: SSH that fits your AI tools and your own hands-on workflow." />
 </p>
 
 <p align="center">
@@ -10,16 +10,65 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-355ac5?style=flat" alt="GPL-3.0-only" /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/veithly/vibeshell/releases"><strong>Download</strong></a> · <a href="#start-here">Quick start</a> · <a href="cli/README.md">CLI guide</a> · <a href="docs/FEATURES.md">All features</a>
+  <a href="https://github.com/veithly/vibeshell/releases"><strong>Download</strong></a> · <a href="#ai-integration">Connect your AI</a> · <a href="#ssh-workspace">SSH workspace</a> · <a href="#start-here">Quick start</a> · <a href="cli/README.md">CLI guide</a> · <a href="docs/FEATURES.md">All features</a>
 </p>
 
 <p align="center"><sub>Community we support · <a href="https://linux.do">linux.do</a></sub></p>
 
-**VibeShell brings SSH, local terminals, SFTP and AI collaboration into one desktop workspace.** Watch logs while editing a configuration. Get suggestions as you type. Open a file to edit, preview or extract it. **Arrange multiple terminals, plugins and previews inside one main window**, without switching between disconnected pages.
+**SSH that fits your AI tools—and feels great in your own hands.**
 
-![Latest VibeShell Night Glass on macOS: two SSH terminals, a Markdown preview and a Docker dashboard in one window](assets/readme/glass-showcase.png)
+VibeShell brings server management, SSH sessions, SFTP and operations plugins into one workflow. Connect Claude Code, Codex, Cursor and other agents through a Skill and native CLI to work with your saved servers. Watch their work in the same workspace, and take over yourself whenever needed.
 
-## One window. As many work panes as the task needs.
+**Delegate without shuttling commands and output between chats. Work hands-on without juggling a terminal, file-transfer client and monitoring tools.**
+
+![VibeShell SSH workspace with several terminals, a file preview and an operations plugin in one window](assets/readme/glass-showcase.png)
+
+<a id="ai-integration"></a>
+## Give the AI you already use a real SSH workspace
+
+### Connect your existing tools, not another chat client
+
+Keep your AI workflow. Install the **VibeShell Skill** so your agent can use the native CLI to discover saved servers, reuse SSH sessions, investigate logs, read and edit remote files, transfer directories, and discover and run operations plugins.
+
+Built-in Skill installation targets include **Claude Code, Codex, Cursor, OpenCode, Pi, Gemini CLI and Windsurf**, among others. Keep your own tool, login and model configuration. VibeShell handles the server connection, so you do not need to paste SSH passwords or private keys into a conversation.
+
+After installing VibeShell, select your tool under **Settings → Skills**, or check and install from the CLI. For example, to connect Claude Code:
+
+```bash
+vibeshell version
+vibeshell tools
+vibeshell install claude-code
+```
+
+Use the ID returned by `tools` for another client, such as `codex`, `cursor` or `opencode`; `vibeshell install all` installs for detected tools in one pass. Once the client has loaded the Skill, try a task like:
+
+> Use VibeShell to inspect the saved staging server. Reuse an existing session, check service status and recent error logs, and report your findings before making changes. Do not restart any services.
+
+For protocol-level integrations, a local **MCP gateway** also exposes session, file and plugin tools. The native CLI can run without the desktop and does not require Node.js. [Integration and collaboration](docs/AGENT_COLLABORATION.md) · [Agent Skill](skills/vibeshell/SKILL.md) · [CLI guide](cli/README.md)
+
+<a id="shared-sessions"></a>
+### See what your agent does. Pick up where it leaves off.
+
+**No separate, invisible terminal to lose track of.** With CLI `ssh` / `ssh-session`, your agent can reuse the interactive SSH session you are working in. Commands and output remain visible in the desktop terminal, and `cd` / `export` context carries forward. Use `--new` when an independent parallel shell is intentional.
+
+History distinguishes **User** input from **Agent (CLI)** operations by color, with a link back to each session. Agent-created connections become separate tabs without taking focus away from your work. Start investigating yourself, ask an agent to continue, then pick up the same terminal when you need to.
+
+Guarded Gateway operations that require confirmation enter an approval flow. Independent MCP and plugin execution is distinct from the shared interactive shell; see the [collaboration guide](docs/AGENT_COLLABORATION.md) for context and permission rules.
+
+### Keep coding agents, terminals and code review together
+
+For local development, use **＋ → Coding Agent** to launch **Claude Code, Codex, OpenCode or Pi** with a project, task and supported start mode. Open **Workspace changes** alongside it to inspect the Git branch, modified files and line-by-line diff. Keep SSH terminals and remote files in the same workspace as you move between development and operations.
+
+![A coding-agent terminal alongside changed files and a line-by-line Git diff](assets/readme/agent-review.png)
+
+<a id="ssh-workspace"></a>
+## A daily-driver SSH terminal, even without AI
+
+**AI adds to the workflow; it is not a requirement.** Multi-session SSH, connection management, SFTP, command completion, operations panels and tunnels work independently. Connect to servers, edit configurations and inspect logs without setting up a model or AI account.
+
+**Manage servers, not a list of IP addresses.** Search saved connections by name, organize environments with groups and tags, and import OpenSSH, PuTTY or Tabby profiles, including supported jump-host settings. Returning to an existing session and opening a new connection have separate actions, so you do not have to enter connection details again each time.
+
+### One window. As many work panes as the task needs.
 
 Keep two SSH terminals visible on one side, with a Markdown runbook and Docker dashboard on the other. **Each area is a pane inside the same main app window**, so you can watch and use several tools at once.
 
@@ -32,7 +81,7 @@ Keep two SSH terminals visible on one side, with a Markdown runbook and Docker d
 
 [Composing and restoring split-pane layouts](docs/window-management.md)
 
-## Remember fewer flags. Retype fewer commands.
+### Remember fewer flags. Retype fewer commands.
 
 Command help belongs near the cursor. VibeShell suggests **commands, subcommands, options and command-history matches**, with descriptions, fuzzy matching and inline suggestions. Save frequently used commands as searchable snippets.
 
@@ -48,7 +97,7 @@ Command help belongs near the cursor. VibeShell suggests **commands, subcommands
 
 Local completion needs no AI account. For additional suggestions, enable **AI command prediction** with your own OpenAI-compatible or Claude endpoint. Suggestions never execute automatically; enabling prediction sends your input and recent command context to the provider you choose.
 
-## SFTP: edit, preview and extract where the files live
+### SFTP: edit, preview and extract where the files live
 
 Open the folder icon to browse the connected server. **Double-click a file, edit it in a workspace tab and save directly back to the server.** No download–edit–upload round trip to manage yourself.
 
@@ -76,11 +125,14 @@ Local documents work here too: press **⌘/Ctrl+O** without connecting to SSH. D
 
 </details>
 
-## Performance below the terminal. Details in a dashboard.
+### Performance below the terminal. Details in a dashboard.
 
 Click the performance icon and **CPU, memory, disk and network panels open beneath your terminal**. Keep the command in view, drag to adjust the panel height, and click again to hide it.
 
 For a closer look, open a tool for the current session: inspect Docker logs, explore a database, check listening ports, or manage services and scheduled jobs.
+
+<details>
+<summary>Explore all 12 built-in operations plugins</summary>
 
 | Built-in tool | Useful actions |
 | --- | --- |
@@ -97,26 +149,13 @@ For a closer look, open a tool for the current session: inspect Docker logs, exp
 | Scheduled Tasks | Cron, systemd timers and user crontab editing |
 | Systemd Services | Status, start, stop and restart |
 
+</details>
+
 ![The latest Docker dashboard with inventory filters, resource columns and per-container actions](assets/readme/plugins.png)
 
 The same **12 built-ins** are discoverable by agents through the CLI and MCP. Import declarative JSON plugins through the marketplace to add your own tools. Actions use the programs and permissions available on the target host; see the [plugin references](docs/FEATURES.md#operations-plugins) for dependencies.
 
-<a id="shared-sessions"></a>
-## Pick up where your agent left off
-
-Ask an agent to investigate a log without copying terminal output into another conversation. Through VibeShell's CLI it can use the existing session, while **its commands and output remain visible in your terminal**. Your `cd` and `export` context carries forward; `--new` explicitly opens another shell.
-
-**Know who did what.** History distinguishes User input from Agent (CLI) operations with different colors and a link to each session. An agent-created connection becomes a separate tab without taking focus away from your work.
-
-For local development, launch **Claude Code, Codex, OpenCode or Pi**: choose the project, enter a brief and select a supported start mode. Open **Workspace changes** to inspect the branch, changed files and line-by-line diff. Keep using your own tool installation, login and subscription.
-
-![A coding-agent terminal beside Git changes and a line-by-line diff in the current theme](assets/readme/agent-review.png)
-
-Command approvals show operations that need review and why, so you decide whether to continue. Ordinary SSH, file and operations work remains usable without AI. [Agent Skill](skills/vibeshell/SKILL.md) · [Collaboration guide](docs/AGENT_COLLABORATION.md)
-
-## Make the everyday work easier
-
-**Find connections, not IP addresses.** Search saved servers, organize groups and tags, import OpenSSH/PuTTY/Tabby profiles, and configure jump hosts and post-login commands. Returning to a live session and opening another connection have distinct actions.
+### The small conveniences that add up every day
 
 **Save the repetitive setup.** Organize command snippets by category and tags. Save local, reverse and SOCKS5 forwarding configurations. Record SSH terminal output to local logs.
 
@@ -143,6 +182,8 @@ Download your platform's build from [Releases](https://github.com/veithly/vibesh
 | Linux x64 | `.AppImage` / `.deb` | `.tar.gz` |
 
 In the desktop app, choose **＋ → SSH**, add or select a server, and verify its fingerprint on first connection. **Local Shell** and **Coding Agent** are available from the same new-session entry.
+
+Ready to bring your AI along? After configuring a server, follow [Connect your AI](#ai-integration) to install the Skill and let it use those saved targets and sessions.
 
 The native CLI needs no Node.js and also works on headless machines. After installation, import existing profiles and choose a server:
 
