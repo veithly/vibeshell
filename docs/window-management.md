@@ -27,8 +27,8 @@ to the user's local or remote file.
 
 ## Saving and restoring
 
-Layout changes are saved automatically. The save icon beside the tabs also
-saves explicitly. The snapshot includes session/tab order, selected page,
+Layout changes are saved automatically. The current compact titlebar no longer
+shows a separate save-layout icon. The snapshot includes session/tab order, selected page,
 main-window split tree and ratios, detached targets and native window bounds.
 The runtime session IDs are remapped when shells are recreated after a restart.
 Windows from disconnected displays are clamped into a currently connected display.

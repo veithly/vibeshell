@@ -123,8 +123,8 @@ export function DetachedWindow({ target }: { target: DetachTarget }) {
   }, []);
 
   return (
-    <div data-vibe-window="detached" className="flex h-screen min-h-0 flex-col overflow-hidden bg-tokyo-bg text-tokyo-fg">
-      <header className="flex h-9 shrink-0 select-none items-center gap-2 border-b border-tokyo-bg-hl bg-tokyo-bg-dark pl-3"
+    <div data-vibe-window="detached" className="app-shell flex h-screen min-h-0 flex-col overflow-hidden text-tokyo-fg">
+      <header className="titlebar-shell flex shrink-0 select-none items-center gap-2 pl-3"
         onMouseDown={(event) => {
           if (!ready || event.button !== 0 || event.detail > 1 || (event.target as Element).closest('button')) return;
           event.preventDefault();

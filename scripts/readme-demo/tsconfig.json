@@ -4,6 +4,6 @@
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["main.ts"],
+  "include": ["main.ts", "native-scenes.ts", "fixture-core.ts", "fixture-webview.ts"],
   "references": []
 }

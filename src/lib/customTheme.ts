@@ -74,6 +74,19 @@ export function customTerminalColors(): Record<string, string> {
     const value = computed.getPropertyValue(`--tokyo-${token}`).trim();
     if (value && (!globalThis.CSS?.supports || CSS.supports('color', value))) colors[key] = value;
   }
+  // Custom --tokyo-bg feeds the CSS mask as well; keep the renderer clear so
+  // a color override cannot silently replace the frosted surface with a slab.
+  if (colors.background) {
+    // Resolve named colors/variables to numeric RGB as xterm cannot parse a
+    // transparent CSS keyword. Keep the hue for its minimum-contrast logic.
+    const probe = document.createElement('span');
+    probe.style.color = colors.background;
+    probe.hidden = true;
+    document.body.appendChild(probe);
+    const rgb = getComputedStyle(probe).color.match(/^rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)/);
+    probe.remove();
+    colors.background = rgb ? `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, 0)` : 'rgba(0, 0, 0, 0)';
+  }
   return colors;
 }
 

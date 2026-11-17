@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyCustomCss, CUSTOM_THEME_KEY, parseCustomTheme, useCustomThemeStore, wallpaperCss } from './customTheme';
+import { applyCustomCss, customTerminalColors, CUSTOM_THEME_KEY, parseCustomTheme, useCustomThemeStore, wallpaperCss } from './customTheme';
 import { useCustomTheme } from './useCustomTheme';
 function Harness() { useCustomTheme('paper-white'); return <button>Still usable</button>; }
 
@@ -13,6 +13,14 @@ describe('custom CSS themes', () => {
   afterEach(() => { cleanup(); applyCustomCss(null); vi.unstubAllGlobals(); });
   it('does not accept malformed theme data', () => {
     for (const value of ['invalid', '{}', 'null', '{"version":1,"css":42}']) expect(parseCustomTheme(value).enabled).toBe(false);
+  });
+
+  it('keeps custom backgrounds transparent without losing the contrast reference color', () => {
+    applyCustomCss(':root { --tokyo-bg: #f4f5f7; --tokyo-fg: #1c2535; }');
+    const colors = customTerminalColors();
+    expect(colors.background).toBe('rgba(244, 245, 247, 0)');
+    expect(colors.foreground).toBe('#1c2535');
+    expect(document.querySelector('span[hidden]')).toBeNull();
   });
   it('inserts CSS as text instead of permitting HTML injection', () => {
     applyCustomCss('/* </style><script>window.pwned = true</script> */ body { opacity: .9 }');

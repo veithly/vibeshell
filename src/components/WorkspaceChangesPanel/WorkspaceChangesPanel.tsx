@@ -204,12 +204,12 @@ export function WorkspaceChangesPanel({
   return (
     <aside
       className={cn(
-        'workspace-changes-panel min-h-0 flex-shrink-0 flex-col border-l border-tokyo-bg-hl bg-tokyo-bg',
+        'glass-panel glass-form workspace-changes-panel min-h-0 flex-shrink-0 flex-col border-l border-tokyo-bg-hl',
         open ? 'flex' : 'hidden'
       )}
       aria-label={t('workspaceChanges.title')}
     >
-      <header className="flex h-10 flex-shrink-0 items-center gap-2 border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-3">
+      <header className="glass-toolbar flex h-10 flex-shrink-0 items-center gap-2 border-b border-tokyo-bg-hl px-3">
         <FileDiff className="h-4 w-4 flex-shrink-0 text-tokyo-blue" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-medium text-tokyo-fg">{t('workspaceChanges.title')}</h2>

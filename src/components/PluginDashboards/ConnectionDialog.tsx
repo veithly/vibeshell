@@ -83,15 +83,16 @@ export function ConnectionDialog({ editing, prefill, onClose, onSaved }: Connect
 
   return (
     <div
-      className="responsive-dialog-layer fixed inset-0 z-[120] flex items-center justify-center bg-tokyo-bg-dark/70 px-4"
-      role="dialog"
-      aria-modal="true"
+      className="responsive-dialog-layer glass-scrim fixed inset-0 z-[120] flex items-center justify-center px-4"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <form
-        className="w-full max-w-md rounded-xl border border-tokyo-bg-hl bg-tokyo-bg-dark p-5 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label={editing ? t('plugins.dbConn.editTitle') : t('plugins.dbConn.addTitle')}
+        className="glass-dialog glass-form w-full max-w-md p-5"
         onSubmit={(event) => {
           event.preventDefault();
           void handleSave();

@@ -1,0 +1,48 @@
+{
+  "productName": "VibeShell README Preview",
+  "identifier": "com.vibeshell.readme-preview",
+  "build": {
+    "devUrl": "http://127.0.0.1:1421/scripts/readme-demo/index.html?scene=workspace",
+    "beforeDevCommand": "node node_modules/vite/bin/vite.js --config scripts/readme-demo/vite.capture.config.ts"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "VibeShell README Preview",
+        "width": 1200,
+        "height": 800,
+        "x": -1330,
+        "y": 44,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": false,
+        "devtools": true,
+        "dragDropEnabled": false,
+        "transparent": true,
+        "shadow": true,
+        "visible": false,
+        "windowEffects": {
+          "effects": ["sidebar"],
+          "state": "active",
+          "radius": 14
+        }
+      }
+    ],
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "readme-glass-capture",
+          "description": "Allow the isolated screenshot fixture to stay above its independent wallpaper backdrop; not enabled in production.",
+          "windows": ["main"],
+          "permissions": ["core:window:allow-set-always-on-top"]
+        }
+      ],
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:1421 http://localhost:* http://127.0.0.1:*"
+    }
+  },
+  "bundle": { "createUpdaterArtifacts": false }
+}

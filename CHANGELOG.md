@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.2.0 — Unreleased
+
+### A more flexible, translucent desktop workspace
+
+The macOS desktop uses native translucent window materials, with light, dark and system-following appearances. The tab strip shares the window titlebar; SFTP, performance, history and more actions have compact icon-only controls. Theme selection and separate window/terminal background controls live in Settings, rather than being scattered through the top-level menu. The terminal remains readable over translucent surfaces, with reduced-transparency fallbacks.
+
+Terminals, file editors and previews, and operations plugins can be arranged as independent panes **inside one main window**. Pane titlebars, close/detach affordances and dragging behavior are consistent across the light and dark themes. Tabs and file workspaces can still be moved to a separate native window when needed; no additional split-toolbar buttons are required.
+
+### Everyday file and operations workflows
+
+The performance panel opens beneath the active terminal, preserving command context and allowing the height to be adjusted. SFTP, plugin dashboards, file previews, Settings, dialogs and menus share a consistent surface/control system, with accessible hover, focus and disabled states. Existing SFTP edit, preview, archive extraction and directory synchronization functionality remains available.
+
+### Documentation and release alignment
+
+The English, Simplified Chinese and Japanese READMEs focus on practical workflows: mixing several terminals/plugins/previews in one window, command completion, editing and previewing files over SFTP, and reviewing Agent activity. Gallery images show the current interface with synthetic example data; the macOS glass screenshots were captured in an isolated virtual display rather than over an operator's desktop.
+
+Desktop, CLI, Tauri, Cargo workspace packages and agent plugin metadata move together to version **1.2.0**. This entry describes the proposed source update, not a published release or an already installed application.
+
 ## 1.1.0 — 2026-09-18
 
 ### A shared workspace for people and agents

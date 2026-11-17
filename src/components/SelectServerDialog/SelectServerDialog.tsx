@@ -413,12 +413,12 @@ export function SelectServerDialog({
 
   return (
     <div ref={rootRef} className="fixed inset-0 z-50 flex items-start justify-center px-3 pb-3 pt-14 sm:px-6 sm:pt-20">
-      <button className="absolute inset-0 bg-black/55" onClick={onClose} aria-label={t('common.close')} />
+      <button className="absolute inset-0 glass-scrim" onClick={onClose} aria-label={t('common.close')} />
       <section
         role="dialog"
         aria-modal="true"
         aria-labelledby="connection-launcher-title"
-        className="relative flex h-[min(720px,calc(100vh-6rem))] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-tokyo-bg-hl bg-tokyo-bg shadow-2xl"
+        className="glass-dialog glass-form relative flex h-[min(720px,calc(100vh-6rem))] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-tokyo-bg-hl bg-tokyo-bg shadow-2xl"
       >
         <header className="flex h-14 flex-shrink-0 items-center justify-between gap-4 border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-4 sm:px-5">
           <div className="flex min-w-0 items-center gap-3">

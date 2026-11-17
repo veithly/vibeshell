@@ -47,7 +47,7 @@ export function CodeEditor({ value, language, readOnly = false, onChange }: Code
   const highlighted = useMemo(() => `${highlight(value, language)}\n`, [language, value]);
 
   return (
-    <div className="file-code-editor relative h-full min-h-0 overflow-hidden bg-tokyo-bg">
+    <div className="file-code-editor relative h-full min-h-0 overflow-hidden">
       <pre
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 m-0 overflow-hidden p-4 font-mono text-[13px] leading-6 text-tokyo-fg"

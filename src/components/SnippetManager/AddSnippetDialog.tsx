@@ -41,9 +41,9 @@ export default function AddSnippetDialog({ snippet, onClose }: AddSnippetDialogP
   );
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center glass-scrim" onClick={onClose}>
       <div
-        className="bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg w-[480px] max-w-[90vw] shadow-2xl"
+        className="glass-dialog glass-form border border-tokyo-bg-hl rounded-lg w-[480px] max-w-[90vw] shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}

@@ -384,7 +384,7 @@ pub fn run() {
             }
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if std::env::var_os("VIBESHELL_SKIP_SKILL_AUTO_INSTALL").is_none() {
+            if primary_install && std::env::var_os("VIBESHELL_SKIP_SKILL_AUTO_INSTALL").is_none() {
                 std::thread::spawn(|| {
                     if let Err(error) = crate::install::install_bundled_cli_for_user() {
                         log::warn!("[Install] Could not install native CLI: {}", error);

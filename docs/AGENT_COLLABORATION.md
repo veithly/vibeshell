@@ -4,7 +4,9 @@
 
 ## Visible operations without interfering with a person
 
-The workspace activity strip shows the most recent Agent/CLI operation. Open it to inspect the full command, session, timestamp and lifecycle state. Independent exec does not inject synthetic text into the person's PTY; its command is visible in history instead.
+The titlebar's History icon opens the command, session, timestamp and lifecycle record. The current interface uses one history panel, not a separate Agent/CLI activity strip. GUI keyboard commands are labeled User; native CLI operations are labeled Agent (CLI). Automatic performance polling is not presented as an agent operation.
+
+Native CLI `ssh`, `ssh-session` and `exec` use the shared interactive PTY, including its working directory and environment. Independent MCP/plugin execution is a different path: it does not inject synthetic output into the person's PTY or inherit that interactive shell's state. Input handoff and verified command completion remain distinct.
 
 Native CLI and MCP share persistent local activity records. Each execution has its own identity, so repeating a command does not collapse the history. Full multiline commands are retained; older entries can be paged in. The UI combines event notifications with incremental polling while active and can recover history after restart. Polling is not a promise of zero latency.
 

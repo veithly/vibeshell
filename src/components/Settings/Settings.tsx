@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useId, useState } from 'react';
 import licenseText from '../../../LICENSE?raw';
 import licenseNotice from '../../../NOTICE?raw';
 import { useTranslation } from 'react-i18next';
@@ -26,6 +26,7 @@ import {
 } from '../../stores/cloudSyncStore';
 import { IntegrationCard } from './IntegrationCard';
 import { CustomThemeEditor } from './CustomThemeEditor';
+import { AppearanceModeControl } from './AppearanceModeControl';
 import {
   Monitor,
   Palette,
@@ -60,6 +61,7 @@ import { safeInvoke } from '../../lib/tauri';
 // ============================================================================
 
 interface SettingsSectionProps {
+  id?: string;
   icon: React.ReactNode;
   title: string;
   description?: string;
@@ -69,15 +71,16 @@ interface SettingsSectionProps {
 /**
  * A collapsible section container for settings groups.
  */
-function SettingsSection({ icon, title, description, children }: SettingsSectionProps) {
+function SettingsSection({ id, icon, title, description, children }: SettingsSectionProps) {
+  const headingId = useId();
   return (
-    <section className="mb-7 min-w-0 sm:mb-8">
-      <div className="mb-2 flex min-w-0 items-center gap-2 sm:gap-3">
+    <section id={id} className="settings-section min-w-0" aria-labelledby={headingId}>
+      <div className="settings-section-heading min-w-0">
         <span className="flex-shrink-0 text-tokyo-blue">{icon}</span>
-        <h2 className="min-w-0 break-words text-lg font-semibold text-tokyo-fg sm:text-xl">{title}</h2>
+        <h2 id={headingId} tabIndex={-1} className="min-w-0 break-words text-tokyo-fg">{title}</h2>
       </div>
-      {description && <p className="mb-4 break-words text-sm text-tokyo-comment sm:ml-8 sm:text-base">{description}</p>}
-      <div className="min-w-0 space-y-4 sm:ml-8">{children}</div>
+      {description && <p className="settings-section-description break-words">{description}</p>}
+      <div className="settings-section-body min-w-0">{children}</div>
     </section>
   );
 }
@@ -88,22 +91,30 @@ interface SettingRowProps {
   children: React.ReactNode;
 }
 
+const SettingFieldContext = createContext<{ labelId?: string; descriptionId?: string }>({});
+
 /**
  * A single setting row with label and control.
  */
 function SettingRow({ label, description, children }: SettingRowProps) {
+  const id = useId();
+  const labelId = `${id}-label`;
+  const descriptionId = description ? `${id}-description` : undefined;
   return (
-    <div className="flex min-w-0 flex-col items-stretch gap-3 border-b border-tokyo-bg-hl py-3 last:border-b-0 sm:flex-row sm:items-center sm:justify-between sm:gap-0">
+    <SettingFieldContext.Provider value={{ labelId, descriptionId }}>
+    <div className="settings-row flex min-w-0 flex-col items-stretch gap-3 border-b py-3 last:border-b-0 sm:flex-row sm:items-center sm:justify-between sm:gap-0" role="group" aria-labelledby={labelId}>
       <div className="min-w-0 flex-1 sm:mr-4">
-        <label className="text-tokyo-fg font-medium">{label}</label>
-        {description && <p className="mt-0.5 break-words text-sm text-tokyo-comment">{description}</p>}
+        <span id={labelId} className="settings-row-label">{label}</span>
+        {description && <p id={descriptionId} className="settings-row-description break-words">{description}</p>}
       </div>
       <div className="settings-control min-w-0 w-full sm:w-auto sm:flex-shrink-0">{children}</div>
     </div>
+    </SettingFieldContext.Provider>
   );
 }
 
 interface SliderProps {
+  label?: string;
   value: number;
   min: number;
   max: number;
@@ -115,19 +126,24 @@ interface SliderProps {
 /**
  * A styled range slider with value display.
  */
-function Slider({ value, min, max, step = 1, onChange, formatValue }: SliderProps) {
+function Slider({ value, min, max, step = 1, onChange, formatValue, label }: SliderProps) {
+  const field = useContext(SettingFieldContext);
   const displayValue = formatValue ? formatValue(value) : String(value);
 
   return (
     <div className="flex w-full min-w-0 items-center gap-3 sm:w-auto">
       <input
         type="range"
+        aria-label={label}
+        aria-labelledby={label ? undefined : field.labelId}
+        aria-describedby={field.descriptionId}
+        aria-valuetext={displayValue}
         min={min}
         max={max}
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="h-2 min-w-0 flex-1 appearance-none rounded-lg bg-tokyo-bg-hl cursor-pointer sm:w-32 sm:flex-none
+        className="glass-range h-2 min-w-0 flex-1 appearance-none rounded-lg bg-tokyo-bg-hl cursor-pointer sm:w-32 sm:flex-none
                    [&::-webkit-slider-thumb]:appearance-none
                    [&::-webkit-slider-thumb]:w-4
                    [&::-webkit-slider-thumb]:h-4
@@ -152,8 +168,11 @@ interface SelectProps<T extends string> {
  * A styled select dropdown.
  */
 function Select<T extends string>({ value, options, onChange }: SelectProps<T>) {
+  const field = useContext(SettingFieldContext);
   return (
     <select
+      aria-labelledby={field.labelId}
+      aria-describedby={field.descriptionId}
       value={value}
       onChange={(e) => onChange(e.target.value as T)}
       className="w-full max-w-full px-3 py-2 rounded-md bg-tokyo-bg-hl border border-tokyo-bg-hl sm:w-auto
@@ -179,13 +198,16 @@ interface ToggleProps {
  * A styled toggle switch.
  */
 function Toggle({ checked, onChange }: ToggleProps) {
+  const field = useContext(SettingFieldContext);
   return (
     <button
       type="button"
       role="switch"
+      aria-labelledby={field.labelId}
+      aria-describedby={field.descriptionId}
       aria-checked={checked}
       onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors
+      className={`glass-switch relative inline-flex h-6 w-11 items-center rounded-full transition-colors
                   focus:outline-none focus:ring-2 focus:ring-tokyo-blue focus:ring-offset-2 focus:ring-offset-tokyo-bg
                   ${checked ? 'bg-tokyo-blue' : 'bg-tokyo-bg-hl'}`}
     >
@@ -210,10 +232,13 @@ interface NumberInputProps {
  * A styled number input.
  */
 function NumberInput({ value, min, max, onChange, placeholder, suffix }: NumberInputProps) {
+  const field = useContext(SettingFieldContext);
   return (
     <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
       <input
         type="number"
+        aria-labelledby={field.labelId}
+        aria-describedby={field.descriptionId}
         value={value}
         min={min}
         max={max}
@@ -241,9 +266,12 @@ interface TextInputProps {
  * A styled text input.
  */
 function TextInput({ value, onChange, placeholder, type = 'text', className = 'sm:w-48' }: TextInputProps) {
+  const field = useContext(SettingFieldContext);
   return (
     <input
       type={type}
+      aria-labelledby={field.labelId}
+      aria-describedby={field.descriptionId}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
@@ -257,12 +285,15 @@ function TextInput({ value, onChange, placeholder, type = 'text', className = 's
 }
 
 function SecretInput({ value, onChange, placeholder }: TextInputProps) {
+  const field = useContext(SettingFieldContext);
   const [visible, setVisible] = useState(false);
 
   return (
     <div className="relative w-full sm:w-80">
       <input
         type={visible ? 'text' : 'password'}
+        aria-labelledby={field.labelId}
+        aria-describedby={field.descriptionId}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -294,8 +325,11 @@ interface TextAreaProps {
 }
 
 function TextArea({ value, onChange, onBlur, placeholder }: TextAreaProps) {
+  const field = useContext(SettingFieldContext);
   return (
     <textarea
+      aria-labelledby={field.labelId}
+      aria-describedby={field.descriptionId}
       value={value}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
@@ -327,6 +361,8 @@ function ThemePreview({ theme, selected, onClick }: ThemePreviewProps) {
   return (
     <button
       onClick={onClick}
+      aria-pressed={selected}
+      aria-label={themeData.displayName}
       className={`relative p-1 rounded-lg transition-all ${
         selected
           ? 'ring-2 ring-tokyo-blue ring-offset-2 ring-offset-tokyo-bg'
@@ -375,7 +411,8 @@ function SecuritySection() {
   return (
     <SettingsSection
       icon={<Shield className="w-5 h-5" />}
-      title={t('settings.security')}
+      id="settings-security"
+        title={t('settings.security')}
       description={t('settings.securityDesc')}
     >
       <SettingRow
@@ -791,7 +828,7 @@ export function Settings() {
   // Show loading state while settings are initializing
   if (!initialized) {
     return (
-      <div className="settings-page mx-auto w-full min-w-0 max-w-4xl overflow-x-hidden p-4 sm:p-6">
+      <div className="settings-page glass-form glass-page mx-auto w-full min-w-0 max-w-4xl p-4 sm:p-6">
         <div className="flex items-center justify-center py-12">
           <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-tokyo-blue"></div>
           <span className="ml-3 text-tokyo-comment">{t('common.loading')}</span>
@@ -801,14 +838,121 @@ export function Settings() {
   }
 
   return (
-    <div className="settings-page mx-auto w-full min-w-0 max-w-4xl overflow-x-hidden p-4 sm:p-6">
-      <h1 className="mb-7 text-2xl font-bold text-tokyo-fg sm:mb-8">{t('settings.title')}</h1>
+    <div className="settings-page glass-form glass-page mx-auto w-full min-w-0 max-w-4xl p-4 sm:p-6">
+      <nav className="settings-navigation" aria-label={t('settings.title')}>
+        {(['appearance', 'terminal', 'sshDefaults', 'security', 'about'] as const).map((section) => (
+          <button key={section} type="button" onClick={() => {
+            const target = document.getElementById(`settings-${section}`);
+            target?.scrollIntoView({ block: 'start' });
+            target?.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
+          }}>{t(`settings.${section}`)}</button>
+        ))}
+      </nav>
+
+      {/* ================================================================== */}
+      {/* Appearance Settings Section */}
+      {/* ================================================================== */}
+      <SettingsSection
+        icon={<Palette className="w-5 h-5" />}
+        id="settings-appearance"
+        title={t('settings.appearance')}
+        description={t('settings.appearanceDesc')}
+      >
+        <SettingRow label={t('settings.themeMode')} description={t('settings.themeModeDesc')}>
+          <AppearanceModeControl />
+        </SettingRow>
+
+        <SettingRow label={t('settings.theme')} description={t('settings.themeDesc')}>
+          {settings.appearance.themeMode === 'system' ? (
+            <div className="w-full space-y-3">
+              <div>
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-tokyo-comment">{t('settings.lightTheme')}</p>
+                <div className="flex flex-wrap gap-3">
+                  {themes.filter((theme) => theme.name === 'paper-white' || theme.name === 'warm-ivory').map((theme) => (
+                    <ThemePreview
+                      key={`light-${theme.name}`}
+                      theme={theme.name}
+                      selected={settings.appearance.lightTheme === theme.name}
+                      onClick={() => updateAppearanceSettings({ lightTheme: theme.name })}
+                    />
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-tokyo-comment">{t('settings.darkTheme')}</p>
+                <div className="flex flex-wrap gap-3">
+                  {themes.filter((theme) => theme.name !== 'paper-white' && theme.name !== 'warm-ivory').map((theme) => (
+                    <ThemePreview
+                      key={`dark-${theme.name}`}
+                      theme={theme.name}
+                      selected={settings.appearance.darkTheme === theme.name}
+                      onClick={() => updateAppearanceSettings({ darkTheme: theme.name })}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-3">
+              {themes.map((theme) => (
+                <ThemePreview
+                  key={theme.name}
+                  theme={theme.name}
+                  selected={settings.appearance.theme === theme.name}
+                  onClick={() => updateAppearanceSettings({ theme: theme.name })}
+                />
+              ))}
+            </div>
+          )}
+        </SettingRow>
+
+        <SettingRow label={t('settings.terminalBackgroundOpacity')} description={t('settings.terminalBackgroundOpacityDesc')}>
+          <Slider
+            label={t('settings.terminalBackgroundOpacity')}
+            value={settings.appearance.terminalBackgroundOpacity}
+            min={0.5}
+            max={1}
+            step={0.01}
+            onChange={(terminalBackgroundOpacity) => updateAppearanceSettings({ terminalBackgroundOpacity })}
+            formatValue={(v) => `${Math.round(v * 100)}%`}
+          />
+        </SettingRow>
+
+        <SettingRow label={t('settings.windowMaterialOpacity')} description={t('settings.windowMaterialOpacityDesc')}>
+          <Slider
+            label={t('settings.windowMaterialOpacity')}
+            value={settings.appearance.windowMaterialOpacity}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(windowMaterialOpacity) => updateAppearanceSettings({ windowMaterialOpacity })}
+            formatValue={(v) => `${Math.round(v * 100)}%`}
+          />
+        </SettingRow>
+
+        <details className="settings-advanced">
+          <summary className="cursor-pointer py-2 text-sm text-tokyo-fg">{t('customTheme.title')}</summary>
+          <CustomThemeEditor />
+        </details>
+
+        <SettingRow label={t('settings.language')} description={t('settings.languageDesc')}>
+          <Select<string>
+            value={i18n.language.startsWith('zh') ? 'zh' : 'en'}
+            options={[
+              { value: 'en', label: 'English' },
+              { value: 'zh', label: '简体中文' },
+            ]}
+            onChange={(lang) => i18n.changeLanguage(lang)}
+          />
+        </SettingRow>
+      </SettingsSection>
 
       {/* ================================================================== */}
       {/* Terminal Settings Section */}
       {/* ================================================================== */}
       <SettingsSection
         icon={<Terminal className="w-5 h-5" />}
+        id="settings-terminal"
         title={t('settings.terminal')}
         description={t('settings.terminalDesc')}
       >
@@ -1184,98 +1328,11 @@ export function Settings() {
       </SettingsSection>
 
       {/* ================================================================== */}
-      {/* Appearance Settings Section */}
-      {/* ================================================================== */}
-      <SettingsSection
-        icon={<Palette className="w-5 h-5" />}
-        title={t('settings.appearance')}
-        description={t('settings.appearanceDesc')}
-      >
-        <SettingRow label={t('settings.themeMode')} description={t('settings.themeModeDesc')}>
-          <Select<'manual' | 'system'>
-            value={settings.appearance.themeMode}
-            options={[
-              { value: 'manual', label: t('settings.themeModeManual') },
-              { value: 'system', label: t('settings.themeModeSystem') },
-            ]}
-            onChange={(themeMode) => updateAppearanceSettings({ themeMode })}
-          />
-        </SettingRow>
-
-        <SettingRow label={t('settings.theme')} description={t('settings.themeDesc')}>
-          {settings.appearance.themeMode === 'system' ? (
-            <div className="w-full space-y-3">
-              <div>
-                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-tokyo-comment">{t('settings.lightTheme')}</p>
-                <div className="flex flex-wrap gap-3">
-                  {themes.map((theme) => (
-                    <ThemePreview
-                      key={`light-${theme.name}`}
-                      theme={theme.name}
-                      selected={settings.appearance.lightTheme === theme.name}
-                      onClick={() => updateAppearanceSettings({ lightTheme: theme.name })}
-                    />
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="mb-1 text-xs font-medium uppercase tracking-wide text-tokyo-comment">{t('settings.darkTheme')}</p>
-                <div className="flex flex-wrap gap-3">
-                  {themes.map((theme) => (
-                    <ThemePreview
-                      key={`dark-${theme.name}`}
-                      theme={theme.name}
-                      selected={settings.appearance.darkTheme === theme.name}
-                      onClick={() => updateAppearanceSettings({ darkTheme: theme.name })}
-                    />
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-3">
-              {themes.map((theme) => (
-                <ThemePreview
-                  key={theme.name}
-                  theme={theme.name}
-                  selected={settings.appearance.theme === theme.name}
-                  onClick={() => updateAppearanceSettings({ theme: theme.name })}
-                />
-              ))}
-            </div>
-          )}
-        </SettingRow>
-
-        <CustomThemeEditor />
-
-        <SettingRow label={t('settings.windowOpacity')} description={t('settings.windowOpacityDesc')}>
-          <Slider
-            value={settings.appearance.windowOpacity}
-            min={0.5}
-            max={1.0}
-            step={0.05}
-            onChange={(windowOpacity) => updateAppearanceSettings({ windowOpacity })}
-            formatValue={(v) => `${Math.round(v * 100)}%`}
-          />
-        </SettingRow>
-
-        <SettingRow label={t('settings.language')} description={t('settings.languageDesc')}>
-          <Select<string>
-            value={i18n.language.startsWith('zh') ? 'zh' : 'en'}
-            options={[
-              { value: 'en', label: 'English' },
-              { value: 'zh', label: '简体中文' },
-            ]}
-            onChange={(lang) => i18n.changeLanguage(lang)}
-          />
-        </SettingRow>
-      </SettingsSection>
-
-      {/* ================================================================== */}
       {/* SSH Defaults Section */}
       {/* ================================================================== */}
       <SettingsSection
         icon={<Monitor className="w-5 h-5" />}
+        id="settings-sshDefaults"
         title={t('settings.sshDefaults')}
         description={t('settings.sshDefaultsDesc')}
       >
@@ -1488,6 +1545,7 @@ export function Settings() {
       {/* ================================================================== */}
       <SettingsSection
         icon={<Info className="w-5 h-5" />}
+        id="settings-about"
         title={t('settings.about')}
         description={t('settings.aboutDesc')}
       >

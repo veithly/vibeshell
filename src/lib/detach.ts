@@ -5,6 +5,8 @@ import { useSessionStore, type Session } from '../stores/sessionStore';
 import { useFileWorkspaceStore, type FileWorkspaceTab } from '../stores/fileWorkspaceStore';
 import { usePluginWorkspaceStore, type PluginPanelState, type PluginWorkspaceTab } from '../stores/pluginWorkspaceStore';
 import { filePaneId, pluginPaneId, sessionPaneId } from './paneIds';
+import { Effect, EffectState } from '@tauri-apps/api/window';
+import { useRuntimeCapabilitiesStore } from '../stores/runtimeCapabilitiesStore';
 import { readTextBuffer, writeTextBuffer, setTextBufferLocked, waitForTextSave, type TextEditBuffer } from './fileEditBuffer';
 
 export type DetachTarget =
@@ -167,6 +169,11 @@ export function openDetachedWindow(
             title: target.kind === 'terminal' ? target.title : target.kind === 'file' ? target.name : target.pluginId,
             width: options?.width ?? 980, height: options?.height ?? 660,
             minWidth: 480, minHeight: 320, decorations: false, dragDropEnabled: false, visible: false,
+            ...(useRuntimeCapabilitiesStore.getState().capabilities.platform === 'macos' ? {
+              transparent: true,
+              shadow: true,
+              windowEffects: { effects: [Effect.Sidebar], state: EffectState.Active, radius: 14 },
+            } : {}),
           });
           void nativeWindow.once('tauri://error', ({ payload: error }) => reject(new Error(String(error))))
             .then((unlisten) => { if (finished) unlisten(); else stopError = unlisten; }).catch(reject);

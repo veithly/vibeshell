@@ -61,6 +61,11 @@
     "addServer": "添加服务器",
     "history": "指令历史",
     "sftp": "SFTP",
+    "performance": "性能监控",
+    "performanceShort": "性能",
+    "closePerformance": "关闭性能监控",
+    "resizePerformance": "调整性能面板高度",
+    "performanceRefresh": "性能刷新间隔",
     "tunnels": "隧道",
     "snippets": "命令片段",
     "settings": "设置"
@@ -70,6 +75,7 @@
     "availableMessage": "VibeShell {{version}} 已发布。打开 设置 > 关于 即可下载更新。"
   },
   "session": {
+    "sessions": "工作区标签页",
     "newSession": "新建会话",
     "newConnection": "新建连接",
     "noActiveSession": "暂无活跃会话",
@@ -294,6 +300,12 @@
     "theme": "主题",
     "themeDesc": "应用程序的配色方案",
     "themeMode": "主题模式",
+    "dayMode": "日间模式",
+    "nightMode": "夜间模式",
+    "terminalBackgroundOpacity": "终端底色遮罩",
+    "terminalBackgroundOpacityDesc": "只调整终端底色，不改变文字透明度。降低数值可透出更多窗后内容；90% 适合专注阅读。",
+    "windowMaterialOpacity": "窗体底色浓度",
+    "windowMaterialOpacityDesc": "控制顶栏和面板覆盖在原生毛玻璃上的中性底色。数值越低越通透，100% 为实色。macOS 透出真实桌面；其他平台使用实色背景。",
     "themeModeDesc": "可手动选择主题，或跟随系统的日夜模式自动切换。",
     "themeModeManual": "手动选择",
     "themeModeSystem": "跟随系统（自动切换）",

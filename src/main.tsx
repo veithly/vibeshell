@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "./i18n"; // Initialize i18n before App
 import App from "./App";
 import "./styles.css";
+import "./glass.css";
 import { CloudSyncLifecycle } from "./components/CloudSyncLifecycle";
 import { DetachedWindow } from "./components/DetachedWindow";
 import { parseDetachTarget } from "./lib/detach";

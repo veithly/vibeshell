@@ -57,7 +57,7 @@ export function ConfirmDialog({
     >
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60"
+        className="absolute inset-0 glass-scrim"
         onClick={onCancel}
       />
 
@@ -67,7 +67,7 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={messageId}
-        className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-sm mx-4"
+        className="glass-dialog glass-form relative border border-tokyo-bg-hl rounded-lg w-full max-w-sm mx-4"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">

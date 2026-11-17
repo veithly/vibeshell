@@ -1,18 +1,29 @@
 /// <reference types="vite/client" />
 // Documentation-only entry. Nothing in src/ imports this fixture.
-// Real components + in-memory IPC; never delegate to a native backend.
+// Real components + in-memory application IPC. The isolated native capture
+// host forwards window/event APIs only; SSH/files/plugins never reach Rust.
 import { mockIPC, mockWindows } from '@tauri-apps/api/mocks';
 import { emit } from '@tauri-apps/api/event';
 import type { PluginManifest, PluginRecord } from '../../src/plugins/types';
 import type { SessionInfo, LocalShellSessionInfo } from '../../src/stores/sessionStore';
+import { zipSync, strToU8 } from 'fflate';
 
 if (!import.meta.env.DEV || !['127.0.0.1', 'localhost'].includes(location.hostname) || location.port !== '1421') {
   throw new Error('Documentation demo requires the isolated loopback development origin on port 1421.');
 }
+const nativeInternals = (window as any).__TAURI_INTERNALS__;
+const nativeInvoke = nativeInternals?.invoke?.bind(nativeInternals);
+const nativeCapture = Boolean(nativeInvoke);
+if (nativeCapture && await nativeInvoke('plugin:app|identifier') !== 'com.vibeshell.readme-preview') {
+  throw new Error('Native documentation capture requires its own isolated application identifier.');
+}
+document.documentElement.dataset.readmeNative = String(nativeCapture);
+const detached = new URLSearchParams(location.search).has('detach');
 const scenario = new URLSearchParams(location.search).get('scene') ?? 'collaboration';
 const lang = new URLSearchParams(location.search).get('lang') === 'zh' ? 'zh' : 'en';
-const light = scenario === 'theme' || scenario === 'files';
-const time = Date.UTC(2026, 8, 18, 9, 42, 0);
+const light = new URLSearchParams(location.search).get('theme') === 'light' || scenario === 'theme' || scenario === 'files' || scenario === 'panes-day';
+const compositePanes = scenario === 'panes' || scenario === 'panes-day';
+const time = Date.UTC(2026, 10, 13, 9, 42, 0);
 const seconds = Math.floor(time / 1000);
 const root = '/srv/northstar';
 const workspace = '/workspace/northstar';
@@ -50,7 +61,11 @@ const files: Record<string, string> = {
   [`${root}/RUNBOOK.md`]: markdown,
   [`${root}/src/health.ts`]: code,
   [`${root}/compose.yaml`]: 'services:\n  api:\n    image: northstar/api:preview\n    ports: ["127.0.0.1:8080:8080"]\n    restart: unless-stopped\n  worker:\n    image: northstar/worker:preview\n    environment:\n      QUEUE: jobs-preview\n',
+  [`${root}/nginx.conf`]: 'server {\n    listen 8080;\n    server_name api.northstar.test;\n\n    location /api/ {\n        proxy_pass http://127.0.0.1:3000;\n        proxy_set_header Host $host;\n        proxy_connect_timeout 5s;\n        proxy_read_timeout 30s;\n    }\n\n    location /health {\n        access_log off;\n        return 200 "ready\\n";\n    }\n}\n',
+  [`${root}/logs/app.log`]: '09:41:02 INFO GET /health 200 8ms\n09:41:36 INFO GET /api/jobs 200 14ms\n',
 };
+const archiveBytes = zipSync({ 'release/README.md': strToU8(markdown), 'release/nginx.conf': strToU8(files[`${root}/nginx.conf`]) });
+const archivePath = `${root}/release.zip`;
 const activity = [
   ['user', 'input', 'docker compose ps', 'demo-session-api'],
   ['cli', 'cli.sftp_read', `${root}/src/health.ts`, 'demo-session-api'],
@@ -62,21 +77,23 @@ const activity = [
 
 const settings = {
   terminal: { fontSize: 15, fontFamily: 'Monaco', cursorStyle: 'bar', cursorBlink: false, scrollbackLines: 10000 },
-  appearance: { theme: light ? 'paper-white' : 'violet-black', themeMode: 'manual', lightTheme: 'paper-white', darkTheme: 'violet-black', windowOpacity: 1 },
+  appearance: { theme: light ? 'paper-white' : 'ink-black', themeMode: 'manual', lightTheme: 'paper-white', darkTheme: 'ink-black', windowOpacity: 1, terminalBackgroundOpacity: 0.9, windowMaterialOpacity: 0.12 },
   sshDefaults: { defaultPort: 22, connectionTimeout: 30, keepaliveInterval: 60, defaultUsername: 'demo' },
   aiPrediction: { enabled: false, provider: 'openai', apiKey: '', baseUrl: 'https://api.example.test/v1', model: '', debounceMs: 450, maxTokens: 32, minChars: 2 },
 };
-const capabilities = { platform: 'macos', isMobile: false, windowControls: false, localShell: true,
+const capabilities = { platform: 'macos', isMobile: false, windowControls: nativeCapture, localShell: true,
   agentGateway: true, desktopUpdater: false, cliIpc: true, directoryTransfer: true, backgroundTunnels: true };
 const active = scenario === 'coding' ? 'demo-session-agent' : 'demo-session-api';
 const fileTab = { id: `demo-session-api\u0000${root}/RUNBOOK.md`, sessionId: 'demo-session-api',
   path: `${root}/RUNBOOK.md`, name: 'RUNBOOK.md', kind: 'text', size: markdown.length, dirty: false };
-const pluginTab = { id: 'demo-session-api::server-performance', pluginId: 'server-performance',
-  sessionId: 'demo-session-api', sessionType: 'ssh', serverName: 'API · staging' };
+const dashboardTab = { id: 'demo-session-api::docker-containers', sessionId: 'demo-session-api',
+  pluginId: 'docker-containers', sessionType: 'ssh', serverName: 'API · staging' };
 const sessionPane = `session:${active}`;
-const filePane = `file:${fileTab.id}`;
-const pluginPane = `plugin:${pluginTab.id}`;
+const workerPane = 'session:demo-session-worker';
+const filePane = `file:${encodeURIComponent(fileTab.id)}`;
+const dashboardPane = `plugin:${dashboardTab.id}`;
 // Dedicated origin only: reset just this demo's workspace keys on navigation.
+if (!detached) {
 for (const key of Object.keys(localStorage)) {
   if (key.startsWith('vibeshell.') || key.startsWith('vibeshell-') || key.startsWith('vibeshell_')) localStorage.removeItem(key);
 }
@@ -89,17 +106,28 @@ localStorage.setItem('vibeshell_command_history:demo-api', JSON.stringify(['dock
 localStorage.setItem('vibeshell.workspace-layout.v2', JSON.stringify({ version: 2,
   sessions: [...ssh.map(s => ({ id: s.id, serverId: s.server_id, serverName: s.server_name, sessionType: 'ssh' })),
     { id: local[0].id, serverId: 'zsh', serverName: local[0].shellName, sessionType: 'local', purpose: 'coding_agent', cwd: workspace }],
-  files: [fileTab], plugins: [pluginTab], activeSessionId: active,
+  files: scenario === 'files' || compositePanes ? [fileTab] : [],
+  plugins: compositePanes ? [dashboardTab] : [],
+  activeSessionId: active,
   activeFileId: scenario === 'files' ? fileTab.id : null, activePluginId: null, detached: [],
-  tree: scenario === 'files' ? { direction: 'row', first: sessionPane, second: filePane, splitPercentage: 43 }
-    : scenario === 'collaboration' ? { direction: 'row', first: sessionPane, second: pluginPane, splitPercentage: 63 } : sessionPane,
+  tree: compositePanes ? {
+    direction: 'column', splitPercentage: 52,
+    first: { direction: 'row', first: sessionPane, second: workerPane, splitPercentage: 50 },
+    second: { direction: 'row', first: filePane, second: dashboardPane, splitPercentage: 48 },
+  }
+    : sessionPane,
   focusedPane: scenario === 'files' ? filePane : sessionPane,
 }));
+}
 const ansi = { reset: '\x1b[0m', blue: '\x1b[38;5;75m', green: '\x1b[38;5;78m', dim: '\x1b[38;5;245m' };
 const prompt = `${ansi.green}demo@staging-api${ansi.reset} ${ansi.blue}${root}${ansi.reset} $ `;
-const terminalText = (id: string) => id === 'demo-session-agent'
-  ? `${ansi.blue}Codex · Northstar workspace${ansi.reset}\r\n${ansi.dim}Synthetic agent transcript for documentation${ansi.reset}\r\n\r\n› Add a bounded retry to the health check.\r\n  Keep the last error and show me the diff.\r\n\r\n  Read src/health.ts\r\n  Read tests/health.test.ts\r\n\r\n  The request used to retry without a limit.\r\n  I changed it to three attempts with backoff.\r\n\r\n${ansi.green}✓${ansi.reset} Keep a 5-second timeout per request\r\n${ansi.green}✓${ansi.reset} Preserve the final error\r\n${ansi.green}✓${ansi.reset} Add failure and retry tests\r\n\r\n  src/health.ts          +9  -2\r\n  tests/health.test.ts   +8\r\n\r\n  Review the changes in the panel beside me.\r\n  No deployment or service restart was run.\r\n\r\n› `
-  : `${ansi.blue}NORTHSTAR / STAGING${ansi.reset}\r\n${ansi.dim}Documentation fixture · no live SSH connection${ansi.reset}\r\n\r\n${prompt}docker compose ps\r\nNAME          IMAGE                         STATUS\r\napi           northstar/api:preview          Up 2 hours\r\nworker        northstar/worker:preview       Up 2 hours\r\npostgres      postgres:16                   Up 6 days\r\nredis         redis:7                       Up 6 days\r\n\r\n${prompt}curl -fsS localhost:8080/health\r\n${ansi.green}{"status":"ready","queue":"ok","database":"ok"}${ansi.reset}\r\n\r\n${prompt}git diff --stat\r\n src/health.ts         | 11 +++++++++--\r\n tests/health.test.ts  |  8 ++++++++\r\n 2 files changed, 17 insertions(+), 2 deletions(-)\r\n\r\n${ansi.dim}One shared shell. Open History to see who sent each command.${ansi.reset}\r\n\r\n${prompt}`;
+const terminalText = (id: string) => scenario === 'completion'
+  ? `${ansi.blue}NORTHSTAR / COMMAND WORKSPACE${ansi.reset}\r\n\r\n${prompt}git status --short\r\n M nginx.conf\r\n M src/health.ts\r\n\r\n${prompt}docker compose ps\r\nNAME       STATUS                   PORTS\r\napi        Up 2 hours (healthy)      8080/tcp\r\nworker     Up 2 hours               9090/tcp\r\n\r\n${prompt}`
+  : id === 'demo-session-worker'
+  ? `${ansi.blue}NORTHSTAR / WORKERS${ansi.reset}\r\n\r\n${ansi.green}demo@staging-worker${ansi.reset} $ docker compose logs --tail 6 worker\r\nworker | queue connected\r\nworker | concurrency: 4\r\nworker | job 1842 completed in 128ms\r\nworker | job 1843 completed in 96ms\r\nworker | retries: 0 / failed: 0\r\nworker | ready for next job\r\n\r\n${ansi.green}demo@staging-worker${ansi.reset} $ `
+  : id === 'demo-session-agent'
+  ? `${ansi.blue}Codex · Northstar workspace${ansi.reset}\r\n${ansi.dim}Project: /workspace/northstar${ansi.reset}\r\n\r\n› Add a bounded retry to the health check.\r\n  Keep the last error and show me the diff.\r\n\r\n  Read src/health.ts\r\n  Read tests/health.test.ts\r\n\r\n  The request used to retry without a limit.\r\n  I changed it to three attempts with backoff.\r\n\r\n${ansi.green}✓${ansi.reset} Keep a 5-second timeout per request\r\n${ansi.green}✓${ansi.reset} Preserve the final error\r\n${ansi.green}✓${ansi.reset} Add failure and retry tests\r\n\r\n  src/health.ts          +9  -2\r\n  tests/health.test.ts   +8\r\n\r\n  Review the changes in the panel beside me.\r\n\r\n\r\n› `
+  : `${ansi.blue}NORTHSTAR / STAGING${ansi.reset}\r\n${ansi.dim}API service · staging environment${ansi.reset}\r\n\r\n${prompt}docker compose ps\r\nNAME          IMAGE                         STATUS\r\napi           northstar/api:preview          Up 2 hours\r\nworker        northstar/worker:preview       Up 2 hours\r\npostgres      postgres:16                   Up 6 days\r\nredis         redis:7                       Up 6 days\r\n\r\n${prompt}curl -fsS localhost:8080/health\r\n${ansi.green}{"status":"ready","queue":"ok","database":"ok"}${ansi.reset}\r\n\r\n${prompt}git diff --stat\r\n src/health.ts         | 11 +++++++++--\r\n tests/health.test.ts  |  8 ++++++++\r\n 2 files changed, 17 insertions(+), 2 deletions(-)\r\n\r\n${ansi.dim}${ansi.reset}\r\n\r\n${prompt}`;
 const output = async (id: string, text: string) => emit('session-output', {
   session_id: id, data: btoa(String.fromCharCode(...new TextEncoder().encode(text))),
 });
@@ -109,14 +137,22 @@ const docker: Record<string, string> = {
   stats: 'api\t12.4%\t184 MiB / 2 GiB\nworker\t3.1%\t96 MiB / 1 GiB\npostgres\t1.8%\t312 MiB / 4 GiB\nredis\t0.4%\t24 MiB / 512 MiB',
   logs: '09:40:11 INFO  health endpoint ready\n09:40:14 INFO  database pool connected\n09:41:02 INFO  request GET /health 200 8ms\n09:41:36 INFO  request GET /api/jobs 200 14ms\n',
 };
-mockWindows('main');
-mockIPC(async (cmd, payload) => {
+if (!nativeCapture) mockWindows('main');
+const fixtureInvoke = async (cmd: string, payload?: unknown): Promise<any> => {
   calls.push(cmd);
   const args = (payload ?? {}) as Record<string, any>;
   const request = args.request ?? args;
+  if (nativeCapture && (cmd.startsWith('plugin:window|') || cmd.startsWith('plugin:event|') || cmd === 'plugin:webview|get_all_webviews')) {
+    return nativeInvoke(cmd, payload);
+  }
+  if (nativeCapture && cmd === 'plugin:webview|create_webview_window') {
+    const options = args.options;
+    if (!options || !String(options.label).startsWith('detach-') || !String(options.url).startsWith('index.html?detach=')) throw new Error('Only documentation detach windows are allowed');
+    return nativeInvoke(cmd, { ...args, options: { ...options, url: `scripts/readme-demo/${options.url}&scene=panes` } });
+  }
   switch (cmd) {
     case 'get_runtime_capabilities': return capabilities;
-    case 'get_app_version': return '1.1.0';
+    case 'get_app_version': return '1.2.0';
     case 'get_servers': return servers;
     case 'get_groups': return [{ id: 'demo-staging', name: 'Staging', color: 'blue' }, { id: 'demo-data', name: 'Data', color: 'green' }, { id: 'demo-platform', name: 'Platform', color: 'purple' }];
     case 'load_settings': return settings;
@@ -136,12 +172,13 @@ mockIPC(async (cmd, payload) => {
     case 'plugin:window|is_fullscreen': case 'plugin:window|is_maximized': return false;
     case 'plugin:window|get_all_windows': return ['main'];
     case 'plugin:window|available_monitors': return [{ name: 'Demo display', position: { x: 0, y: 0 }, size: { width: 1440, height: 900 }, scaleFactor: 1, workArea: { position: { x: 0, y: 0 }, size: { width: 1440, height: 900 } } }];
-    case 'plugin:window|set_position': case 'plugin:window|set_size': return null;
+    case 'plugin:window|set_position': case 'plugin:window|set_size': case 'plugin:window|set_theme': return null;
+    case 'detect_ai_tools': return [];
     case 'cloud_sync_status': return { unlocked: false, syncing: false, provider: null, endpoint: null, vaultId: null, pendingChanges: 0, conflicts: 0, lastSuccessAt: null, lastError: null };
     case 'agent_activity_list': return activity.filter(item => (!args.after || item.sequence > args.after) && (!args.before || item.sequence < args.before));
     case 'get_agent_guard_status': return { autoApproveUntil: null, pending: [] };
     case 'resolve_agent_approval': await emit('agent-approval-resolved', { id: request.id }); return null;
-    case 'get_agent_guard_config': return { enabled: true, autoApproveHours: 0 };
+    case 'get_agent_guard_config': return { enabled: true, requireForExec: true, customPatterns: [], allowPatterns: [] };
     case 'get_agent_gateway_status': return { running: true, endpoint: 'http://127.0.0.1:0/demo-only', manifestPath: '/demo/agent-gateway.json', pid: null, protocolVersion: '2024-11-05' };
     case 'local_shell_list_shells': return [{ id: 'zsh', name: 'Zsh', path: '/bin/zsh', available: true }, { id: 'bash', name: 'Bash', path: '/bin/bash', available: true }];
     case 'local_shell_get_default': return { id: 'zsh', name: 'Zsh', path: '/bin/zsh', available: true };
@@ -163,10 +200,12 @@ mockIPC(async (cmd, payload) => {
     case 'sftp_init': return true;
     case 'sftp_pwd': return root;
     case 'sftp_list_dir': return [
-      ...['src', 'public', 'logs'].map(name => ({ name, path: `${root}/${name}`, isDirectory: true, size: 0, modifiedAt: seconds, permissions: 'drwxr-xr-x' })),
+      ...(request.path === root ? ['src', 'public', 'logs'].map(name => ({ name, path: `${root}/${name}`, isDirectory: true, size: 0, modifiedAt: seconds, permissions: 'drwxr-xr-x' })) : []),
+      ...(request.path === root ? [{ name: 'release.zip', path: archivePath, isDirectory: false, size: archiveBytes.length, modifiedAt: seconds, permissions: '-rw-r--r--' }] : []),
       ...Object.entries(files).filter(([path]) => path.startsWith(request.path + '/') && !path.slice(request.path.length + 1).includes('/')).map(([path, content]) => ({ name: path.split('/').at(-1), path, isDirectory: false, size: content.length, modifiedAt: seconds, permissions: '-rw-r--r--' })),
     ];
     case 'sftp_read_file': case 'local_file_read': {
+      if (request.path === archivePath) return { content: btoa(String.fromCharCode(...archiveBytes)), isBinary: true, size: archiveBytes.length, truncated: false, mimeType: 'application/zip' };
       const content = files[request.path];
       if (content === undefined) break;
       return { content, isBinary: false, size: content.length, truncated: false, mimeType: 'text/plain' };
@@ -180,7 +219,9 @@ mockIPC(async (cmd, payload) => {
   }
   blocked.push(cmd);
   throw new Error(`Documentation fixture does not implement ${cmd}; native calls are never forwarded.`);
-}, { shouldMockEvents: true });
+};
+if (nativeCapture) (window as any).__VIBESHELL_README_INVOKE__ = fixtureInvoke;
+else mockIPC(fixtureInvoke, { shouldMockEvents: true });
 
 await import('../../src/main');
 const { useSessionStore } = await import('../../src/stores/sessionStore');
@@ -200,3 +241,4 @@ Object.assign(window, { __VIBESHELL_DEMO__: {
   theme: async () => { await useSettingsStore.getState().updateAppearanceSettings({ theme: 'paper-white' }); useCustomThemeStore.getState().save(':root {\n  --tokyo-blue: #0d766e !important;\n}\n.session-tabbar [role="tab"] {\n  border-radius: 10px;\n}\n', false); },
   replay: async () => { for (const item of [...ssh, ...local]) await output(item.id, '\x1b[2J\x1b[H' + terminalText(item.id)); },
 } });
+if (nativeCapture && !detached) await import('./native-scenes');

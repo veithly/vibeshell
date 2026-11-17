@@ -577,17 +577,8 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
 
   return (
     <>
-      <div className="session-tabbar flex h-11 items-center gap-1.5 border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-2">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
-          <div className="session-rail" aria-hidden="true">
-            <span className="session-rail-bars">
-              <i />
-              <i />
-              <i />
-            </span>
-            <span className="session-rail-count">{visibleSessions.length + visibleFiles.length + visiblePlugins.length}</span>
-          </div>
-
+      <div className="session-tabbar flex h-full min-w-0 flex-1 items-center gap-1.5">
+        <div className="session-tabstrip flex min-w-0 items-center gap-1.5 overflow-x-auto" role="tablist" aria-label={t('session.sessions')}>
           {visibleSessions.map((session) => (
             <SessionTab
               key={session.id}
@@ -665,6 +656,7 @@ export function SessionTabs({ onNewSession, onReconnectSession, onOpenSessionInW
             <Plus className="w-4 h-4" />
           </button>
         </div>
+        <div className="titlebar-drag-gutter h-full min-w-6 flex-1" data-tauri-drag-region aria-hidden="true" />
         {rightActions}
       </div>
 

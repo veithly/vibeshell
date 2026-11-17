@@ -59,7 +59,7 @@ function Toast({ id, type, title, message, dismissible, onDismiss }: ToastProps)
   return (
     <div
       className={cn(
-        'notification-toast flex w-full min-w-0 max-w-[420px] items-start gap-3 p-4 rounded-lg shadow-lg border-l-4',
+        'notification-toast glass-form flex w-full min-w-0 max-w-[420px] items-start gap-3 p-4 rounded-lg border',
         'animate-slide-in-right',
         styles.bg,
         styles.border

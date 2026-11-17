@@ -39,7 +39,7 @@ export function CustomThemeEditor() {
       if (!result.success) throw new Error(result.error.message);
     } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
   };
-  return <section className="py-5 space-y-3" aria-labelledby={`${id}-title`} data-vibe-surface="theme-editor">
+  return <section className="glass-form py-5 space-y-3" aria-labelledby={`${id}-title`} data-vibe-surface="theme-editor">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex items-center gap-2"><Code2 className="h-4 w-4 text-tokyo-cyan" /><h3 id={`${id}-title`} className="text-sm font-semibold">{t('customTheme.title')}</h3></div>
       <span role="status" className="text-xs text-tokyo-comment">{t(theme.previewCss !== null ? 'customTheme.previewing' : theme.enabled ? 'customTheme.enabled' : 'customTheme.disabled')}</span>

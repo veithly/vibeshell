@@ -145,12 +145,12 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
     <div className="responsive-dialog-layer fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60"
+        className="absolute inset-0 glass-scrim"
         onClick={() => { if (!loading) onClose(); }}
       />
 
       {/* Dialog */}
-      <div className="responsive-dialog-panel relative min-w-0 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-md mx-3 sm:mx-4">
+      <div className="responsive-dialog-panel glass-dialog glass-form relative min-w-0 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-md mx-3 sm:mx-4">
         {/* Header */}
         <div className="responsive-dialog-header flex items-center justify-between gap-3 px-4 py-3 border-b border-tokyo-bg-hl">
           <h2 className="text-lg font-semibold text-tokyo-fg">Edit Server</h2>

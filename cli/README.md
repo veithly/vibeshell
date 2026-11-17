@@ -63,7 +63,7 @@ Select an existing session and verify the plugin is installed and enabled first.
 
 The desktop displays Agent (CLI) commands in the same history as human terminal input. `ssh`, `exec` and `ssh-session` use the same persistent remote shell, so `cd` and `export` survive subsequent CLI calls. For shells emitting OSC 3008 command status events, the CLI propagates the remote exit code, not merely command submission; if no exit status is available it prints a warning instead of claiming verified success. Connections require their owning process to remain alive; upgrade the GUI and CLI together rather than mixing incompatible service versions.
 
-VibeShell 1.1.0 is GPL-3.0-only. Release archives include LICENSE, NOTICE and legacy attribution; matching source materials are available beside the release binaries. Earlier MIT grants are not revoked. The software comes without warranty to the extent permitted by law.
+VibeShell is GPL-3.0-only. Release archives include LICENSE, NOTICE and legacy attribution; matching source materials are available beside the release binaries. Earlier MIT grants are not revoked. The software comes without warranty to the extent permitted by law.
 
 ## Build from source
 

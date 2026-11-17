@@ -1505,7 +1505,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     <div
       ref={panelRef}
       className={cn(
-        'sftp-panel-shell relative bg-tokyo-bg-dark transition-[width,height] duration-200',
+        'sftp-panel-shell glass-form relative transition-[width,height] duration-200',
         dock === 'right' ? 'border-l border-tokyo-bg-hl' : 'border-t border-tokyo-bg-hl',
         dock === 'right' && isCollapsed && !isFullscreen && 'pointer-events-none overflow-hidden border-l-0',
         isFullscreen && 'absolute inset-0 z-40 border-l-0 border-t-0'
@@ -1546,7 +1546,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       {/* Header */}
       <div
         className={cn(
-          'flex items-center justify-between px-3 h-10',
+          'glass-toolbar flex items-center justify-between px-3 h-10',
           'border-b border-tokyo-bg-hl'
         )}
       >
@@ -1633,7 +1633,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
       {!isCollapsed && (
         <div className="relative flex h-[calc(100%-40px)] min-h-0 flex-col">
           {/* Toolbar */}
-          <div className="flex items-center gap-1 px-2 py-1 border-b border-tokyo-bg-hl bg-tokyo-bg" data-testid="sftp-toolbar">
+          <div className="glass-toolbar flex items-center gap-1 px-2 py-1 border-b border-tokyo-bg-hl" data-testid="sftp-toolbar">
             <button
               onClick={(e) => { e.stopPropagation(); handleGoHome(); }}
               disabled={isLoading}
@@ -1803,7 +1803,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                 </button>
                 {isToolbarMenuOpen && (
                   <div
-                    className="absolute right-0 top-full z-50 mt-1 max-h-64 w-52 overflow-y-auto rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
+                    className="glass-menu absolute right-0 top-full z-50 mt-1 max-h-64 w-52 overflow-y-auto py-1"
                     onClick={(event) => event.stopPropagation()}
                   >
                     {pathTransferEnabled && (
@@ -1889,7 +1889,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
           </div>
 
           {/* Address bar */}
-          <div className="flex h-8 flex-shrink-0 items-center gap-1 overflow-hidden border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-3 text-xs text-tokyo-comment" data-testid="sftp-address-bar">
+          <div className="glass-toolbar flex h-8 flex-shrink-0 items-center gap-1 overflow-hidden border-b border-tokyo-bg-hl px-3 text-xs text-tokyo-comment" data-testid="sftp-address-bar">
               <span
                 className="cursor-pointer text-tokyo-fg hover:text-tokyo-blue hover:underline"
                 onClick={(e) => { e.stopPropagation(); loadDirectory('/'); }}
@@ -1919,7 +1919,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
           {transferBatch && (
             <div
               data-testid="sftp-transfer-progress"
-              className="flex-shrink-0 border-b border-tokyo-bg-hl bg-tokyo-bg px-3 py-2"
+              className="glass-well flex-shrink-0 border-b border-tokyo-bg-hl px-3 py-2"
               aria-live="polite"
             >
               <div className="flex min-w-0 items-center gap-2 text-xs">
@@ -2022,7 +2022,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
             {viewMode === 'columns' ? (
               <div
                 ref={columnsScrollerRef}
-                className="flex h-full min-h-0 overflow-x-auto overflow-y-hidden bg-tokyo-bg"
+                className="flex h-full min-h-0 overflow-x-auto overflow-y-hidden"
                 data-testid="sftp-column-browser"
               >
                 {columns.map((column, columnIndex) => (
@@ -2031,7 +2031,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                     className="flex h-full min-w-[220px] max-w-[280px] flex-1 flex-col border-r border-tokyo-bg-hl last:border-r-0"
                     data-sftp-column={column.path}
                   >
-                    <div className="flex h-8 flex-shrink-0 items-center border-b border-tokyo-bg-hl bg-tokyo-bg-dark px-2">
+                    <div className="glass-toolbar flex h-8 flex-shrink-0 items-center border-b border-tokyo-bg-hl px-2">
                       <span className="truncate font-mono text-[10px] text-tokyo-comment" title={column.path}>
                         {column.path === '/' ? '/' : basename(column.path)}
                       </span>
@@ -2244,8 +2244,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
           {/* Rename Dialog */}
           {renameEntry && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-50">
-              <div className="bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg p-4 w-80">
+            <div className="absolute inset-0 flex items-center justify-center glass-scrim z-50">
+              <div className="glass-dialog glass-form p-4 w-80 max-w-[calc(100%-24px)]">
                 <h3 className="text-sm font-medium text-tokyo-fg mb-3">
                   Rename {renameEntry.isDirectory ? 'folder' : 'file'}
                 </h3>
@@ -2286,8 +2286,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
           {/* New Folder Dialog */}
           {showNewFolderDialog && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-50">
-              <div className="bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg p-4 w-80">
+            <div className="absolute inset-0 flex items-center justify-center glass-scrim z-50">
+              <div className="glass-dialog glass-form p-4 w-80 max-w-[calc(100%-24px)]">
                 <h3 className="text-sm font-medium text-tokyo-fg mb-3">New Folder</h3>
                 <input
                   type="text"
@@ -2339,8 +2339,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
 
           {/* Compress Dialog */}
           {showCompressDialog && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-50">
-              <div className="bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg p-4 w-80">
+            <div className="absolute inset-0 flex items-center justify-center glass-scrim z-50">
+              <div className="glass-dialog glass-form p-4 w-80 max-w-[calc(100%-24px)]">
                 <h3 className="text-sm font-medium text-tokyo-fg mb-3">
                   Compress {selectedEntriesArray.length} item(s)
                 </h3>
