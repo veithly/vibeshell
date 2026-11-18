@@ -18,6 +18,41 @@ pub fn workspace_save_handler_ready(window: tauri::Window) -> Result<(), String>
     Ok(())
 }
 
+/// Detaching a pane creates a separate native window after Tauri startup.
+/// Install the same glass material before showing its content. Main-window
+/// setup happens separately; only detached windows can invoke this command.
+#[tauri::command]
+pub fn workspace_configure_native_glass(window: tauri::WebviewWindow) -> Result<(), String> {
+    if !is_detached_glass_window(window.label()) {
+        return Err("Only a detached workspace can initialize its window material".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let detached = window.clone();
+        window
+            .run_on_main_thread(move || crate::platform::configure_native_glass_window(&detached))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn is_detached_glass_window(label: &str) -> bool {
+    label.starts_with("detach-") && label.len() > "detach-".len()
+}
+
+#[cfg(test)]
+mod glass_tests {
+    use super::is_detached_glass_window;
+
+    #[test]
+    fn native_glass_command_rejects_the_main_or_foreign_window() {
+        assert!(!is_detached_glass_window("main"));
+        assert!(!is_detached_glass_window("detach-"));
+        assert!(!is_detached_glass_window("settings"));
+        assert!(is_detached_glass_window("detach-418d030c-a10b-4da4"));
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspacePointerState {

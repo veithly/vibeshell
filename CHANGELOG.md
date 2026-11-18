@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### macOS native glass compatibility
+
+On macOS 26 and newer, window backgrounds use the native Liquid Glass
+material instead of the legacy sidebar vibrancy surface, which could appear
+opaque even with transparent CSS. The legacy material is explicitly removed
+after the new material is installed, including in detached workspaces; older
+macOS versions retain their existing native fallback. The default terminal
+color mask is now 60% to let the background show through while keeping glyphs
+fully opaque. Existing saved appearance preferences remain respected.
+
 ## 1.2.0 — 2026-11-18
 
 ### Container sessions, outbound routing and Gateway preferences

@@ -303,7 +303,7 @@
     "dayMode": "Day mode",
     "nightMode": "Night mode",
     "terminalBackgroundOpacity": "Terminal color mask",
-    "terminalBackgroundOpacityDesc": "Changes only the terminal background, never text opacity. Lower values reveal more behind the window; 90% prioritizes reading.",
+    "terminalBackgroundOpacityDesc": "Changes only the terminal background, never text opacity. Lower values reveal more of the frosted-glass window; 60% balances translucency with readability.",
     "windowMaterialOpacity": "Window material tint",
     "windowMaterialOpacityDesc": "Neutral tint over native frosted glass on toolbars and panels. Lower is more translucent; 100% is solid. macOS reveals the real desktop; other platforms use a solid fallback.",
     "themeModeDesc": "Choose a theme manually or follow the system light/dark mode automatically.",
