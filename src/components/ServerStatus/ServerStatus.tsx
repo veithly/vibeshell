@@ -13,7 +13,9 @@ import {
   AlertCircle,
   Loader2,
   GripHorizontal,
+  X,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { cn, formatFileSize } from '../../lib/utils';
 import { safeInvoke } from '../../lib/tauri';
 
@@ -161,7 +163,7 @@ interface MetricCardProps {
 // Memoized metric card component for performance
 const MetricCard = memo(function MetricCard({ icon, title, children, className }: MetricCardProps) {
   return (
-    <div className={cn('bg-tokyo-bg rounded-lg p-3 border border-tokyo-bg-hl', className)}>
+    <div className={cn('glass-well metric-card rounded-xl p-3', className)}>
       <div className="flex items-center gap-2 mb-2">
         <span className="text-tokyo-blue">{icon}</span>
         <h3 className="text-sm font-medium text-tokyo-fg">{title}</h3>
@@ -176,6 +178,9 @@ const MetricCard = memo(function MetricCard({ icon, title, children, className }
 // =============================================================================
 
 interface ServerStatusProps {
+  title?: string;
+  sessionName?: string;
+  onClose?: () => void;
   /** Session ID to monitor */
   sessionId: string;
   /** Whether the panel is initially collapsed */
@@ -196,6 +201,9 @@ interface ServerStatusProps {
 
 export function ServerStatus({
   sessionId,
+  title,
+  sessionName,
+  onClose,
   defaultCollapsed = true,
   defaultRefreshInterval = '30s',
   defaultHeight = 220,
@@ -204,6 +212,7 @@ export function ServerStatus({
   onToggle,
   onRefreshIntervalChange,
 }: ServerStatusProps) {
+  const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(defaultCollapsed);
   const [panelHeight, setPanelHeight] = useState(defaultHeight);
   const [status, setStatus] = useState<ServerStatus | null>(null);
@@ -335,35 +344,25 @@ export function ServerStatus({
     }
   }, [sessionId]);
 
-  // Auto-refresh based on interval
+  // One initial request per expansion/session, including manual mode. Errors
+  // wait for the next interval or an explicit retry, never a tight retry loop.
   useEffect(() => {
-    // Don't fetch if collapsed or manual refresh selected
-    if (isCollapsed || refreshInterval === 'manual') {
-      return;
-    }
-
-    // Initial fetch when expanded
-    fetchStatus();
+    if (isCollapsed) return;
+    void fetchStatus();
 
     // Set up interval
     const intervalMs = refreshIntervalOptions.find((opt) => opt.value === refreshInterval)?.ms;
-    if (intervalMs) {
-      const timer = setInterval(() => {
+    const timer = intervalMs ? setInterval(() => {
         // Skip ticks while the window is hidden to avoid pointless IPC when
         // the app is in the background (same pattern as App.tsx session sync).
         if (document.hidden) return;
-        fetchStatus();
-      }, intervalMs);
-      return () => clearInterval(timer);
-    }
+        void fetchStatus();
+      }, intervalMs) : undefined;
+    return () => {
+      clearInterval(timer);
+      fetchRequestIdRef.current += 1;
+    };
   }, [isCollapsed, refreshInterval, fetchStatus]);
-
-  // Fetch when expanding panel for the first time
-  useEffect(() => {
-    if (!isCollapsed && !status && !isLoading) {
-      fetchStatus();
-    }
-  }, [isCollapsed, status, isLoading, fetchStatus]);
 
   const handleToggle = useCallback(() => {
     const newCollapsed = !isCollapsed;
@@ -392,7 +391,7 @@ export function ServerStatus({
   return (
     <div
       ref={panelRef}
-      className="relative border-t border-tokyo-bg-hl bg-tokyo-bg-dark transition-all duration-200"
+      className="server-status-panel relative border-t border-tokyo-bg-hl"
       style={{ height: getPanelHeight() }}
     >
       {/* Resize Handle (when not collapsed) */}
@@ -406,6 +405,18 @@ export function ServerStatus({
           )}
           onMouseDown={handleResizeStart}
           title="Drag to resize"
+          role="separator"
+          aria-label={t('sidebar.resizePerformance')}
+          aria-orientation="horizontal"
+          aria-valuemin={minHeight}
+          aria-valuemax={maxHeight}
+          aria-valuenow={panelHeight}
+          tabIndex={0}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+            event.preventDefault();
+            setPanelHeight((height) => Math.min(maxHeight, Math.max(minHeight, height + (event.key === 'ArrowUp' ? 20 : -20))));
+          }}
         >
           <div className={cn(
             'flex items-center justify-center w-12 h-4 -mt-2 rounded-t',
@@ -421,13 +432,13 @@ export function ServerStatus({
       {/* Header */}
       <div
         className={cn(
-          'flex items-center justify-between px-3 h-10',
+          'performance-header flex items-center justify-between gap-2 px-3 h-10',
           'border-b border-tokyo-bg-hl cursor-pointer',
           'hover:bg-tokyo-bg-hl/30 transition-colors duration-150'
         )}
         onClick={handleToggle}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <button
             className="p-1 hover:bg-tokyo-bg-hl rounded transition-colors"
             onClick={(e) => {
@@ -443,11 +454,11 @@ export function ServerStatus({
             )}
           </button>
           <Activity className="w-4 h-4 text-tokyo-cyan" />
-          <span className="text-sm font-medium text-tokyo-fg">Server Status</span>
+          <span className="shrink-0 text-sm font-medium text-tokyo-fg">{title ?? t('sidebar.performance')}</span>
           {isLoading && <Loader2 className="w-4 h-4 text-tokyo-blue animate-spin ml-2" />}
-          {status && !isCollapsed && (
-            <span className="text-xs text-tokyo-comment ml-2">
-              {status.hostname}
+          {(sessionName || status) && !isCollapsed && (
+            <span className="truncate text-xs text-tokyo-comment ml-2" title={sessionName ?? status?.hostname}>
+              {sessionName ?? status?.hostname}
             </span>
           )}
         </div>
@@ -455,6 +466,7 @@ export function ServerStatus({
         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
           {/* Refresh Interval Selector */}
           <select
+            aria-label={t('sidebar.performanceRefresh')}
             value={refreshInterval}
             onChange={(e) => handleRefreshIntervalChange(e.target.value as RefreshInterval)}
             className="px-2 py-1 text-xs rounded bg-tokyo-bg-hl border border-tokyo-bg-hl
@@ -480,12 +492,13 @@ export function ServerStatus({
           >
             <RefreshCw className={cn('w-4 h-4 text-tokyo-comment', isLoading && 'animate-spin')} />
           </button>
+          {onClose && <button type="button" className="icon-button h-7 w-7" onClick={onClose} aria-label={t('sidebar.closePerformance')} title={t('sidebar.closePerformance')}><X className="h-4 w-4" /></button>}
         </div>
       </div>
 
       {/* Content */}
       {!isCollapsed && (
-        <div className="h-[calc(100%-40px)] overflow-auto p-3 space-y-3">
+        <div className="performance-content h-[calc(100%-40px)] overflow-auto p-3 space-y-3">
           {/* Error Display */}
           {error && (
             <div className="flex items-center gap-2 p-2 rounded bg-tokyo-red/10 border border-tokyo-red/30 text-tokyo-red text-sm">
@@ -512,7 +525,7 @@ export function ServerStatus({
           {status && (
             <>
               {/* Top Row: Server Info + Uptime */}
-              <div className="flex items-center justify-between text-xs text-tokyo-comment">
+              <div className="performance-summary flex flex-wrap items-center justify-between gap-2 text-xs text-tokyo-comment">
                 <div className="flex items-center gap-2">
                   <Server className="w-4 h-4" />
                   <span className="font-medium text-tokyo-fg">{status.hostname}</span>
@@ -529,7 +542,7 @@ export function ServerStatus({
               </div>
 
               {/* Metrics Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="performance-metrics grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
                 {/* CPU */}
                 <MetricCard icon={<Cpu className="w-4 h-4" />} title="CPU">
                   <ProgressBar value={status.cpu.usagePercent} />

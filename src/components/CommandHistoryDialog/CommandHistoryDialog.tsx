@@ -86,7 +86,7 @@ export function CommandHistoryDialog({
       <button
         type="button"
         aria-label={t('common.close')}
-        className="absolute inset-0 cursor-default bg-tokyo-bg-dark/80"
+        className="glass-scrim absolute inset-0 cursor-default"
         onClick={onClose}
       />
 
@@ -94,7 +94,7 @@ export function CommandHistoryDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="command-history-title"
-        className="relative flex max-h-[min(720px,calc(100vh-2rem))] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-tokyo-bg-hl bg-tokyo-bg shadow-2xl"
+        className="glass-dialog glass-form relative flex max-h-[min(720px,calc(100vh-2rem))] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-tokyo-bg-hl bg-tokyo-bg shadow-2xl"
       >
         <header className="flex items-center justify-between border-b border-tokyo-bg-hl px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">

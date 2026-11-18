@@ -159,7 +159,8 @@ vi.mock('../../stores/sessionStore', () => ({
   useSessionStore: (selector: (state: typeof mocks.storeState) => unknown) => selector(mocks.storeState),
 }));
 
-vi.mock('../../stores/settingsStore', () => ({
+vi.mock('../../stores/settingsStore', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../stores/settingsStore')>(),
   useSettingsStore: () => ({
     settings: {
       terminal: {
@@ -282,6 +283,10 @@ describe('Terminal lifecycle', () => {
 
     await waitFor(() => expect(mocks.attachLocalShellSession).toHaveBeenCalledOnce());
     expect(mocks.construct).toHaveBeenCalledOnce();
+    expect(mocks.construct).toHaveBeenCalledWith(expect.objectContaining({
+      allowTransparency: true,
+      theme: expect.objectContaining({ background: '#ffffff00' }),
+    }));
     expect(mocks.open).toHaveBeenCalledOnce();
     expect(mocks.operations.indexOf('open')).toBeLessThan(mocks.operations.indexOf('attach'));
   });

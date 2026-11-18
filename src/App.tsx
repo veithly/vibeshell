@@ -6,10 +6,9 @@ import {
   ArrowLeft,
   Terminal as TerminalIcon,
   ArrowRightLeft,
-  Columns2,
+  Activity,
+  Loader2,
   ExternalLink,
-  Rows2,
-  PanelRightClose,
   X,
   FileDiff,
   Blocks,
@@ -62,6 +61,7 @@ import {
 } from './stores/pluginWorkspaceStore';
 import { useFileWorkspaceStore } from './stores/fileWorkspaceStore';
 import { SessionPluginDock } from './components/SessionPluginDock';
+import { PerformanceDock } from './components/ServerStatus/PerformanceDock';
 import { PluginPanel } from './components/PluginPanel';
 import { PaneDropZone } from './components/PaneDropZone';
 import {
@@ -74,8 +74,6 @@ import {
 } from './lib/paneIds';
 import type { TerminalHandle } from './components/Terminal';
 import {
-  MAX_TERMINAL_PANES,
-  addPane,
   removePane,
   pruneLeaves,
   getLeaves,
@@ -126,6 +124,7 @@ function App() {
   const isCompactWorkspace = useMediaQuery('(max-width: 767px)');
   const fetchPlugins = usePluginStore((state) => state.fetchPlugins);
   const plugins = usePluginStore((state) => state.plugins);
+  const performanceBusy = usePluginStore((state) => state.operationId === 'server-performance');
   const fileTabs = useFileWorkspaceStore((state) => state.tabs);
   const activeFileTabId = useFileWorkspaceStore((state) => state.activeTabId);
   const activateFileTab = useFileWorkspaceStore((state) => state.activateTab);
@@ -145,12 +144,12 @@ function App() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isWorkspaceChangesOpen, setIsWorkspaceChangesOpen] = useState(false);
   const [isPluginDockOpen, setIsPluginDockOpen] = useState(false);
+  const [isPerformanceOpen, setIsPerformanceOpen] = useState(false);
   const [serverToConnect, setServerToConnect] = useState<Server | null>(null);
   const [connectForceNew, setConnectForceNew] = useState(false);
   const [serverToEdit, setServerToEdit] = useState<Server | null>(null);
   const [sessionToClose, setSessionToClose] = useState<string | null>(null);
   const [mosaicTree, setMosaicTree] = useState<MosaicNode<string> | null>(null);
-  const [isCreatingTerminalPane, setIsCreatingTerminalPane] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(!('__TAURI_INTERNALS__' in window));
   const workspaceInitialized = useRef(!('__TAURI_INTERNALS__' in window));
   const detachedOwners = useDetachedOwnership((state) => state.owners);
@@ -164,7 +163,6 @@ function App() {
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
   const sftpPanelRef = useRef<SftpPanelHandle>(null);
   const sessionBootstrapRef = useRef<Promise<void> | null>(null);
-  const terminalPaneCreationRef = useRef(false);
 
   useThemeSync();
 
@@ -638,46 +636,6 @@ function App() {
     window.setTimeout(() => terminalRefs.current.get(sessionId)?.focus(), 100);
   }, [activateFileTab, activatePluginTab, setActiveSession]);
 
-  const handleSplitPane = useCallback(async (direction: 'row' | 'column') => {
-    if (terminalPaneCreationRef.current) return;
-
-    const storeState = useSessionStore.getState();
-    const currentTree = mosaicTree;
-    if (currentTree !== null && countLeaves(currentTree) >= MAX_TERMINAL_PANES) {
-      notifyWarning(t('session.splitLimitTitle'), t('session.splitLimitMessage'));
-      return;
-    }
-
-    const targetId = storeState.activeSessionId;
-    if (!targetId) return;
-
-    terminalPaneCreationRef.current = true;
-    setIsCreatingTerminalPane(true);
-
-    try {
-      const sourceSession = storeState.sessions.find((session) => session.id === targetId);
-      const shellId = sourceSession?.sessionType === 'local' && sourceSession.purpose !== 'coding_agent'
-        ? sourceSession.serverId
-        : undefined;
-      const session = await createLocalShellSession(shellId, 80, 24);
-      if (!session) return;
-
-      setMosaicTree((current) => addPane(current, sessionPaneId(targetId), sessionPaneId(session.id), direction));
-      // Keep the current pane active so repeated splits build outward from the
-      // same origin pane instead of chaining off each newly-created pane.
-      // The new pane is still immediately usable — clicking it focuses it.
-    } catch (error) {
-      console.error('[App] Failed to create terminal pane:', error);
-      notifyError(
-        t('session.splitFailedTitle'),
-        error instanceof Error ? error.message : t('session.splitFailedMessage')
-      );
-    } finally {
-      terminalPaneCreationRef.current = false;
-      setIsCreatingTerminalPane(false);
-    }
-  }, [createLocalShellSession, mosaicTree, notifyError, notifyWarning, setActiveSession, t]);
-
   const handleRemoveTerminalPane = useCallback((paneId: string) => {
     setMosaicTree((current) => {
       if (countLeaves(current) <= 1) return current;
@@ -693,29 +651,6 @@ function App() {
       return next;
     });
   }, [activeSessionId, setActiveSession]);
-
-  const handleCollapseTerminalPanes = useCallback(() => {
-    if (activeSessionId) setMosaicTree(sessionPaneId(activeSessionId));
-  }, [activeSessionId]);
-
-  // Split a plugin tab into the mosaic layout next to the active terminal.
-  const handleSplitPluginTab = useCallback((tabId: string, direction: 'row' | 'column') => {
-    const paneId = pluginPaneId(tabId);
-    if (mosaicTree !== null && getLeaves(mosaicTree).includes(paneId)) return;
-    if (mosaicTree !== null && countLeaves(mosaicTree) >= MAX_TERMINAL_PANES) {
-      notifyWarning(t('session.splitLimitTitle'), t('session.splitLimitMessage'));
-      return;
-    }
-
-    const leaves = mosaicTree !== null ? getLeaves(mosaicTree) : [];
-    const target = activeSessionId && leaves.includes(sessionPaneId(activeSessionId))
-      ? sessionPaneId(activeSessionId)
-      : leaves[0] ?? null;
-
-    setMosaicTree((current) => addPane(current, target, paneId, direction));
-    // Switch back to the terminal view so the split result is visible.
-    activateFileTab(null);
-  }, [mosaicTree, activeSessionId, notifyWarning, t, activateFileTab]);
 
   const handlePaneDropTab = useCallback((targetPaneId: string, kind: 'session' | 'plugin' | 'file', tabId: string, direction: 'row' | 'column', side?: DockSide) => {
     const paneId = kind === 'file' ? filePaneId(tabId) : kind === 'plugin' ? pluginPaneId(tabId) : sessionPaneId(tabId);
@@ -767,6 +702,38 @@ function App() {
     });
     activateFileTab(null);
   }, [activeSession, sessions, notifyWarning, t, activateFileTab]);
+
+  // A first-use click enables the bundled, read-only performance view. Nothing
+  // is installed in the background and no external plugin is downloaded.
+  const handleOpenPerformance = useCallback(async () => {
+    if (!activeSession || activeSession.state !== 'connected') return;
+    if (isPerformanceOpen && activePluginTabId === null && activeFileTabId === null) {
+      setIsPerformanceOpen(false);
+      return;
+    }
+    const store = usePluginStore.getState();
+    if (store.operationId === 'server-performance') return;
+    let plugin = store.plugins.find((item) => item.manifest.id === 'server-performance');
+    if (!plugin || plugin.source !== 'builtin') {
+      notifyWarning(t('sidebar.performance'), t('plugins.tabPluginMissing'));
+      return;
+    }
+    if (!plugin.installed && !await store.installPlugin('server-performance')) {
+      notifyError(t('sidebar.performance'), usePluginStore.getState().error ?? t('plugins.tabPluginMissing'));
+      return;
+    }
+    plugin = usePluginStore.getState().plugins.find((item) => item.manifest.id === 'server-performance');
+    if (!plugin?.enabled && !await store.setPluginEnabled('server-performance', true)) {
+      notifyError(t('sidebar.performance'), usePluginStore.getState().error ?? t('plugins.tabPluginMissing'));
+      return;
+    }
+    // Installation can finish after the user switches or closes a session.
+    if (useSessionStore.getState().activeSessionId !== activeSession.id) return;
+    activateFileTab(null);
+    activatePluginTab(null);
+    setIsPluginDockOpen(false);
+    setIsPerformanceOpen(true);
+  }, [activeSession, isPerformanceOpen, activePluginTabId, activeFileTabId, activateFileTab, activatePluginTab, notifyError, notifyWarning, t]);
 
   const handleClosePluginTab = useCallback((tab: PluginWorkspaceTab) => {
     closePluginTab(tab.id);
@@ -906,18 +873,14 @@ function App() {
     || (activePluginTab !== null && !activePluginTabPinned && !detachedOwners[pluginPaneId(activePluginTab.id)]);
 
   return (
-    <div className="app-shell h-screen flex flex-col bg-tokyo-bg">
-      <TitleBar
-        activeSessionName={activeSession?.serverName}
-        activeSessionType={activeSession?.sessionType}
-        activeSessionState={activeSession?.state}
-      />
+    <div className="app-shell h-screen flex flex-col">
       <div
-        className="app-shell absolute inset-x-0 bottom-0 top-9 z-10 flex flex-col bg-tokyo-bg"
+        className="workspace-overlay glass-workspace absolute inset-0 z-30 flex flex-col"
         style={{ display: isOverlayView ? 'flex' : 'none' }}
       >
+        <TitleBar activeSessionName={isPluginsView ? t('plugins.marketplace') : t('settings.title')} />
         <Notifications />
-        <header className="h-11 flex items-center px-4 bg-tokyo-bg-dark border-b border-tokyo-bg-hl">
+        <header className="glass-toolbar h-11 flex items-center px-4 border-b border-tokyo-bg-hl">
           <button
             className={cn(
               'flex items-center gap-2 px-3 py-1.5 rounded-lg border border-transparent',
@@ -930,11 +893,8 @@ function App() {
             <ArrowLeft className="w-4 h-4" />
             <span className="text-sm">{t('common.back')}</span>
           </button>
-          <h1 className="ml-4 text-tokyo-fg font-semibold">
-            {isPluginsView ? t('plugins.marketplace') : t('settings.title')}
-          </h1>
         </header>
-        <div className="flex-1 overflow-y-auto bg-tokyo-bg">
+        <div className="flex-1 overflow-y-auto">
           {isSettingsView && (
             <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
               <Settings />
@@ -949,20 +909,44 @@ function App() {
       </div>
 
       <div
-        className="h-full flex flex-col flex-1"
-        style={{ visibility: isOverlayView ? 'hidden' : 'visible' }}
+        className="min-h-0 h-full flex flex-col flex-1"
+        style={{ display: isOverlayView ? 'none' : 'flex' }}
       >
         <Notifications />
 
-        <div className="flex-1 flex overflow-hidden">
+        <div className="min-h-0 flex-1 flex overflow-hidden">
           <main className="main-workspace flex-1 flex flex-col min-w-0 relative overflow-x-hidden w-full max-w-full">
+            <TitleBar>
             <SessionTabs
               onNewSession={handleNewSession}
               onReconnectSession={handleReconnectSession}
               onOpenSessionInWindow={handleOpenSessionInWindow}
               onPaneDropTab={handlePaneDropTab}
               rightActions={(
-                  <div className="flex flex-shrink-0 items-center gap-0.5 border-l border-tokyo-bg-hl pl-1.5">
+                  <div className="titlebar-actions flex flex-shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    className={cn('glass-action tooltip-button', isSftpOpen && 'is-active')}
+                    data-tooltip={t('sidebar.sftp')}
+                    aria-label={t('sidebar.sftp')}
+                    aria-pressed={isSftpOpen}
+                    disabled={!activeSession || activeSession.state !== 'connected'}
+                    onClick={handleOpenSftp}
+                  >
+                    <FolderOpen className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className={cn('glass-action tooltip-button', isPerformanceOpen && !terminalAreaHidden && 'is-active')}
+                    data-tooltip={t('sidebar.performance')}
+                    aria-label={t('sidebar.performance')}
+                    aria-pressed={isPerformanceOpen && !terminalAreaHidden}
+                    aria-busy={performanceBusy}
+                    disabled={!activeSession || activeSession.state !== 'connected' || performanceBusy}
+                    onClick={() => { void handleOpenPerformance(); }}
+                  >
+                    {performanceBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Activity className="h-4 w-4" aria-hidden="true" />}
+                  </button>
                   <button
                     className={cn('icon-button tooltip-button', (runtimeCapabilities.isMobile || isCompactWorkspace) && 'h-11 w-11', isHistoryOpen && 'is-active')}
                     data-tooltip={t('sidebar.history')}
@@ -970,18 +954,13 @@ function App() {
                     aria-pressed={isHistoryOpen}
                     aria-label={t('sidebar.history')}
                   >
-                    <History className="h-4 w-4" />
+                    <History className="h-4 w-4" aria-hidden="true" />
                   </button>
                   <WorkspaceToolbar
                     label={t('common.more')}
                     anyPressed={isWorkspaceChangesOpen || isPluginDockOpen}
                     items={[
-                      { id: 'sftp', label: t('sidebar.sftp'), icon: <FolderOpen className="h-4 w-4" />, disabled: !activeSession, pressed: isSftpOpen, onSelect: handleOpenSftp },
-                      ...(runtimeCapabilities.localShell ? [
-                        { id: 'split-horizontal', label: t('session.splitHorizontal'), icon: <Columns2 className="h-4 w-4" />, disabled: isCreatingTerminalPane, onSelect: () => { void handleSplitPane('row'); } },
-                        { id: 'split-vertical', label: t('session.splitVertical'), icon: <Rows2 className="h-4 w-4" />, disabled: isCreatingTerminalPane, onSelect: () => { void handleSplitPane('column'); } },
-                      ] : []),
-                      ...(activeSession ? plugins.filter((p) => isPluginCompatible(p, activeSession.sessionType)).map((p) => ({
+                      ...(activeSession ? plugins.filter((p) => p.manifest.id !== 'server-performance' && isPluginCompatible(p, activeSession.sessionType)).map((p) => ({
                         id: `plugin-${p.manifest.id}`, label: localizedPluginName(t, p), icon: <Blocks className="h-4 w-4" />, onSelect: () => handleOpenPluginTab(p.manifest.id),
                       })) : []),
                       ...(runtimeCapabilities.backgroundTunnels ? [{
@@ -1010,14 +989,8 @@ function App() {
                         icon: <Blocks className="h-4 w-4" />,
                         disabled: !activeSession,
                         pressed: isPluginDockOpen,
-                        onSelect: () => setIsPluginDockOpen((open) => !open),
+                        onSelect: () => { setIsPerformanceOpen(false); setIsPluginDockOpen((open) => !open); },
                       },
-                      ...(runtimeCapabilities.localShell && mosaicTree !== null && countLeaves(mosaicTree) > 1 ? [{
-                        id: 'close-splits',
-                        label: t('session.closeSplits'),
-                        icon: <PanelRightClose className="h-4 w-4" />,
-                        onSelect: handleCollapseTerminalPanes,
-                      }] : []),
                       {
                         id: 'plugin-marketplace',
                         label: t('plugins.marketplace'),
@@ -1035,6 +1008,7 @@ function App() {
                   </div>
               )}
             />
+            </TitleBar>
 
             <div className="relative flex min-h-0 flex-1">
               <div className="workspace-return-zone flex min-w-0 flex-1 flex-col" onMouseDownCapture={(event) => {
@@ -1067,7 +1041,6 @@ function App() {
                         tab={tab}
                         plugin={plugins.find((candidate) => candidate.manifest.id === tab.pluginId)}
                         onClose={() => handleClosePluginTab(tab)}
-                        onSplit={handleSplitPluginTab}
                       />
                     </Suspense>
                   </div>
@@ -1075,8 +1048,9 @@ function App() {
                 <div className={cn('min-h-0 flex-1 flex-col', terminalAreaHidden ? 'hidden' : 'flex')}>
                   {sessions.length > 0 || mosaicTree !== null ? (
                     <>
-                    <div className="mosaic-container relative min-h-0 flex-1 p-2">
+                    <div className={cn('mosaic-container relative min-h-0 flex-1', !canRemoveTerminalPane && 'mosaic-single')}>
                       <Mosaic<string>
+                        className="vibeshell-mosaic"
                         value={mosaicTree}
                         onChange={(node) => { treeRef.current = node; setMosaicTree(node); }}
                         zeroStateView={<div className="workspace-return-zone flex h-full items-center justify-center p-8 text-center text-sm text-tokyo-comment">{t(workspaceReady ? 'workspaceLayout.empty' : 'common.loading')}</div>}
@@ -1088,9 +1062,10 @@ function App() {
                             if (!tab) return <div />;
                             return (
                               <MosaicWindow<string> path={path} title={`${tab.dirty ? '● ' : ''}${tab.name}`} draggable
+                                className={cn('vibe-mosaic-pane--file', activeFileTabId === tab.id && 'mosaic-window-active')}
                                 toolbarControls={[
-                                  <button key="detach" className="icon-button h-5 w-5" aria-label={t('workspaceLayout.detach')} title={t('workspaceLayout.detach')} onClick={() => { void openDetachedWindow({ kind: 'file', sessionId: tab.sessionId, path: tab.path, name: tab.name, size: tab.size }); }}><ExternalLink className="h-3 w-3" /></button>,
-                                  ...(canRemoveTerminalPane ? [<button key="close" className="icon-button h-5 w-5" onClick={() => handleRemoveTerminalPane(id)} aria-label={t('session.removePane', { name: tab.name })}><X className="h-3 w-3" /></button>] : []),
+                                  <button key="detach" type="button" className="pane-chrome-button pane-chrome-detach" aria-label={t('workspaceLayout.detach')} title={t('workspaceLayout.detach')} onClick={() => { void openDetachedWindow({ kind: 'file', sessionId: tab.sessionId, path: tab.path, name: tab.name, size: tab.size }); }}><ExternalLink className="h-3.5 w-3.5" aria-hidden="true" /></button>,
+                                  ...(canRemoveTerminalPane ? [<button key="close" type="button" className="pane-chrome-button pane-chrome-close" onClick={() => handleRemoveTerminalPane(id)} aria-label={t('session.removePane', { name: tab.name })} title={t('session.removePane', { name: tab.name })}><X className="h-3.5 w-3.5" aria-hidden="true" /></button>] : []),
                                 ]}>
                                 <PaneDropZone paneId={id}><Suspense fallback={<div className="h-full bg-tokyo-bg" />}><FileWorkspace tab={tab} isActive={activeFileTabId === tab.id} /></Suspense></PaneDropZone>
                               </MosaicWindow>
@@ -1111,15 +1086,17 @@ function App() {
                                 path={path}
                                 title={paneTitle}
                                 draggable
+                                className={cn('vibe-mosaic-pane--plugin', activePluginTabId === tab?.id && 'mosaic-window-active')}
                                 toolbarControls={canRemoveTerminalPane ? [
                                   <button
                                     key="close"
-                                    className="icon-button h-5 w-5"
+                                    type="button"
+                                    className="pane-chrome-button pane-chrome-close"
                                     onClick={() => handleRemoveTerminalPane(id)}
                                     aria-label={t('session.removePane', { name: paneTitle })}
                                     title={t('session.removePane', { name: paneTitle })}
                                   >
-                                    <X className="h-3 w-3" />
+                                    <X className="h-3.5 w-3.5" aria-hidden="true" />
                                   </button>,
                                 ] : []}
                               >
@@ -1152,19 +1129,20 @@ function App() {
                               toolbarControls={canRemoveTerminalPane ? [
                                 <button
                                   key="close"
-                                  className="icon-button h-5 w-5"
+                                  type="button"
+                                  className="pane-chrome-button pane-chrome-close"
                                   onClick={() => handleRemoveTerminalPane(id)}
                                   aria-label={t('session.removePane', { name: serverName })}
                                   title={t('session.removePane', { name: serverName })}
                                 >
-                                  <X className="h-3 w-3" />
+                                  <X className="h-3.5 w-3.5" aria-hidden="true" />
                                 </button>,
                               ] : []}
-                              className={cn(activeSessionId && id === sessionPaneId(activeSessionId) && 'mosaic-window-active')}
+                              className={cn('vibe-mosaic-pane--terminal', activeSessionId && id === sessionPaneId(activeSessionId) && 'mosaic-window-active')}
                             >
                               <PaneDropZone paneId={id}>
                                 <div
-                                  className="relative h-full bg-tokyo-bg"
+                                  className="relative h-full"
                                   onMouseDown={() => {
                                     if (pane.id !== activeSessionId) setActiveSession(pane.id);
                                   }}
@@ -1189,6 +1167,14 @@ function App() {
                         }}
                       />
                     </div>
+                    {isPerformanceOpen && activeSession?.state === 'connected' && (
+                      <PerformanceDock
+                        key={activeSession.id}
+                        session={activeSession}
+                        plugin={plugins.find((plugin) => plugin.manifest.id === 'server-performance')}
+                        onClose={() => setIsPerformanceOpen(false)}
+                      />
+                    )}
                     {activeSession && (
                       <SessionPluginDock
                         sessionId={activeSession.id}

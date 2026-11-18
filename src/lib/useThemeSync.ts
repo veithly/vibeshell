@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useCustomTheme } from './useCustomTheme';
-import { useSettingsStore, themes } from '../stores/settingsStore';
+import { useSettingsStore, themes, isLightTheme, normalizeTerminalBackgroundOpacity, normalizeWindowMaterialOpacity } from '../stores/settingsStore';
+import { useRuntimeCapabilitiesStore } from '../stores/runtimeCapabilitiesStore';
 
 /**
  * Applies the selected theme to the document root and keeps a `system` theme
@@ -11,10 +12,27 @@ export function useThemeSync(): void {
   const settings = useSettingsStore((state) => state.settings);
   const initializeSettings = useSettingsStore((state) => state.initializeSettings);
   const updateAppearanceSettings = useSettingsStore((state) => state.updateAppearanceSettings);
+  const platform = useRuntimeCapabilitiesStore((state) => state.capabilities.platform);
+  const loadRuntimeCapabilities = useRuntimeCapabilitiesStore((state) => state.load);
+
+  useEffect(() => {
+    document.documentElement.dataset.nativeGlass = String(platform === 'macos' && '__TAURI_INTERNALS__' in window);
+  }, [platform]);
+
+  useEffect(() => {
+    const opacity = normalizeTerminalBackgroundOpacity(settings.appearance.terminalBackgroundOpacity);
+    document.documentElement.style.setProperty('--vibe-terminal-mask', `${opacity * 100}%`);
+  }, [settings.appearance.terminalBackgroundOpacity]);
+
+  useEffect(() => {
+    const opacity = normalizeWindowMaterialOpacity(settings.appearance.windowMaterialOpacity);
+    document.documentElement.style.setProperty('--vibe-window-mask', `${opacity * 100}%`);
+  }, [settings.appearance.windowMaterialOpacity]);
 
   useEffect(() => {
     void initializeSettings();
-  }, [initializeSettings]);
+    void loadRuntimeCapabilities();
+  }, [initializeSettings, loadRuntimeCapabilities]);
 
   useEffect(() => {
     if (settings.appearance.themeMode !== 'system' || typeof window === 'undefined' || !window.matchMedia) {
@@ -63,10 +81,16 @@ export function useThemeSync(): void {
     root.style.setProperty('--tokyo-cyan', currentTheme.colors.cyan);
     root.style.setProperty('--tokyo-orange', currentTheme.colors.orange);
     root.dataset.theme = currentTheme.name;
-    root.style.colorScheme = currentTheme.name === 'paper-white' || currentTheme.name === 'warm-ivory'
-      ? 'light'
-      : 'dark';
-  }, [settings.appearance.theme]);
+    const scheme = isLightTheme(currentTheme.name) ? 'light' : 'dark';
+    root.dataset.appearance = scheme;
+    root.style.colorScheme = scheme;
+    // Match explicit themes, but release the native override in system mode;
+    // otherwise WKWebView's prefers-color-scheme stops following macOS.
+    if (platform === 'macos' && '__TAURI_INTERNALS__' in window) {
+      const nativeTheme = settings.appearance.themeMode === 'system' ? null : scheme;
+      void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => getCurrentWindow().setTheme(nativeTheme)).catch(console.error);
+    }
+  }, [settings.appearance.theme, settings.appearance.themeMode, platform]);
 
   useCustomTheme(settings.appearance.theme);
 }

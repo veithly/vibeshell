@@ -19,7 +19,7 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", default-features = false, features = ["wry", "compression", "dynamic-acl", "x11", "devtools"] }
+tauri = { version = "2", default-features = false, features = ["wry", "compression", "dynamic-acl", "x11", "devtools", "macos-private-api"] }
 tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }

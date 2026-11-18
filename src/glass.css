@@ -1,0 +1,423 @@
+/* Real native translucency: no wallpaper, gradient, colored bloom or sheen.
+   AppKit blurs the OTHER windows behind this transparent WebView. CSS only
+   adds neutral tints; text and controls are never made translucent as a group. */
+:root {
+  --vibe-window-mask: 12%;
+  --vibe-glass-tint: color-mix(in srgb, var(--tokyo-bg) var(--vibe-window-mask), transparent);
+  --vibe-menu-tint: color-mix(in srgb, var(--tokyo-bg-dark) 82%, transparent);
+  --vibe-well-tint: color-mix(in srgb, var(--tokyo-fg) 5%, transparent);
+  --vibe-edge: color-mix(in srgb, var(--tokyo-fg) 14%, transparent);
+  --vibe-section-tint: color-mix(in srgb, var(--tokyo-bg) 26%, transparent);
+  --vibe-field-tint: color-mix(in srgb, var(--tokyo-bg) 58%, transparent);
+  --vibe-field-edge: color-mix(in srgb, var(--tokyo-fg) 26%, transparent);
+  --vibe-hover-tint: color-mix(in srgb, var(--tokyo-fg) 9%, transparent);
+  --vibe-selected-tint: color-mix(in srgb, var(--tokyo-blue) 14%, transparent);
+  --vibe-dialog-tint: color-mix(in srgb, var(--tokyo-bg) 90%, transparent);
+  --vibe-scrim: color-mix(in srgb, var(--tokyo-bg-dark) 36%, transparent);
+}
+
+.app-shell,
+:root[data-native-glass='true'] .app-shell {
+  background-image: none;
+}
+
+.titlebar-shell,
+.glass-workspace,
+.sftp-panel-shell,
+.agent-activity-panel,
+.glass-panel {
+  background: var(--vibe-glass-tint);
+  border-color: var(--vibe-edge);
+  box-shadow: none;
+}
+
+/* Non-native hosts have an honest solid fallback, not an imitation wallpaper. */
+:root:not([data-native-glass='true']) .app-shell { background: var(--tokyo-bg); }
+
+.session-tabbar .session-tab-item {
+  background: var(--tokyo-bg-dark);
+  border: 1px solid transparent;
+  border-radius: 9px;
+  box-shadow: none;
+}
+
+.session-tabbar .session-tab-item[aria-selected='true'],
+:root[data-appearance='dark'] .session-tabbar .session-tab-item[aria-selected='true'] {
+  background: var(--tokyo-bg);
+  color: var(--tokyo-fg);
+  border-color: var(--vibe-edge);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--tokyo-fg) 8%, transparent);
+}
+
+.titlebar-actions { gap: 4px; }
+.glass-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.glass-action,
+.titlebar-actions .icon-button,
+.session-tabbar .session-new-action {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--tokyo-fg);
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.glass-action:hover:not(:disabled),
+.titlebar-actions .icon-button:hover:not(:disabled),
+.session-tabbar .session-new-action:hover {
+  background: var(--vibe-well-tint);
+}
+
+.glass-action.is-active,
+.titlebar-actions .icon-button.is-active {
+  background: color-mix(in srgb, var(--tokyo-blue) 13%, transparent);
+  border-color: color-mix(in srgb, var(--tokyo-blue) 24%, transparent);
+}
+
+.glass-action:focus-visible { outline: 2px solid var(--tokyo-blue); outline-offset: 2px; }
+.glass-action:disabled { opacity: 0.45; cursor: not-allowed; }
+.glass-action[aria-busy='true'] { cursor: progress; }
+
+.terminal-viewport {
+  background: var(--vibe-terminal-surface);
+  box-shadow: none;
+  /* Native blur is behind the WebView, not a CSS drawing inside it. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.glass-toolbar,
+.sftp-panel-shell [data-testid='sftp-toolbar'],
+.sftp-panel-shell [data-testid='sftp-address-bar'],
+.agent-activity-panel > header,
+.mosaic-window-toolbar,
+.responsive-dialog-header,
+[role='dialog'][aria-modal='true'] > header {
+  background: var(--vibe-well-tint);
+  border-color: var(--vibe-edge);
+  box-shadow: none;
+}
+
+.server-status-panel { background: transparent; }
+
+.sftp-panel-shell thead {
+  background: var(--vibe-menu-tint);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+}
+
+.glass-well,
+.glass-section,
+.plugin-market-card,
+.connection-card {
+  background: var(--vibe-well-tint);
+  border-color: var(--vibe-edge);
+  box-shadow: none;
+}
+
+.glass-menu,
+.glass-dialog,
+.notification-toast,
+.responsive-dialog-panel,
+[role='dialog'][aria-modal='true']:not(.responsive-dialog-layer),
+[role='alertdialog'] {
+  background: var(--vibe-menu-tint);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--vibe-edge);
+  border-radius: 12px;
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--tokyo-fg) 12%, transparent);
+}
+
+.glass-menu [role='menuitem'] { border-radius: 6px; }
+.glass-menu [role='menuitem']:hover:not(:disabled) { background: var(--vibe-well-tint); }
+
+/* Page/panel roots expose AppKit once. Inner groups and fields are neutral
+   wells, never another opaque window-sized layer. Semantic warning/success
+   colors and selection states deliberately keep their existing tokens. */
+.glass-page { background: transparent; }
+.glass-section { background: var(--vibe-section-tint); border-radius: 10px; }
+.glass-dialog,
+.responsive-dialog-panel,
+[role='dialog'][aria-modal='true']:not(.responsive-dialog-layer),
+[role='alertdialog'] { background: var(--vibe-dialog-tint); }
+.glass-scrim { background: var(--vibe-scrim); }
+.glass-form :where(.bg-tokyo-bg, .bg-tokyo-bg-dark, .bg-tokyo-bg-dark\/50, .bg-tokyo-bg-dark\/60) {
+  background-color: var(--vibe-well-tint);
+}
+.glass-form :where(button.bg-tokyo-bg-hl, a.bg-tokyo-bg-hl) { background-color: var(--vibe-hover-tint); }
+.glass-form :where(button.bg-tokyo-bg, button.bg-tokyo-bg-dark, button.bg-tokyo-bg-hl):hover:not(:disabled) {
+  background-color: var(--vibe-hover-tint);
+}
+.glass-form :where(thead) { background: var(--vibe-menu-tint); }
+.glass-form :where(button, a, summary):focus-visible,
+.icon-button:focus-visible,
+.workspace-action:focus-visible {
+  outline: 2px solid var(--tokyo-blue);
+  outline-offset: 2px;
+}
+.glass-form :where(button:disabled, input:disabled, select:disabled, textarea:disabled) { cursor: not-allowed; }
+
+/* Never style xterm's hidden textarea or the code editor's transparent input
+   overlay as an ordinary text field. File/color pickers retain native UI. */
+.glass-form :where(input:not([type='range']):not([type='checkbox']):not([type='radio']):not([type='file']):not([type='hidden']):not([type='color']), select, textarea:not(.file-code-editor-input):not(.xterm-helper-textarea)),
+.glass-input {
+  background: var(--vibe-field-tint);
+  border: 1px solid var(--vibe-field-edge);
+  border-radius: 7px;
+  color: var(--tokyo-fg);
+  box-shadow: none;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+.glass-form :where(input, textarea)::placeholder { color: var(--tokyo-comment); opacity: 1; }
+.glass-form :where(input, select, textarea):hover:not(:disabled):not([readonly]) { border-color: var(--tokyo-comment); }
+.glass-form :where(input:not([type='range']):not([type='checkbox']):not([type='radio']):not([type='file']), select, textarea:not(.file-code-editor-input)):focus-visible {
+  border-color: var(--tokyo-blue);
+  outline: 2px solid var(--tokyo-blue);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+.glass-form :where(input, textarea)[readonly] { background-color: var(--vibe-well-tint); }
+.glass-form :where(select option, select optgroup) { background: var(--tokyo-bg); color: var(--tokyo-fg); }
+.glass-form :where(input[type='checkbox'], input[type='radio']) { accent-color: var(--tokyo-blue); }
+.glass-range { accent-color: var(--tokyo-blue); }
+.glass-range:focus-visible { outline: 2px solid var(--tokyo-blue); outline-offset: 5px; }
+.glass-form .glass-switch { flex-shrink: 0; box-shadow: inset 0 0 0 1px var(--vibe-field-edge); }
+.glass-form .glass-switch[aria-checked='false'] { background: var(--vibe-hover-tint); }
+.glass-form .glass-switch[aria-checked='true'] { background: var(--tokyo-blue); }
+.glass-switch[aria-checked='true'] > span { background: var(--tokyo-on-accent); }
+.glass-switch[aria-checked='false'] > span { background: var(--tokyo-fg); }
+
+.settings-navigation {
+  display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 24px;
+  border-bottom: 1px solid var(--vibe-edge); padding-bottom: 12px;
+}
+.settings-navigation button { border-radius: 7px; padding: 7px 12px; font-size: 13px; color: var(--tokyo-fg-dark); }
+.settings-navigation button:hover { background: var(--vibe-hover-tint); color: var(--tokyo-fg); }
+.settings-section { scroll-margin-top: 20px; margin-bottom: 28px; }
+.settings-section-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+.settings-section-heading h2 { font-size: 15px; line-height: 24px; font-weight: 600; }
+.settings-section-description { color: var(--tokyo-comment); font-size: 12px; line-height: 1.6; margin-bottom: 12px; }
+.settings-section-body { border: 1px solid var(--vibe-edge); border-radius: 10px; background: var(--vibe-section-tint); padding: 4px 16px; }
+.settings-row { border-color: var(--vibe-edge); font-size: 13px; }
+.settings-row-label { color: var(--tokyo-fg); font-weight: 500; }
+.settings-row-description { margin-top: 4px; color: var(--tokyo-comment); font-size: 12px; line-height: 1.5; }
+.settings-section-body > :not(.settings-row) { margin-top: 12px; margin-bottom: 12px; }
+.settings-section-body .integration-card { border-radius: 8px; background: var(--vibe-well-tint); }
+.settings-section-body .integration-card h3 { font-size: 14px; }
+.settings-section-body .integration-card p { font-size: 12px; line-height: 1.5; }
+.settings-section-body .integration-card > div:first-child { flex-wrap: wrap; gap: 8px; }
+.settings-section-body .integration-card button { font-size: 12px; padding: 6px 10px; }
+
+.glass-form .plugin-category-button.is-active { background: var(--vibe-selected-tint); box-shadow: none; color: var(--tokyo-fg); }
+.glass-form .plugin-market-card { border-color: var(--vibe-edge); background: var(--vibe-section-tint); box-shadow: none; }
+.glass-form .plugin-market-card:hover { transform: none; border-color: var(--vibe-field-edge); box-shadow: none; }
+.glass-form .plugin-toggle-input { background: var(--vibe-hover-tint); border-color: var(--vibe-field-edge); }
+.glass-form .plugin-toggle-input:checked { background: var(--tokyo-blue); border-color: var(--tokyo-blue); }
+.glass-form .plugin-toggle-input:checked::after { background: var(--tokyo-on-accent); }
+.glass-form .plugin-toggle-input:focus-visible { outline: 2px solid var(--tokyo-blue); outline-offset: 3px; }
+.glass-form .connection-card { background: var(--vibe-section-tint); box-shadow: none; }
+.glass-form .connection-card:hover { background: var(--vibe-hover-tint); }
+
+.file-code-editor { background: var(--vibe-terminal-surface); }
+.glass-form .file-code-editor-input { background: transparent; }
+.glass-form .glass-toolbar { background: var(--vibe-well-tint); }
+.glass-form .glass-dialog { background: var(--vibe-dialog-tint); }
+.glass-form .glass-menu { background: var(--vibe-menu-tint); }
+.glass-form .glass-section { background: var(--vibe-section-tint); }
+
+/* Mosaic brings its own opaque white titlebar rules, with a more specific
+   selector than the generic glass toolbar. Give every in-window pane the same
+   neutral, readable chrome without changing its drag/drop behavior. */
+.vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar {
+  height: 34px;
+  min-height: 34px;
+  padding: 0 5px 0 0;
+  background: color-mix(in srgb, var(--tokyo-bg-dark) 74%, transparent);
+  color: var(--tokyo-fg);
+  border-bottom: 1px solid var(--vibe-edge);
+  box-shadow: none;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+:root[data-appearance='dark'] .vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar {
+  background: color-mix(in srgb, var(--tokyo-bg-dark) 82%, transparent);
+}
+
+.vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar.draggable:hover {
+  background: color-mix(in srgb, var(--tokyo-bg-dark) 88%, transparent);
+}
+
+.vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar .mosaic-window-title {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 12px;
+  overflow: hidden;
+  background: transparent;
+  border: none;
+  color: var(--tokyo-fg);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+}
+
+.vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar .mosaic-window-title::before {
+  content: '';
+  display: block;
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--tokyo-cyan);
+  opacity: 0.75;
+}
+
+.vibeshell-mosaic .vibe-mosaic-pane--file .mosaic-window-title::before {
+  background: var(--tokyo-blue);
+}
+.vibeshell-mosaic .vibe-mosaic-pane--plugin .mosaic-window-title::before {
+  background: var(--tokyo-magenta);
+}
+
+.vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar .mosaic-window-controls {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+  height: 100%;
+  padding-right: 3px;
+}
+
+.vibeshell-mosaic .mosaic-window .pane-chrome-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  min-width: 27px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tokyo-fg) 5%, transparent);
+  color: var(--tokyo-fg-dark);
+  opacity: 1;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.vibeshell-mosaic .mosaic-window .pane-chrome-close:hover {
+  border-color: color-mix(in srgb, var(--tokyo-red) 30%, transparent);
+  background: color-mix(in srgb, var(--tokyo-red) 16%, transparent);
+  color: var(--tokyo-red);
+}
+
+.vibeshell-mosaic .mosaic-window .pane-chrome-detach:hover {
+  border-color: color-mix(in srgb, var(--tokyo-blue) 26%, transparent);
+  background: color-mix(in srgb, var(--tokyo-blue) 13%, transparent);
+  color: var(--tokyo-blue);
+}
+
+.vibeshell-mosaic .mosaic-window .pane-chrome-button:focus-visible {
+  outline: 2px solid var(--tokyo-blue);
+  outline-offset: 1px;
+}
+
+.vibeshell-mosaic .mosaic-window .pane-chrome-button:active {
+  background: color-mix(in srgb, var(--tokyo-fg) 12%, transparent);
+}
+
+.vibeshell-mosaic .mosaic-window .pane-chrome-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.appearance-modes { display: inline-flex; gap: 3px; padding: 3px; border-radius: 9px; background: var(--vibe-well-tint); }
+.appearance-modes button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border-radius: 7px; color: var(--tokyo-fg-dark); }
+.appearance-modes button[aria-pressed='true'] { background: var(--tokyo-bg); color: var(--tokyo-fg); box-shadow: 0 1px 3px var(--vibe-edge); }
+.appearance-modes button:focus-visible { outline: 2px solid var(--tokyo-blue); outline-offset: 1px; }
+
+/* A compact bottom pane with one header. Native blur is shared with the rest
+   of the window; no extra opaque backing underneath these metric cells. */
+.performance-dock { flex: 0 0 auto; min-height: 0; container-type: inline-size; border-top: 1px solid var(--vibe-edge); }
+.performance-dock .server-status-panel { border-top: 0; max-height: min(45vh, 420px); display: flex; flex-direction: column; }
+.performance-header { flex-shrink: 0; }
+.performance-content { flex: 1; min-height: 0; }
+.performance-dock .performance-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.performance-dock .metric-card { min-width: 0; padding: 10px; border-radius: 8px; }
+.performance-dock .performance-summary { font-size: 11px; }
+@container (max-width: 660px) {
+  .performance-dock .performance-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .performance-dock .performance-summary > :first-child { display: none; }
+}
+@container (max-width: 360px) {
+  .performance-dock .performance-metrics { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 639px) {
+  .settings-section-body { padding: 4px 12px; }
+  .settings-navigation { gap: 2px; }
+  .settings-navigation button { padding: 7px 9px; }
+  .appearance-modes { display: flex; flex-wrap: wrap; }
+  .appearance-modes button { flex: 1; justify-content: center; }
+  .glass-action { padding: 0; width: 34px; }
+  .titlebar-actions { gap: 3px; }
+}
+@media (pointer: coarse) {
+  .glass-action { min-width: 44px; height: 44px; }
+  .glass-form :where(button:not([role='switch']), select) { min-height: 44px; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar,
+  :root[data-appearance='dark'] .vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar {
+    background: var(--tokyo-bg-dark);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .app-shell,
+  :root[data-native-glass='true'] .app-shell,
+  .titlebar-shell,
+  .terminal-viewport,
+  .glass-workspace,
+  .glass-panel,
+  .sftp-panel-shell,
+  .agent-activity-panel,
+  .glass-menu,
+  .glass-dialog,
+  .glass-form .glass-dialog,
+  .glass-form .glass-menu,
+  .notification-toast,
+  .responsive-dialog-panel,
+  [role='dialog'][aria-modal='true']:not(.responsive-dialog-layer),
+  [role='alertdialog'] {
+    background: var(--tokyo-bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vibeshell-mosaic .mosaic-window .pane-chrome-button { transition: none; }
+  .glass-action, .titlebar-actions .icon-button, .session-tabbar .session-new-action,
+  .glass-form :is(button, input, select, textarea), .glass-form .plugin-market-card { transition: none; }
+  .notification-toast { animation: none; }
+}

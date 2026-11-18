@@ -61,6 +61,11 @@
     "addServer": "Add Server",
     "history": "Command history",
     "sftp": "SFTP",
+    "performance": "Performance monitor",
+    "performanceShort": "Performance",
+    "closePerformance": "Close performance monitor",
+    "resizePerformance": "Resize performance panel",
+    "performanceRefresh": "Performance refresh interval",
     "tunnels": "Tunnels",
     "snippets": "Snippets",
     "settings": "Settings"
@@ -70,6 +75,7 @@
     "availableMessage": "VibeShell {{version}} is available. Open Settings > About to download it."
   },
   "session": {
+    "sessions": "Workspace tabs",
     "newSession": "New Session",
     "newConnection": "New connection",
     "noActiveSession": "No Active Session",
@@ -294,6 +300,12 @@
     "theme": "Theme",
     "themeDesc": "Color scheme for the application",
     "themeMode": "Theme Mode",
+    "dayMode": "Day mode",
+    "nightMode": "Night mode",
+    "terminalBackgroundOpacity": "Terminal color mask",
+    "terminalBackgroundOpacityDesc": "Changes only the terminal background, never text opacity. Lower values reveal more behind the window; 90% prioritizes reading.",
+    "windowMaterialOpacity": "Window material tint",
+    "windowMaterialOpacityDesc": "Neutral tint over native frosted glass on toolbars and panels. Lower is more translucent; 100% is solid. macOS reveals the real desktop; other platforms use a solid fallback.",
     "themeModeDesc": "Choose a theme manually or follow the system light/dark mode automatically.",
     "themeModeManual": "Manual",
     "themeModeSystem": "Follow system (auto switch)",

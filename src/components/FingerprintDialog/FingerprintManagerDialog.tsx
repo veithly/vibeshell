@@ -78,12 +78,12 @@ export function FingerprintManagerDialog() {
       >
         {/* Backdrop */}
         <div
-          className="absolute inset-0 bg-black/60"
+          className="absolute inset-0 glass-scrim"
           onClick={closeManager}
         />
 
         {/* Dialog */}
-        <div className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+        <div className="glass-dialog glass-form relative border border-tokyo-bg-hl rounded-lg w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl flex-shrink-0">
             <div className="flex items-center gap-3">

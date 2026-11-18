@@ -128,7 +128,7 @@ export function PluginPanel({
 
   if (dashboardAvailable && !showRawRunner) {
     return (
-      <div className="flex h-full min-h-0 flex-col bg-tokyo-bg-dark">
+      <div className="plugin-dashboard glass-page glass-form flex h-full min-h-0 flex-col">
         <div className="flex items-center justify-end border-b border-tokyo-bg-hl px-2 py-0.5">
           <button
             className="text-[10px] text-tokyo-comment transition-colors hover:text-tokyo-fg"
@@ -224,7 +224,7 @@ export function PluginPanel({
 
   if (plugin.manifest.entry.type === 'native') {
     return (
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="glass-form min-h-0 flex-1 overflow-auto">
         <ServerStatus
           key={`${sessionId}:${plugin.manifest.id}`}
           sessionId={sessionId}
@@ -251,7 +251,7 @@ export function PluginPanel({
   }
 
   return (
-    <div className={cn('flex min-h-0 flex-col', variant === 'dock' ? 'h-[300px]' : 'h-full')}>
+    <div className={cn('plugin-runner glass-form flex min-h-0 flex-col', variant === 'dock' ? 'h-[300px]' : 'h-full')}>
       {dashboardAvailable && (
         <div className="flex flex-shrink-0 items-center justify-end border-b border-tokyo-bg-hl px-2 py-0.5">
           <button
@@ -446,14 +446,14 @@ export function PluginPanel({
 
       {pendingSudoAction && (
         <div
-          className="responsive-dialog-layer fixed inset-0 z-[120] flex items-center justify-center bg-tokyo-bg-dark/60 px-3"
-          role="dialog"
-          aria-modal="true"
-          aria-label={t('plugins.elevate')}
+          className="responsive-dialog-layer glass-scrim fixed inset-0 z-[120] flex items-center justify-center px-3"
         >
           <form
             onSubmit={handleSudoSubmit}
-            className="w-full max-w-sm rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark p-5 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('plugins.elevate')}
+            className="glass-dialog glass-form w-full max-w-sm p-5"
           >
             <div className="flex items-center gap-2 text-tokyo-orange">
               <ShieldCheck className="h-5 w-5" aria-hidden="true" />

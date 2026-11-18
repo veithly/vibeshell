@@ -35,7 +35,7 @@ export function AgentActivityPanel({ open, onClose, onSessionsChanged, onSelectS
   }, [open, onSessionsChanged, refresh]);
 
   if (!open) return null;
-  return <aside className="agent-activity-panel flex min-h-0 w-80 max-w-full shrink-0 flex-col border-l border-tokyo-bg-hl bg-tokyo-bg-dark" aria-label={t('agentActivity.title')}>
+  return <aside className="agent-activity-panel glass-form flex min-h-0 w-80 max-w-full shrink-0 flex-col border-l border-tokyo-bg-hl" aria-label={t('agentActivity.title')}>
     <header className="flex h-10 shrink-0 items-center gap-2 border-b border-tokyo-bg-hl px-3">
       <History className="h-4 w-4" aria-hidden="true" />
       <h2 className="flex-1 text-sm font-medium">{t('agentActivity.title')}</h2>

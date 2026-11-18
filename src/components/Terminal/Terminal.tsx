@@ -5,7 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { useSessionStore } from '../../stores/sessionStore';
-import { useSettingsStore, themes } from '../../stores/settingsStore';
+import { useSettingsStore, themes, isLightTheme } from '../../stores/settingsStore';
 import { CUSTOM_THEME_EVENT, customTerminalColors } from '../../lib/customTheme';
 import { CompletionPopup, type CompletionItem } from './CompletionPopup';
 import { MobileKeyBar } from './MobileKeyBar';
@@ -600,9 +600,12 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
     const getXtermTheme = useCallback(() => {
       const currentTheme = themes.find((t) => t.name === settings.appearance.theme);
       const baseColors = currentTheme?.colors || themes[0].colors;
-      const isLight = currentTheme?.name === 'paper-white' || currentTheme?.name === 'warm-ivory';
+      const isLight = isLightTheme(settings.appearance.theme);
       return {
-        background: baseColors.bg,
+        // The CSS glass surface owns the background; never fade terminal glyphs.
+        // Retain the RGB tint for xterm's contrast calculations, with zero alpha.
+        // The CSS keyword `transparent` is rejected by xterm's color parser.
+        background: `${baseColors.bg}00`,
         foreground: baseColors.fg,
         cursor: baseColors.accent,
         cursorAccent: baseColors.bg,
@@ -650,6 +653,7 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         fastScrollSensitivity: 5,
         smoothScrollDuration: 0,
         allowProposedApi: true,
+        allowTransparency: true,
         drawBoldTextInBrightColors: true,
         minimumContrastRatio: 4.5,
       });
@@ -974,7 +978,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
 
     const currentTheme = themes.find((t) => t.name === settings.appearance.theme);
     const themeColors = currentTheme?.colors || themes[0].colors;
-    const bgColor = themeColors.bg;
 
     // Right-click menu items. Presentation and dismissal live in the shared
     // ContextMenu; the handlers are unchanged.
@@ -1034,7 +1037,6 @@ export const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         <div
           ref={terminalRef}
           className="terminal-viewport w-full min-h-0 flex-1 relative overflow-hidden"
-          style={{ backgroundColor: `var(--tokyo-bg, ${bgColor})` }}
           onContextMenu={handleContextMenu}
         />
 

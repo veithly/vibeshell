@@ -58,8 +58,8 @@ export function SessionPluginDock({
   };
 
   return (
-    <section className="flex-shrink-0 border-t border-tokyo-bg-hl bg-tokyo-bg-dark">
-      <div className="flex h-10 items-center border-b border-tokyo-bg-hl px-2">
+    <section className="glass-panel glass-form flex-shrink-0 border-t border-tokyo-bg-hl">
+      <div className="glass-toolbar flex h-10 items-center border-b border-tokyo-bg-hl px-2">
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {compatiblePlugins.map((plugin) => (
             <div

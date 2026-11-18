@@ -21,6 +21,9 @@ const testState = vi.hoisted(() => ({
   sessions: [] as TestSession[],
   activeSessionId: null as string | null,
   compact: true,
+  performanceInstalled: true,
+  performanceEnabled: true,
+  performanceInstallFails: false,
   capabilities: {
     platform: 'macos',
     isMobile: false,
@@ -53,6 +56,8 @@ const testState = vi.hoisted(() => ({
     goToPlugins: vi.fn(),
     notifyWarning: vi.fn(),
     notifyError: vi.fn(),
+    installPerformance: vi.fn(),
+    enablePerformance: vi.fn(),
   },
 }));
 
@@ -132,7 +137,8 @@ vi.mock('./stores/notificationStore', () => ({
   }),
 }));
 
-vi.mock('./stores/settingsStore', () => {
+vi.mock('./stores/settingsStore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./stores/settingsStore')>();
   const getState = () => ({
     settings: {
       appearance: {
@@ -148,6 +154,7 @@ vi.mock('./stores/settingsStore', () => {
   const useSettingsStore = (selector?: (state: ReturnType<typeof getState>) => unknown) =>
     selector ? selector(getState()) : getState();
   return {
+    ...actual,
     useSettingsStore: Object.assign(useSettingsStore, { getState }),
     themes: [{
       name: 'test-theme',
@@ -243,12 +250,39 @@ vi.mock('./stores/pluginStore', () => {
       grantedPermissions: ['remote_exec'],
       settings: {},
       installedAt: 1,
+    }, {
+      manifest: {
+        ...dockerManifest,
+        id: 'server-performance',
+        name: 'Server Performance',
+        icon: 'activity',
+        permissions: ['local_system_read'],
+        entry: { type: 'native', view: 'server-status' },
+      },
+      source: 'builtin',
+      installed: testState.performanceInstalled,
+      enabled: testState.performanceEnabled,
+      grantedPermissions: ['local_system_read'],
+      settings: {},
+      installedAt: 1,
     }],
     loading: false,
     initialized: true,
     operationId: null,
     error: null,
     fetchPlugins: testState.actions.fetchPlugins,
+    installPlugin: async () => {
+      testState.actions.installPerformance();
+      if (testState.performanceInstallFails) return false;
+      testState.performanceInstalled = true;
+      testState.performanceEnabled = true;
+      return true;
+    },
+    setPluginEnabled: async () => {
+      testState.actions.enablePerformance();
+      testState.performanceEnabled = true;
+      return true;
+    },
     executePluginAction: vi.fn(async () => null),
     updatePluginSettings: vi.fn(async () => true),
     clearError: vi.fn(),
@@ -278,7 +312,7 @@ vi.mock('./components/SessionTabs', () => ({
 }));
 
 
-vi.mock('./components/TitleBar', () => ({ TitleBar: () => null }));
+vi.mock('./components/TitleBar', () => ({ TitleBar: ({ children }: { children?: import('react').ReactNode }) => <header>{children}</header> }));
 vi.mock('./components/AddServerDialog', () => ({ AddServerDialog: () => null }));
 vi.mock('./components/EditServerDialog', () => ({ EditServerDialog: () => null }));
 vi.mock('./components/ConnectDialog', () => ({ ConnectDialog: () => null }));
@@ -304,6 +338,10 @@ vi.mock('./components/SftpPanel', async () => {
   return { SftpPanel: forwardRef((_props, _ref) => null) };
 });
 vi.mock('./components/Settings', () => ({ Settings: () => null }));
+vi.mock('./components/ServerStatus', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./components/ServerStatus')>(),
+  ServerStatus: ({ sessionId, onClose }: { sessionId: string; onClose?: () => void }) => <div data-testid="performance-metrics" data-session-id={sessionId}>CPU / Memory<button onClick={onClose}>Close metrics</button></div>,
+}));
 vi.mock('./components/PluginMarketplace', () => ({ PluginMarketplace: () => null }));
 vi.mock('./components/Terminal', async () => {
   const { forwardRef } = await import('react');
@@ -335,6 +373,9 @@ describe('App workspace actions', () => {
     testState.sessions = [codingAgentSession()];
     testState.activeSessionId = 'session-1';
     testState.compact = true;
+    testState.performanceInstalled = true;
+    testState.performanceEnabled = true;
+    testState.performanceInstallFails = false;
     usePluginWorkspaceStore.setState({ tabs: [], activeTabId: null, panels: {} });
     testState.capabilities = {
       platform: 'macos',
@@ -371,7 +412,7 @@ describe('App workspace actions', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('opens a plugin as a workspace tab and splits it beside the terminal', async () => {
+  it('opens a plugin without the removed split buttons', async () => {
     testState.compact = false;
     render(<App />);
 
@@ -383,36 +424,27 @@ describe('App workspace actions', () => {
     const pluginItem = await screen.findByRole('menuitem', { name: 'plugins.catalog.docker-containers.name' });
     fireEvent.click(pluginItem);
 
-    // The plugin takes over the workspace area and offers split controls.
-    const splitButton = await screen.findByRole('button', { name: 'plugins.splitRight' });
-    expect(splitButton).toBeInTheDocument();
-    expect(screen.getByText('Codex')).toBeInTheDocument();
-
-    // Splitting pins the plugin beside the terminal inside the mosaic.
-    fireEvent.click(splitButton);
-    await waitFor(() => {
-      expect(
-        screen.getByLabelText('pane:plugins.catalog.docker-containers.name · Codex')
-      ).toBeInTheDocument();
-    });
+    expect(await screen.findByText('Docker')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'plugins.splitRight' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'plugins.splitDown' })).not.toBeInTheDocument();
     expect(screen.getByTestId('terminal-session-1')).toBeInTheDocument();
-
-    // The built-in management dashboard replaces the raw action form.
-    const pluginPane = screen.getByLabelText('pane:plugins.catalog.docker-containers.name · Codex');
-    expect(within(pluginPane).getByText('Docker')).toBeInTheDocument();
-    expect(within(pluginPane).getAllByText(/Containers/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Containers/).length).toBeGreaterThan(0);
     // Power users can still drop into the raw runner.
-    fireEvent.click(within(pluginPane).getByText('plugins.advancedMode ⌄'));
-    expect(within(pluginPane).getAllByText('Containers').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByText('plugins.advancedMode ⌄'));
+    expect(screen.getAllByText('Containers').length).toBeGreaterThan(0);
   });
 
   it('exposes one history action independent of gateway availability', async () => {
     const { rerender } = render(<App />);
 
     expect(await screen.findByRole('button', {name: 'sidebar.history'})).toBeEnabled();
-    expect(screen.queryByRole('button', {name: 'sidebar.sftp'})).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'sidebar.sftp'})).toBeEnabled();
+    expect(screen.getByRole('button', {name: 'sidebar.performance'})).toBeEnabled();
     fireEvent.click(screen.getByRole('button', {name: 'common.more'}));
     expect(screen.queryByRole('menuitem', {name: 'sidebar.history'})).not.toBeInTheDocument();
+    for (const name of ['settings.dayMode', 'settings.nightMode', 'settings.themeModeSystem', 'sidebar.sftp', 'plugins.catalog.server-performance.name', 'session.splitHorizontal', 'session.splitVertical', 'session.closeSplits']) {
+      expect(screen.queryByRole('menuitem', {name})).not.toBeInTheDocument();
+    }
     for (const name of ['codingAgent.start', 'agentActivity.title', 'sidebar.quickCmd']) {
       expect(screen.queryByRole('menuitem', {name})).not.toBeInTheDocument();
     }
@@ -422,5 +454,64 @@ describe('App workspace actions', () => {
     rerender(<App />);
     expect(screen.getByRole('menuitem', {name: 'workspaceChanges.title'})).toBeDisabled();
     expect(screen.getByRole('button', {name: 'sidebar.history'})).toBeEnabled();
+  });
+
+  it('opens performance below the terminal without creating a workspace tab, then toggles closed', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', {name: 'sidebar.performance'}));
+    expect(await screen.findByTestId('performance-metrics')).toBeInTheDocument();
+    expect(testState.actions.installPerformance).not.toHaveBeenCalled();
+    expect(usePluginWorkspaceStore.getState().tabs).toHaveLength(0);
+    const terminal = screen.getByTestId('terminal-session-1');
+    const dock = screen.getByTestId('performance-dock');
+    expect(terminal.compareDocumentPosition(dock) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(terminal.closest('.hidden')).toBeNull();
+    expect(screen.getByRole('button', {name: 'sidebar.performance'})).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', {name: 'sidebar.performance'}));
+    expect(screen.queryByTestId('performance-dock')).not.toBeInTheDocument();
+    expect(screen.getByTestId('terminal-session-1')).toBeInTheDocument();
+  });
+
+  it('keeps top-level actions icon-only with tooltips and accessible names', async () => {
+    render(<App />);
+    for (const name of ['sidebar.sftp', 'sidebar.performance', 'sidebar.history', 'common.more']) {
+      const button = await screen.findByRole('button', { name });
+      expect(button.textContent).toBe('');
+      expect(button).toHaveAttribute('data-tooltip', name);
+      expect(button.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    }
+  });
+
+  it('closes only the performance pane and follows a changed active session', async () => {
+    const { rerender } = render(<App />);
+    fireEvent.click(await screen.findByRole('button', {name: 'sidebar.performance'}));
+    await screen.findByTestId('performance-metrics');
+    testState.sessions = [codingAgentSession({id: 'session-2'})];
+    testState.activeSessionId = 'session-2';
+    rerender(<App />);
+    expect(screen.getByTestId('performance-metrics')).toHaveAttribute('data-session-id', 'session-2');
+    fireEvent.click(screen.getByText('Close metrics'));
+    expect(screen.queryByTestId('performance-dock')).not.toBeInTheDocument();
+    expect(testState.actions.killSession).not.toHaveBeenCalled();
+    expect(testState.actions.killLocalShellSession).not.toHaveBeenCalled();
+  });
+
+  it('enables the bundled performance feature on an explicit first-use click', async () => {
+    testState.performanceInstalled = false;
+    testState.performanceEnabled = false;
+    render(<App />);
+    expect(testState.actions.installPerformance).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', {name: 'sidebar.performance'}));
+    expect(await screen.findByTestId('performance-metrics')).toBeInTheDocument();
+    expect(testState.actions.installPerformance).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces a failed performance install instead of opening a broken tab', async () => {
+    testState.performanceInstalled = false;
+    testState.performanceInstallFails = true;
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', {name: 'sidebar.performance'}));
+    await waitFor(() => expect(testState.actions.notifyError).toHaveBeenCalled());
+    expect(usePluginWorkspaceStore.getState().tabs).toHaveLength(0);
   });
 });

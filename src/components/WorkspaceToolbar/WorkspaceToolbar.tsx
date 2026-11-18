@@ -60,14 +60,14 @@ export function WorkspaceToolbar({ label, items, anyPressed = false }: Workspace
         aria-expanded={open}
         aria-haspopup="menu"
       >
-        <MoreHorizontal className="h-4 w-4" />
+        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
       </button>
 
       {open && (
         <div
           role="menu"
           aria-label={label}
-          className="absolute right-0 top-full z-50 mt-1 max-h-[70vh] w-56 overflow-y-auto rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
+          className="glass-menu absolute right-0 top-full z-50 mt-2 max-h-[70vh] w-56 overflow-y-auto rounded-xl p-1.5"
         >
           {items.map((item) => (
             <button
