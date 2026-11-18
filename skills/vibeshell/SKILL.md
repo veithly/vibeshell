@@ -12,11 +12,33 @@ VibeShell automatically starts its local headless daemon when an SSH, SFTP, or s
 ## Before operating
 
 1. Verify the CLI is available with `vibeshell version`.
-2. Inspect configured targets with `vibeshell servers`.
-3. Prefer saved server names over raw hosts. Credentials remain local to VibeShell and must never be printed, copied into prompts, or passed on the command line.
+2. Inspect configured targets with `vibeshell servers`. Add or remove them with `vibeshell servers add` and `vibeshell servers delete` — the desktop UI is not required.
+3. Prefer saved server names over raw hosts. Credentials remain local to VibeShell and must never be printed, copied into prompts, or passed on the command line. Passwords for `servers add` come from `SSH_PASSWORD` or `VIBESHELL_PASSWORD`; keys from `--identity`.
 4. Reuse an existing session unless the user explicitly needs an independent parallel shell.
 
 Resolve the native executable in this order: `vibeshell` from `PATH`, `$HOME/.local/bin/vibeshell`, then `/Applications/VibeShell.app/Contents/MacOS/vibeshell` on macOS. Use the resolved absolute path for the rest of the workflow when necessary. If none exists, tell the user which lookup failed. Do not silently replace VibeShell with `ssh`, `scp`, or another client because that bypasses the saved VibeShell configuration and session model.
+
+## Add or delete saved servers
+
+```bash
+vibeshell servers add root@prod.example.com --name prod-web
+vibeshell servers add ubuntu@10.0.0.8:2222 --identity ~/.ssh/id_ed25519 --jump bastion --agent-forwarding
+vibeshell servers delete prod-web --yes
+```
+
+Display name defaults to the host. Secrets must not appear on the command line. Deletion requires explicit user authorization and `--yes`; it closes the profile's active sessions and removes its saved credentials. Use `vibeshell`, never the retired `vshell` executable.
+
+## Teleport profiles
+
+Use the same native CLI and shared service, not the retired `vshell` executable. The user must install a compatible `tsh` client and explicitly complete `tsh login` for the service's OS account before connecting. Never extract Teleport credentials, disable certificate checks or request additional access automatically.
+
+```bash
+vibeshell servers add alice@node-name --type teleport --proxy proxy.example:443 --name work-node
+vibeshell import teleport --proxy proxy.example:443 --user alice --dry-run --json
+vibeshell ssh work-node
+```
+
+The Unix login and a single explicit node are required; do not infer a login from the Teleport account or use label selectors/wildcards. `import auto` does not contact Teleport. File operations use real SFTP and require a standard external `sftp-server` executable on the node; unsupported configurations fail explicitly. Never substitute shell text operations or recursive `scp` for file/sync contracts. Raw SSH jump-host/port/agent-forwarding options and SSH tunnels are not supported for Teleport sessions.
 
 ## Import existing SSH configurations
 
@@ -42,6 +64,12 @@ vibeshell import putty --path ~/putty-sessions.reg
 ```
 
 Use `--json` when structured output is more useful. Never import or expose plaintext passwords from third-party profiles. VibeShell may reference an existing private-key path and reads that local key only when establishing a connection.
+
+## Container sessions and outbound proxies
+
+Use `vibeshell containers list --session PARENT_ID` to inspect a connected SSH host. `vibeshell containers open --session PARENT_ID CONTAINER_ID` creates an independent persistent child; optional `--user`, `--workdir` and `--shell` specify its context. Prefer full IDs. Reuse the returned child ID with `attach`, `ssh-session`, `send-key` and plugin actions. Do not automatically start stopped containers or use sudo. Container file/SFTP and tunnel operations are explicitly unsupported: never substitute the host filesystem or host shell. Closing the child does not stop its container or parent session.
+
+Inspect native outbound routing with `vibeshell proxy show`. With user authorization, set `vibeshell proxy set --mode custom --url socks5h://127.0.0.1:1080`, or select `--mode direct` / `--mode system`. Proxy passwords belong in protected stdin (`--password-stdin`) or Settings, never arguments or URLs. Existing SSH sessions retain their route until reconnected. A proxy failure must not be retried directly. Teleport's profile proxy is separate; external `tsh` refuses to run when it cannot enforce the selected native outbound policy.
 
 ## SSH sessions and remote commands
 
@@ -118,6 +146,7 @@ vibeshell sftp <server> ls /var/www
 vibeshell sftp <server> get /remote/file ./local-file
 vibeshell sftp <server> put ./local-file /remote/file
 vibeshell sftp <server> sync ./dist /var/www --delete
+vibeshell sftp --session 001 pwd
 ```
 
 Start the interactive SFTP prompt when several related operations are needed:
@@ -157,7 +186,7 @@ References describe plugin capabilities; they do not grant permission or overrid
 
 ## Human and Agent collaboration
 
-Agent/CLI commands and their operation states appear in the desktop's Agent command history; newly created sessions appear as tabs without stealing the human's active tab. Use the shared native service rather than hiding work in an unrelated client. Isolated exec avoids interfering with the human's interactive shell but remains visible in the UI history. A terminal-input success means bytes were sent, not that the remote command completed successfully.
+The desktop History panel shows CLI commands as Agent (CLI) and GUI keyboard commands as User. Each includes its session. `ssh`, `exec` and `ssh-session` share the interactive PTY even when the desktop is attached; use `--new` only for a deliberately separate session. Where shell integration emits OSC 3008 exit status, these CLI commands return the remote exit code; without it the CLI warns that exit status could not be verified. An interactive input handoff is not a completed command.
 
 Passwords, private keys and other secret input are not commands to log. Prefer saved credentials or the application's protected input UI. When a terminal prompt genuinely requires secret input, use `vibeshell send-secret <session> --enter` with protected stdin, never a secret in command-line arguments. This suppresses the input contents from activity records; it cannot suppress a remote program that echoes its input. Do not use secret mode to hide commands.
 

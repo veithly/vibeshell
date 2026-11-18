@@ -6935,7 +6935,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vibeshell-desktop"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "argon2 0.5.3",
@@ -6950,6 +6950,7 @@ dependencies = [
  "interprocess",
  "log",
  "mysql_async",
+ "percent-encoding",
  "portable-pty",
  "rand 0.8.8",
  "reqwest",
@@ -6973,10 +6974,12 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "tokio-stream",
  "tower",
  "uuid",
  "vibeshell-plugins",
+ "webpki-roots",
  "which",
  "windows-sys 0.59.0",
  "winreg 0.55.0",
@@ -6985,7 +6988,7 @@ dependencies = [
 
 [[package]]
 name = "vibeshell-plugins"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -6993,7 +6996,7 @@ dependencies = [
 
 [[package]]
 name = "vshell"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "clap",

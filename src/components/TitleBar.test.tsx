@@ -54,6 +54,14 @@ describe('TitleBar window controls', () => {
 
   afterEach(cleanup);
 
+  it('hosts tabs in the same row as window controls, with no brand or duplicate session badge', () => {
+    const { container } = render(<TitleBar><div role="tablist"><button role="tab">TencentJP</button></div></TitleBar>);
+    expect(container.querySelector('.titlebar-shell [role="tablist"]')).toBeInTheDocument();
+    expect(screen.queryByText('VibeShell')).not.toBeInTheDocument();
+    expect(container.querySelector('.titlebar-brand, .titlebar-session, img')).toBeNull();
+    expect(container.querySelector('[role="tablist"]')?.closest('[data-tauri-drag-region]')).toBeNull();
+  });
+
   it('never probes AppKit zoom state for macOS titlebar controls', async () => {
     render(<TitleBar />);
     await waitFor(() => expect(listenMock).toHaveBeenCalled());

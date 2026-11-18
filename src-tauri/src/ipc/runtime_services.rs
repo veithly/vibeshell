@@ -6,6 +6,12 @@ use serde_json::{json, Value};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", deny_unknown_fields)]
 pub enum RuntimeRequest {
+    ContainerList {
+        parent_session_id: String,
+    },
+    ContainerOpen {
+        request: crate::session::container::ContainerOpenRequest,
+    },
     TunnelStart {
         session_id: String,
         config: TunnelConfig,
@@ -42,6 +48,18 @@ pub async fn call<T: serde::de::DeserializeOwned>(request: RuntimeRequest) -> Re
 
 pub async fn dispatch(manager: &SessionManager, request: RuntimeRequest) -> Result<Value, String> {
     match request {
+        RuntimeRequest::ContainerList { parent_session_id } => Ok(json!(manager
+            .list_containers(&parent_session_id)
+            .await
+            .map_err(|e| e.to_string())?)),
+        RuntimeRequest::ContainerOpen { request } => Ok(json!(
+            manager
+                .create_container(request)
+                .await
+                .map_err(|e| e.to_string())?
+                .get_info()
+                .await
+        )),
         RuntimeRequest::TunnelStart { session_id, config } => {
             let service = manager
                 .tunnel_service()

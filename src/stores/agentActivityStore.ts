@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { safeInvoke } from '../lib/tauri';
 
 export interface AgentActivity {
+  origin?: 'cli' | 'user' | 'legacy' | null;
   sequence: number;
   id: string;
   tool: string;
@@ -17,7 +18,7 @@ export function mergeAgentActivity(current: AgentActivity[], incoming: AgentActi
     const previous = byId.get(item.id);
     if (!previous || item.sequence > previous.sequence) byId.set(item.id, item);
   }
-  return [...byId.values()].sort((a, b) => b.sequence - a.sequence);
+  return [...byId.values()].sort((a, b) => b.timestamp - a.timestamp || b.sequence - a.sequence);
 }
 
 interface ActivityState {

@@ -159,7 +159,8 @@ vi.mock('../../stores/sessionStore', () => ({
   useSessionStore: (selector: (state: typeof mocks.storeState) => unknown) => selector(mocks.storeState),
 }));
 
-vi.mock('../../stores/settingsStore', () => ({
+vi.mock('../../stores/settingsStore', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../stores/settingsStore')>(),
   useSettingsStore: () => ({
     settings: {
       terminal: {
@@ -282,6 +283,10 @@ describe('Terminal lifecycle', () => {
 
     await waitFor(() => expect(mocks.attachLocalShellSession).toHaveBeenCalledOnce());
     expect(mocks.construct).toHaveBeenCalledOnce();
+    expect(mocks.construct).toHaveBeenCalledWith(expect.objectContaining({
+      allowTransparency: true,
+      theme: expect.objectContaining({ background: '#ffffff00' }),
+    }));
     expect(mocks.open).toHaveBeenCalledOnce();
     expect(mocks.operations.indexOf('open')).toBeLessThan(mocks.operations.indexOf('attach'));
   });
@@ -325,16 +330,16 @@ describe('Terminal lifecycle', () => {
   });
 
   it('decorates agent shell input with the theme accent without writing duplicate text', async () => {
-    const { findByText } = render(<Terminal sessionId="agent-session" />);
+    const { queryByText } = render(<Terminal sessionId="agent-session" />);
 
     await act(async () => {
       flushAnimationFrames();
       await Promise.resolve();
     });
-    await waitFor(() => expect(mocks.listeners.has('agent-terminal-input')).toBe(true));
+    await waitFor(() => expect(mocks.listeners.has('cli-terminal-typing')).toBe(true));
 
     act(() => {
-      mocks.listeners.get('agent-terminal-input')?.({
+      mocks.listeners.get('cli-terminal-typing')?.({
         payload: {
           id: 'typing-1',
           sessionId: 'agent-session',
@@ -359,7 +364,7 @@ describe('Terminal lifecycle', () => {
       foregroundColor: '#743796',
       layer: 'top',
     }));
-    expect(await findByText('rm -rf /tmp/example')).toBeInTheDocument();
+    expect(queryByText('rm -rf /tmp/example')).not.toBeInTheDocument();
   });
 
   it('decorates every line of multiline agent typing', async () => {
@@ -369,10 +374,10 @@ describe('Terminal lifecycle', () => {
       flushAnimationFrames();
       await Promise.resolve();
     });
-    await waitFor(() => expect(mocks.listeners.has('agent-terminal-input')).toBe(true));
+    await waitFor(() => expect(mocks.listeners.has('cli-terminal-typing')).toBe(true));
 
     act(() => {
-      mocks.listeners.get('agent-terminal-input')?.({
+      mocks.listeners.get('cli-terminal-typing')?.({
         payload: {
           id: 'typing-multiline',
           sessionId: 'agent-session',

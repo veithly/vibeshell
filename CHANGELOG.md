@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.2.0 — 2026-11-18
+
+### Container sessions, outbound routing and Gateway preferences
+
+Running Docker containers can open as independent persistent child sessions, with a shared immutable container context across terminal/CLI/MCP/plugin execution and explicit teardown isolation. Native outbound requests support HTTP/HTTPS/SOCKS4/4a/5/5h routing, encrypted proxy credentials and fail-closed errors. Approved remote Markdown images follow bounded, validated HTTP(S) redirects through that same network policy. Agent Gateway ports are configurable and persisted, with occupied-port errors that leave Settings accessible. See [setup and support boundaries](docs/NETWORK_AND_CONTAINERS.md). Installing this release does not automatically replace a running application.
+
+### A more flexible, translucent desktop workspace
+
+The macOS desktop uses native translucent window materials, with light, dark and system-following appearances. The tab strip shares the window titlebar; SFTP, performance, history and more actions have compact icon-only controls. Theme selection and separate window/terminal background controls live in Settings, rather than being scattered through the top-level menu. The terminal remains readable over translucent surfaces, with reduced-transparency fallbacks.
+
+Terminals, file editors and previews, and operations plugins can be arranged as independent panes **inside one main window**. Pane titlebars, close/detach affordances and dragging behavior are consistent across the light and dark themes. Tabs and file workspaces can still be moved to a separate native window when needed; no additional split-toolbar buttons are required.
+
+### Everyday file and operations workflows
+
+The performance panel opens beneath the active terminal, preserving command context and allowing the height to be adjusted. SFTP, plugin dashboards, file previews, Settings, dialogs and menus share a consistent surface/control system, with accessible hover, focus and disabled states. Existing SFTP edit, preview, archive extraction and directory synchronization functionality remains available.
+
+### Native server management and Teleport
+
+The supported `vibeshell` CLI can create saved servers and delete them with explicit confirmation. Profile, optional group, encrypted credentials and sync metadata commit atomically; secret whitespace is preserved and secret-bearing IPC/activity payloads are redacted. The retired `vshell` executable is not restored.
+
+Teleport profiles use the current shared-session owner, authenticated PTY readiness, bounded/cancellable subprocess I/O and actual command exit codes. File operations use the normal binary SFTP and ignore-aware synchronization paths rather than shell-text or recursive-copy substitutes. An explicitly logged-in compatible `tsh` client is required, and file access additionally requires an executable standard SFTP server on the node. See [Teleport support boundaries](docs/TELEPORT.md).
+
+### Documentation and release alignment
+
+The English, Simplified Chinese and Japanese READMEs focus on practical workflows: mixing several terminals/plugins/previews in one window, command completion, editing and previewing files over SFTP, and reviewing Agent activity. Gallery images show the current interface with synthetic example data; the macOS glass screenshots were captured in an isolated virtual display rather than over an operator's desktop.
+
+Desktop, CLI, Tauri, Cargo workspace packages and agent plugin metadata are aligned at version **1.2.0**. Updating an installed application and its native CLI is a separate step from the published source release; save active sessions before restarting.
+
 ## 1.1.0 — 2026-09-18
 
 ### A shared workspace for people and agents

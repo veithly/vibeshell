@@ -50,6 +50,9 @@ impl Drop for ShellReader {
 
 #[derive(Clone)]
 pub struct SshClient {
+    scope_closed: Arc<std::sync::atomic::AtomicBool>,
+    internal_bridge: bool,
+    owns_connection: bool,
     shell_reader: Arc<ShellReader>,
     remote_forwards: crate::tunnel::remote_forward::RemoteForwardRegistry,
     session: Arc<Mutex<Option<client::Handle<ClientHandler>>>>,
@@ -210,6 +213,9 @@ impl SshClient {
 
     pub fn new(output_tx: mpsc::Sender<Vec<u8>>) -> Self {
         Self {
+            scope_closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            internal_bridge: false,
+            owns_connection: true,
             shell_reader: Arc::new(ShellReader::default()),
             remote_forwards: Default::default(),
             session: Arc::new(Mutex::new(None)),
@@ -233,6 +239,11 @@ impl SshClient {
     /// without it the handshake fails closed.
     pub fn set_host_key_check(&mut self, check: HostKeyCheck) {
         self.host_key_check = Some(check);
+    }
+
+    /// Only an already-established SSH jump bridge may bypass routing.
+    pub(crate) fn use_internal_bridge(&mut self) {
+        self.internal_bridge = true;
     }
 
     /// Take the host-key rejection recorded by the most recent connect
@@ -299,9 +310,15 @@ impl SshClient {
             port,
             tcp_timeout.as_secs()
         );
-        match tokio::time::timeout(tcp_timeout, client::connect(config, (host, port), handler))
-            .await
-        {
+        let connection = async {
+            let stream: crate::network::BoxStream = if self.internal_bridge {
+                Box::new(tokio::net::TcpStream::connect((host, port)).await?)
+            } else {
+                crate::network::connect(&crate::network::Route::current()?, host, port).await?
+            };
+            client::connect_stream(config, stream, handler).await
+        };
+        match tokio::time::timeout(tcp_timeout, connection).await {
             Err(_) => Err(anyhow!(
                 "TCP connection to {}:{} timed out after {}s (check network/Tailscale/VPN status)",
                 host,
@@ -324,6 +341,8 @@ impl SshClient {
                 if let Some(rejection) = self.host_key_rejection() {
                     return Err(self.host_key_error(&rejection, host, port));
                 }
+                self.scope_closed
+                    .store(false, std::sync::atomic::Ordering::Release);
                 Ok(session)
             }
         }
@@ -542,6 +561,8 @@ impl SshClient {
     }
 
     pub async fn disconnect(&mut self) -> Result<()> {
+        self.scope_closed
+            .store(true, std::sync::atomic::Ordering::Release);
         info!("[SSH] Disconnecting...");
         self.shell_reader.abort();
         // Clear the shell channel ID first
@@ -560,7 +581,7 @@ impl SshClient {
             }
         }
 
-        {
+        if self.owns_connection {
             let mut session_guard = self.session.lock().await;
             if let Some(session) = session_guard.take() {
                 debug!("[SSH] Sending disconnect to server");
@@ -617,6 +638,32 @@ impl SshClient {
 
     /// Split the PTY into a writer and a continuously consumed message stream.
     pub async fn open_shell(&mut self, pty_config: Option<PtyConfig>) -> Result<()> {
+        self.open_terminal(pty_config, None).await
+    }
+
+    /// Independent PTY on the same authenticated connection; its teardown must
+    /// never disconnect the parent or other container sessions.
+    pub(crate) fn fork_terminal(&self, output_tx: mpsc::Sender<Vec<u8>>) -> Self {
+        let mut child = Self::new(output_tx);
+        child.session = self.session.clone();
+        child.owns_connection = false;
+        child
+    }
+
+    pub(crate) async fn open_exec_terminal(
+        &mut self,
+        command: &str,
+        marker: &[u8],
+        pty: Option<PtyConfig>,
+    ) -> Result<()> {
+        self.open_terminal(pty, Some((command, marker))).await
+    }
+
+    async fn open_terminal(
+        &mut self,
+        pty_config: Option<PtyConfig>,
+        exec: Option<(&str, &[u8])>,
+    ) -> Result<()> {
         anyhow::ensure!(self.channel.lock().await.is_none(), "Shell already opened");
         let mut channel = self
             .session_channel()
@@ -636,8 +683,31 @@ impl SshClient {
                 )
                 .await?;
             Self::channel_accepted(&mut channel, "PTY request").await?;
-            channel.request_shell(true).await?;
-            Self::channel_accepted(&mut channel, "shell request").await
+            if let Some((command, marker)) = exec {
+                channel.exec(true, command).await?;
+                Self::channel_accepted(&mut channel, "container exec request").await?;
+                let mut output = Vec::new();
+                tokio::time::timeout(Duration::from_secs(20), async {
+                    loop {
+                        match channel.wait().await {
+                            Some(ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. }) => {
+                                output.extend_from_slice(&data);
+                                anyhow::ensure!(output.len() <= 65536, "Container startup output exceeded 64 KiB");
+                                if let Some(index) = output.windows(marker.len()).position(|w| w == marker) {
+                                    output.drain(index..index + marker.len());
+                                    if !output.is_empty() { let _ = self.output_tx.send(output).await; }
+                                    return Ok(());
+                                }
+                            }
+                            Some(ChannelMsg::ExitStatus { .. } | ChannelMsg::Eof | ChannelMsg::Close | ChannelMsg::Failure) | None => anyhow::bail!("Container shell did not start; check Docker permissions, running state and selected shell"),
+                            _ => {}
+                        }
+                    }
+                }).await.context("Container shell readiness timed out")?
+            } else {
+                channel.request_shell(true).await?;
+                Self::channel_accepted(&mut channel, "shell request").await
+            }
         }
         .await;
         if let Err(error) = setup {
@@ -651,6 +721,8 @@ impl SshClient {
         let output = self.output_tx.clone();
         let identity = self.shell_channel_id.clone();
         let channel_state = self.channel.clone();
+        let scope_closed = self.scope_closed.clone();
+        let is_child = !self.owns_connection;
         let task = tokio::spawn(async move {
             while let Some(message) = reader.wait().await {
                 match message {
@@ -664,6 +736,9 @@ impl SshClient {
                 }
             }
             let mut current = identity.lock().await;
+            if is_child {
+                scope_closed.store(true, std::sync::atomic::Ordering::Release);
+            }
             if *current == Some(channel_id) {
                 *channel_state.lock().await = None;
                 *current = None;
@@ -788,6 +863,10 @@ impl SshClient {
         timeout: Duration,
         max_output: usize,
     ) -> Result<CommandResult> {
+        anyhow::ensure!(
+            !self.scope_closed.load(std::sync::atomic::Ordering::Acquire),
+            "Session execution scope is closed"
+        );
         // Commands and their output can contain credentials; only log sizes.
         debug!(
             "[SSH] Executing command via exec channel ({} bytes)",
@@ -804,6 +883,12 @@ impl SshClient {
             .context("Failed to open exec channel")?;
 
         // Execute the command (not a shell, just exec)
+        if self.scope_closed.load(std::sync::atomic::Ordering::Acquire) {
+            let _ = channel.close().await;
+            return Err(anyhow!(
+                "Session execution scope closed before command submission"
+            ));
+        }
         if let Err(error) = channel.exec(true, command).await {
             let _ = channel.close().await;
             return Err(error).context("Failed to send exec request");
@@ -833,6 +918,12 @@ impl SshClient {
 
         loop {
             let elapsed = start.elapsed();
+            if self.scope_closed.load(std::sync::atomic::Ordering::Acquire) {
+                let _ = channel.close().await;
+                return Err(anyhow!(
+                    "Session execution cancelled because its terminal was closed"
+                ));
+            }
             if elapsed >= timeout {
                 timed_out = true;
                 warn!("[SSH] Command execution timed out after {:?}", timeout);

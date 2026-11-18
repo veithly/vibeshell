@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
@@ -80,26 +80,22 @@ impl SyncProviderConfig {
     }
 }
 
-pub struct MultiSyncTransport {
-    client: reqwest::Client,
-}
+pub struct MultiSyncTransport;
 
 impl MultiSyncTransport {
     pub fn new() -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .user_agent(concat!("VibeShell/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .context("Failed to build cloud sync HTTP client")?;
-        Ok(Self { client })
+        Ok(Self)
+    }
+
+    fn client(&self) -> Result<reqwest::Client> {
+        crate::network::http_client()
     }
 
     async fn create_gist(&self, token: &str, vault_id: &str) -> Result<String> {
         let document = ObjectStoreDocument::new(vault_id);
         let content = serialize_document(&document)?;
         let response = self
-            .client
+            .client()?
             .post("https://api.github.com/gists")
             .bearer_auth(token)
             .json(&serde_json::json!({
@@ -159,7 +155,7 @@ impl MultiSyncTransport {
         vault_id: &str,
     ) -> Result<FetchedDocument> {
         let response = self
-            .client
+            .client()?
             .get(format!("https://api.github.com/gists/{gist_id}"))
             .bearer_auth(token)
             .send()
@@ -206,7 +202,7 @@ impl MultiSyncTransport {
             bail!("GitHub returned an unexpected raw Gist URL");
         }
         let response = self
-            .client
+            .client()?
             .get(parsed)
             .bearer_auth(token)
             .send()
@@ -229,7 +225,7 @@ impl MultiSyncTransport {
     ) -> Result<bool> {
         let content = serialize_document(document)?;
         let mut request = self
-            .client
+            .client()?
             .patch(format!("https://api.github.com/gists/{gist_id}"))
             .bearer_auth(token)
             .json(&serde_json::json!({
@@ -300,7 +296,7 @@ impl MultiSyncTransport {
         password: &str,
         vault_id: &str,
     ) -> Result<FetchedDocument> {
-        let response = with_basic_auth(self.client.get(endpoint), username, password)
+        let response = with_basic_auth(self.client()?.get(endpoint), username, password)
             .send()
             .await
             .context("Failed to read WebDAV sync file")?;
@@ -339,7 +335,7 @@ impl MultiSyncTransport {
     ) -> Result<bool> {
         let content = serialize_document(document)?;
         let mut request = with_basic_auth(
-            self.client
+            self.client()?
                 .put(endpoint)
                 .header("content-type", "application/json")
                 .body(content),

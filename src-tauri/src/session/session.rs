@@ -20,6 +20,8 @@ pub enum SessionState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<super::container::ContainerContext>,
     pub id: String,
     pub server_id: String,
     pub server_name: String,
@@ -29,6 +31,10 @@ pub struct SessionInfo {
 }
 
 pub struct Session {
+    pub container: Option<super::container::ContainerContext>,
+    teleport_target: Mutex<Option<crate::teleport::TeleportTarget>>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    teleport_pty: Mutex<Option<Arc<crate::teleport::TeleportPty>>>,
     pub id: String,
     pub server_id: String,
     pub server_name: String,
@@ -43,6 +49,8 @@ pub struct Session {
 
     // Broadcast channel for output to all clients
     output_tx: broadcast::Sender<Vec<u8>>,
+
+    cli_typing: broadcast::Sender<String>,
 
     // Buffered output replay so late listeners still receive the initial shell prompt.
     output_replay: Arc<Mutex<OutputReplayBuffer>>,
@@ -65,6 +73,10 @@ impl Session {
         output_tx: broadcast::Sender<Vec<u8>>,
     ) -> Self {
         Self {
+            container: None,
+            teleport_target: Mutex::new(None),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            teleport_pty: Mutex::new(None),
             id: Uuid::new_v4().to_string(),
             server_id,
             server_name,
@@ -73,11 +85,36 @@ impl Session {
             ssh_client: Arc::new(Mutex::new(None)),
             input_tx,
             output_tx,
+            cli_typing: broadcast::channel(128).0,
             output_replay: Arc::new(Mutex::new(OutputReplayBuffer::default())),
             output_forwarder_started: Arc::new(Mutex::new(false)),
             client_count: Arc::new(RwLock::new(0)),
             last_activity: Arc::new(RwLock::new(Instant::now())),
         }
+    }
+
+    pub fn subscribe_cli_typing(&self) -> broadcast::Receiver<String> {
+        self.cli_typing.subscribe()
+    }
+
+    /// Decoration only: transmit line shape, never input contents/escape codes.
+    pub fn mark_cli_typing(&self, data: &[u8]) {
+        let Ok(text) = std::str::from_utf8(data) else {
+            return;
+        };
+        let text = text.trim_end_matches(['\r', '\n']);
+        if text.is_empty()
+            || text
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\r')
+        {
+            return;
+        }
+        let shape = text
+            .chars()
+            .map(|c| if c == '\r' || c == '\n' { c } else { ' ' })
+            .collect();
+        let _ = self.cli_typing.send(shape);
     }
 
     pub async fn mark_activity(&self) {
@@ -100,6 +137,19 @@ impl Session {
         *ssh_guard = Some(client);
     }
 
+    pub async fn set_teleport_target(&self, target: crate::teleport::TeleportTarget) {
+        *self.teleport_target.lock().await = Some(target);
+    }
+
+    pub async fn teleport_target(&self) -> Option<crate::teleport::TeleportTarget> {
+        self.teleport_target.lock().await.clone()
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub async fn set_teleport_pty(&self, pty: crate::teleport::TeleportPty) {
+        *self.teleport_pty.lock().await = Some(Arc::new(pty));
+    }
+
     /// Get a reference to the output broadcast sender
     pub fn output_sender(&self) -> broadcast::Sender<Vec<u8>> {
         self.output_tx.clone()
@@ -113,7 +163,13 @@ impl Session {
     pub async fn get_state(&self) -> SessionState {
         let state = self.state.read().await.clone();
         if state == SessionState::Connected {
-            let client = self.get_ssh_client().await;
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if let Some(pty) = self.teleport_pty.lock().await.as_ref() {
+                if !pty.is_alive() {
+                    return SessionState::Disconnected;
+                }
+            }
+            let client = self.ssh_client.lock().await.clone();
             if let Some(client) = client {
                 if !client.is_shell_open().await {
                     return SessionState::Disconnected;
@@ -125,6 +181,7 @@ impl Session {
 
     pub async fn get_info(&self) -> SessionInfo {
         SessionInfo {
+            container: self.container.clone(),
             id: self.id.clone(),
             server_id: self.server_id.clone(),
             server_name: self.server_name.clone(),
@@ -147,14 +204,21 @@ impl Session {
         replay.snapshot()
     }
 
+    /// Snapshot and subscribe under the publishing lock: no gap or duplicate
+    /// between buffered and live bytes when a second client attaches.
+    pub async fn subscribe_with_replay(&self) -> (Vec<Vec<u8>>, broadcast::Receiver<Vec<u8>>) {
+        let replay = self.output_replay.lock().await;
+        (replay.snapshot(), self.subscribe())
+    }
+
     pub async fn publish_output(&self, data: Vec<u8>) {
         {
             let mut replay = self.output_replay.lock().await;
             replay.push(&data);
+            let _ = self.output_tx.send(data);
         }
 
         self.mark_activity().await;
-        let _ = self.output_tx.send(data);
     }
 
     pub async fn try_start_output_forwarder(&self) -> bool {
@@ -195,6 +259,15 @@ impl Session {
 
     /// Send data to the SSH shell
     pub async fn write_to_ssh(&self, data: &[u8]) -> Result<()> {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let pty = self.teleport_pty.lock().await.clone();
+            if let Some(pty) = pty {
+                pty.write(data).await?;
+                self.mark_activity().await;
+                return Ok(());
+            }
+        }
         let ssh_guard = self.ssh_client.lock().await;
         if let Some(ref client) = *ssh_guard {
             client.send_data(data).await?;
@@ -208,6 +281,12 @@ impl Session {
 
     /// Resize the PTY
     pub async fn resize_pty(&self, cols: u32, rows: u32) -> Result<()> {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let Some(pty) = self.teleport_pty.lock().await.as_ref() {
+            pty.resize(cols, rows)?;
+            self.mark_activity().await;
+            return Ok(());
+        }
         let ssh_guard = self.ssh_client.lock().await;
         if let Some(ref client) = *ssh_guard {
             client.resize_pty(cols, rows).await?;
@@ -221,6 +300,13 @@ impl Session {
 
     /// Disconnect the SSH session
     pub async fn disconnect(&self) -> Result<()> {
+        if let Some(target) = self.teleport_target.lock().await.take() {
+            target.cancel();
+        }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let Some(pty) = self.teleport_pty.lock().await.take() {
+            tokio::task::spawn_blocking(move || pty.kill()).await?;
+        }
         // Always retire the client, including when the transport has already
         // failed. Do not hold the session lock during network teardown.
         let client = self.ssh_client.lock().await.take();
@@ -232,6 +318,10 @@ impl Session {
     }
 
     pub async fn get_ssh_client(&self) -> Option<SshClient> {
+        // A host handle would bypass container scope for tunnels and probes.
+        if self.container.is_some() {
+            return None;
+        }
         self.ssh_client.lock().await.clone()
     }
 
@@ -239,6 +329,9 @@ impl Session {
     pub async fn get_ssh_handle_arc(
         &self,
     ) -> Option<Arc<tokio::sync::Mutex<Option<russh::client::Handle<ClientHandler>>>>> {
+        if self.container.is_some() {
+            return None;
+        }
         let ssh_guard = self.ssh_client.lock().await;
         (*ssh_guard).as_ref().map(|client| client.session_arc())
     }
@@ -256,6 +349,31 @@ impl Session {
         command: &str,
         stdin: Option<&str>,
     ) -> Result<String> {
+        let wrapped = self
+            .container
+            .as_ref()
+            .map(|context| context.command(command, false));
+        let command = wrapped.as_deref().unwrap_or(command);
+        if self.container.is_some() {
+            anyhow::ensure!(
+                self.get_state().await == SessionState::Connected,
+                "Container session is closed; no host command was executed"
+            );
+        }
+        if let Some(target) = self.teleport_target().await {
+            let result = target
+                .exec(command, stdin, Duration::from_secs(60), 8 * 1024 * 1024)
+                .await?;
+            self.mark_activity().await;
+            if result.exit_code != 0 {
+                // Error/activity logs must not copy command output or stdin.
+                anyhow::bail!(
+                    "Teleport command failed with exit code {}",
+                    result.exit_code
+                );
+            }
+            return Ok(result.output);
+        }
         let client = {
             let ssh_guard = self.ssh_client.lock().await;
             ssh_guard
@@ -283,9 +401,29 @@ impl Session {
         &self,
         command: &str,
     ) -> Result<crate::ssh::client::CommandResult> {
+        let wrapped = self
+            .container
+            .as_ref()
+            .map(|context| context.command(command, false));
+        let command = wrapped.as_deref().unwrap_or(command);
+        if self.container.is_some() {
+            anyhow::ensure!(
+                self.get_state().await == SessionState::Connected,
+                "Container session is closed; no host command was executed"
+            );
+        }
+        if let Some(target) = self.teleport_target().await {
+            let result = target
+                .exec(command, None, Duration::from_secs(10), 1024 * 1024)
+                .await;
+            self.mark_activity().await;
+            return result;
+        }
         let client = self
-            .get_ssh_client()
+            .ssh_client
+            .lock()
             .await
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("SSH client not connected"))?;
         let result = client
             .exec_command_result_with_limits(command, None, Duration::from_secs(10), 1024 * 1024)
@@ -300,6 +438,10 @@ impl Session {
     /// Open an SFTP subsystem session on a new SSH channel.
     /// Returns an SftpSession for performing file operations via the SFTP protocol.
     pub async fn open_sftp_session(&self) -> Result<russh_sftp::client::SftpSession> {
+        anyhow::ensure!(self.container.is_none(), "Container SFTP is not supported; the host filesystem is never substituted. Use commands inside the container session.");
+        if let Some(target) = self.teleport_target().await {
+            return target.open_sftp().await;
+        }
         let client = {
             let ssh_guard = self.ssh_client.lock().await;
             ssh_guard

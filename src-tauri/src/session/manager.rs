@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 use crate::session::{Session, SessionInfo, SessionState};
 use crate::ssh::{FingerprintStore, HostKeyCheck, PtyConfig, SshClient};
 use crate::storage::{Database, Server};
+use crate::teleport::TeleportTarget;
 
 /// Credentials for SSH authentication
 #[derive(Debug, Clone)]
@@ -88,6 +89,22 @@ impl Drop for JumpBridgeGuard {
     }
 }
 
+fn echoed_command<'a>(
+    line: &str,
+    command: &'a crate::mcp::guard::TrackedAgentCommand,
+    sensitive: bool,
+) -> &'a str {
+    if sensitive {
+        "[sensitive input omitted]"
+    } else if !command.is_verifiable {
+        "[interactive input: final command unavailable]"
+    } else if line.trim_end().ends_with(&command.command) {
+        &command.command
+    } else {
+        "[input not echoed]"
+    }
+}
+
 pub struct SessionManager {
     pub agent_input_tracker: Arc<crate::mcp::SharedAgentInputTracker>,
     pub(crate) local_shell_manager: std::sync::OnceLock<Arc<crate::local_shell::LocalShellManager>>,
@@ -106,6 +123,78 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    /// Both desktop ownership modes and interactive CLI attach arrive here.
+    /// The submitter of Enter owns the row; guard state is shared by the PTY.
+    pub async fn send_keyboard_input(&self, id: &str, data: &[u8], cli: bool) -> Result<()> {
+        let session = self
+            .get(id)
+            .await
+            .ok_or_else(|| anyhow!("Session not found: {id}"))?;
+        let _guard = self.agent_input_tracker.lock_session(id).await;
+        let (checkpoint, commands, sensitive) = self
+            .agent_input_tracker
+            .checkpoint_and_observe_sensitive(id, &String::from_utf8_lossy(data), &[], false, false)
+            .await;
+        // Never turn a password prompt / no-echo input into stored command text.
+        // Only retain human-typed text corroborated by the PTY's own echo.
+        let echo = if !commands.is_empty() && !sensitive {
+            Some(session.subscribe_with_replay().await)
+        } else {
+            None
+        };
+        if cli && !sensitive {
+            session.mark_cli_typing(data);
+        }
+        if let Err(error) = session.write_to_ssh(data).await {
+            self.agent_input_tracker.restore(checkpoint).await;
+            return Err(error);
+        }
+        if commands.is_empty() {
+            return Ok(());
+        }
+        let db = self.database.clone();
+        let id = id.to_owned();
+        let submitted_at = chrono::Utc::now().timestamp_millis();
+        tokio::spawn(async move {
+            let mut line = Vec::new();
+            if let Some((backlog, mut live)) = echo {
+                let bytes = backlog.concat();
+                line.extend_from_slice(bytes.rsplit(|b| *b == b'\n').next().unwrap_or_default());
+                // Enter can arrive in the same batch as the last keystrokes.
+                let _ = tokio::time::timeout(Duration::from_millis(750), async {
+                    while line.len() < 256 * 1024
+                        && line.iter().filter(|b| **b == b'\n').count() < commands.len()
+                    {
+                        match live.recv().await {
+                            Ok(bytes) => line.extend(bytes),
+                            Err(_) => break,
+                        }
+                    }
+                })
+                .await;
+            }
+            let text = String::from_utf8_lossy(&line);
+            let mut echoed = text.lines();
+            for command in commands {
+                let summary =
+                    echoed_command(echoed.next().unwrap_or_default(), &command, sensitive);
+                let event = crate::mcp::server::AgentActivityEvent {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    tool: "input".into(),
+                    summary: summary.to_owned(),
+                    session_id: Some(id.clone()),
+                    status: crate::mcp::server::AgentActivityStatus::Succeeded,
+                    timestamp: submitted_at,
+                };
+                if let Err(error) =
+                    db.activity_record_origin(&event, Some(if cli { "cli" } else { "user" }))
+                {
+                    log::error!("Could not save submitted input history: {error}");
+                }
+            }
+        });
+        Ok(())
+    }
     pub fn new(database: Arc<Database>) -> Self {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -177,6 +266,32 @@ impl SessionManager {
         }
     }
 
+    pub fn is_teleport_server(&self, server_name: &str) -> Result<bool> {
+        Ok(self
+            .database
+            .server_get_by_name(server_name)?
+            .map(|server| server.is_teleport())
+            .unwrap_or(false))
+    }
+
+    /// One saved-profile entry point for CLI and MCP; Teleport authenticates
+    /// through the user's tsh profile, never through VibeShell SSH secrets.
+    pub async fn create_saved(
+        &self,
+        server_name: &str,
+        pty: Option<PtyConfig>,
+    ) -> Result<Arc<Session>> {
+        let credential = if self.is_teleport_server(server_name)? {
+            SshCredential::Password(String::new())
+        } else {
+            let stored = self.database.credential_get(server_name)?
+                .ok_or_else(|| anyhow!("No saved credentials for server '{server_name}'. Save credentials in VibeShell before connecting"))?;
+            SshCredential::from_stored(stored)?
+        };
+        self.create_with_credentials(server_name, credential, pty)
+            .await
+    }
+
     pub async fn list(&self) -> Vec<SessionInfo> {
         let sessions = self.sessions.read().await;
         let mut infos = Vec::new();
@@ -232,7 +347,7 @@ impl SessionManager {
 
         let mut reusable = Vec::new();
         for session in sessions {
-            if session.server_name != server_name {
+            if session.server_name != server_name || session.container.is_some() {
                 continue;
             }
 
@@ -284,7 +399,22 @@ impl SessionManager {
         };
 
         let mut stale_ids = Vec::new();
-        for session in sessions {
+        for session in &sessions {
+            let mut has_child = false;
+            for child in &sessions {
+                if child
+                    .container
+                    .as_ref()
+                    .is_some_and(|c| c.parent_session_id == session.id)
+                    && child.get_state().await == SessionState::Connected
+                {
+                    has_child = true;
+                    break;
+                }
+            }
+            if has_child {
+                continue;
+            }
             if session.should_reap(max_idle).await {
                 stale_ids.push(session.id.clone());
             }
@@ -315,6 +445,126 @@ impl SessionManager {
             .server_get_by_name(server_name)?
             .ok_or_else(|| anyhow!("Server not found: {}", server_name))?;
         self.create_for_server(&server).await
+    }
+
+    pub async fn list_containers(
+        &self,
+        parent_id: &str,
+    ) -> Result<Vec<super::container::ContainerInfo>> {
+        let parent = self
+            .get(parent_id)
+            .await
+            .ok_or_else(|| anyhow!("Parent session not found"))?;
+        anyhow::ensure!(
+            parent.container.is_none(),
+            "Nested container discovery is not supported"
+        );
+        anyhow::ensure!(
+            parent.get_state().await == SessionState::Connected,
+            "Connect the parent SSH session first"
+        );
+        let output = parent
+            .exec_quick_command("docker ps --all --no-trunc --format '{{json .}}'")
+            .await?;
+        anyhow::ensure!(output.exit_code == 0, "Docker inventory failed; check Docker installation and permissions (no automatic sudo)");
+        output
+            .output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).map_err(Into::into))
+            .collect()
+    }
+
+    pub async fn create_container(
+        &self,
+        request: super::container::ContainerOpenRequest,
+    ) -> Result<Arc<Session>> {
+        use super::container::{quote, validate_request, ContainerContext, Inspect};
+        validate_request(&request)?;
+        let parent = self
+            .get(&request.parent_session_id)
+            .await
+            .ok_or_else(|| anyhow!("Parent session not found"))?;
+        anyhow::ensure!(
+            parent.container.is_none(),
+            "Nested container sessions are not supported"
+        );
+        anyhow::ensure!(
+            parent.get_state().await == SessionState::Connected,
+            "Parent session is not connected"
+        );
+        let client = parent.get_ssh_client().await.ok_or_else(|| anyhow!("Container PTYs currently require a direct SSH parent; this transport cannot open an independent channel"))?;
+        let inspect = format!(
+            "docker inspect --type container --format '{}' -- {}",
+            r#"{"id":{{json .Id}},"name":{{json .Name}},"running":{{json .State.Running}}}"#,
+            quote(&request.container)
+        );
+        let result = parent.exec_quick_command(&inspect).await?;
+        anyhow::ensure!(
+            result.exit_code == 0,
+            "Docker inspect failed; container was not opened"
+        );
+        let context = ContainerContext::from_inspect(
+            request,
+            serde_json::from_str::<Inspect>(&result.output)?,
+        )?;
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let marker = format!("\x1b]999;vibeshell-container;{nonce}\x07");
+        let start = format!(
+            "printf '\\033]999;vibeshell-container;{nonce}\\007'; exec {} -il",
+            quote(&context.shell)
+        );
+        let (input, mut inputs) = tokio::sync::mpsc::channel(256);
+        let (output, _) = tokio::sync::broadcast::channel(256);
+        let (terminal_output, mut bytes) = tokio::sync::mpsc::channel(256);
+        let mut child_client = client.fork_terminal(terminal_output);
+        child_client
+            .open_exec_terminal(
+                &context.command(&start, true),
+                marker.as_bytes(),
+                Some(PtyConfig::default()),
+            )
+            .await?;
+        let mut child = Session::new(
+            parent.server_id.clone(),
+            format!(
+                "{} / {} [{}]",
+                parent.server_name,
+                context.name,
+                &context.container_id[..12]
+            ),
+            input,
+            output,
+        );
+        child.container = Some(context);
+        let child = Arc::new(child);
+        child.set_ssh_client(child_client).await;
+        child.set_state(SessionState::Connected).await;
+        let weak = Arc::downgrade(&child);
+        tokio::spawn(async move {
+            while let Some(data) = inputs.recv().await {
+                let Some(child) = weak.upgrade() else {
+                    break;
+                };
+                if child.write_to_ssh(&data).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let weak = Arc::downgrade(&child);
+        tokio::spawn(async move {
+            while let Some(data) = bytes.recv().await {
+                let Some(child) = weak.upgrade() else {
+                    break;
+                };
+                child.publish_output(data).await;
+            }
+        });
+        self.sessions
+            .write()
+            .await
+            .insert(child.id.clone(), child.clone());
+        Ok(child)
     }
 
     async fn create_for_server(&self, server: &Server) -> Result<Arc<Session>> {
@@ -363,6 +613,10 @@ impl SessionManager {
             server.username, server.host, server.port
         );
 
+        if server.is_teleport() {
+            return self.create_teleport_session(server, pty_config).await;
+        }
+
         // Create channels for input/output
         let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
         let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
@@ -392,6 +646,9 @@ impl SessionManager {
                 error!("[SessionManager] Jump host server not found: {}", jump_id);
                 anyhow!("Jump host server not found: {}", jump_id)
             })?;
+            if jump_server.is_teleport() {
+                anyhow::bail!("A Teleport profile cannot be used as a raw SSH jump host");
+            }
 
             info!(
                 "[SessionManager] Jump host: {}@{}:{}",
@@ -499,6 +756,7 @@ impl SessionManager {
 
             // Now connect the target SSH through our local bridge
             let mut ssh_client = SshClient::new(ssh_output_tx);
+            ssh_client.use_internal_bridge();
             // TOFU: the SSH handshake traverses the jump tunnel, so the key
             // presented during this handshake belongs to the TARGET server.
             // Verify it under the target's real identity, not the local
@@ -672,6 +930,106 @@ impl SessionManager {
         Ok(session)
     }
 
+    async fn create_teleport_session(
+        &self,
+        server: Server,
+        pty_config: Option<PtyConfig>,
+    ) -> Result<Arc<Session>> {
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+        let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
+        let session = Arc::new(Session::new(
+            server.id.clone(),
+            server.name.clone(),
+            input_tx,
+            output_tx,
+        ));
+
+        self.attach_teleport(&session, &server, pty_config).await?;
+
+        let session_clone = Arc::downgrade(&session);
+        let session_id_for_input = session.id.clone();
+        tokio::spawn(async move {
+            while let Some(data) = input_rx.recv().await {
+                let Some(session) = session_clone.upgrade() else {
+                    break;
+                };
+                if let Err(e) = session.write_to_ssh(&data).await {
+                    error!(
+                        "[SessionManager] Error writing to Teleport PTY for session {}: {}",
+                        session_id_for_input, e
+                    );
+                    break;
+                }
+            }
+        });
+
+        self.send_post_login_command(&session, &server).await?;
+
+        let mut sessions = self.sessions.write().await;
+        sessions.insert(session.id.clone(), session.clone());
+        info!(
+            "[SessionManager] Teleport session {} ready ({})",
+            session.id, server.name
+        );
+        Ok(session)
+    }
+
+    async fn attach_teleport(
+        &self,
+        session: &Arc<Session>,
+        server: &Server,
+        pty_config: Option<PtyConfig>,
+    ) -> Result<()> {
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        {
+            let _ = (session, server, pty_config);
+            anyhow::bail!("Teleport sessions are not supported on mobile");
+        }
+
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let target = TeleportTarget::from_server(server)?;
+            crate::commands::server::validate_transport(server).map_err(|e| anyhow!(e))?;
+            let cols = pty_config.as_ref().map(|config| config.cols).unwrap_or(80);
+            let rows = pty_config.as_ref().map(|config| config.rows).unwrap_or(24);
+            let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
+            session.disconnect().await?;
+            session.set_state(SessionState::Connecting).await;
+            let pty = match crate::teleport::spawn_tsh_ssh(&target, cols, rows, output_tx).await {
+                Ok(pty) => pty,
+                Err(error) => {
+                    session.set_state(SessionState::Error).await;
+                    return Err(error);
+                }
+            };
+            session.set_teleport_target(target).await;
+            session.set_teleport_pty(pty).await;
+            session.set_state(SessionState::Connected).await;
+
+            let session_for_output = Arc::downgrade(session);
+            tokio::spawn(async move {
+                while let Some(data) = output_rx.recv().await {
+                    let Some(session) = session_for_output.upgrade() else {
+                        break;
+                    };
+                    session.publish_output(data).await;
+                }
+            });
+            Ok(())
+        }
+    }
+
+    async fn send_post_login_command(&self, session: &Arc<Session>, server: &Server) -> Result<()> {
+        if let Some(ref cmd) = server.post_login_command {
+            if cmd.trim().is_empty() {
+                return Ok(());
+            }
+            // The remote readiness handshake has completed, not a guessed sleep.
+            session.write_to_ssh(format!("{cmd}\n").as_bytes()).await?;
+        }
+        Ok(())
+    }
+
     /// Connect an existing session with credentials
     pub async fn connect_session(
         &self,
@@ -692,6 +1050,8 @@ impl SessionManager {
             })?
         };
 
+        anyhow::ensure!(session.container.is_none(), "Container sessions cannot reconnect as a host shell; open a new container session from its connected parent");
+
         // Get server info
         let server = self
             .database
@@ -708,6 +1068,16 @@ impl SessionManager {
             "[SessionManager] Connecting to {}@{}:{}",
             server.username, server.host, server.port
         );
+
+        if server.is_teleport() {
+            self.attach_teleport(&session, &server, pty_config).await?;
+            self.send_post_login_command(&session, &server).await?;
+            info!(
+                "[SessionManager] Teleport session {} connected successfully",
+                session_id
+            );
+            return Ok(());
+        }
 
         // Create channel for SSH output
         let (ssh_output_tx, mut ssh_output_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(256);

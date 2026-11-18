@@ -62,7 +62,7 @@ export function PluginTabLauncher({ sessionType, onOpenPluginTab }: PluginTabLau
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-9 z-50 min-w-[220px] rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
+          className="glass-menu glass-form absolute right-0 top-9 z-50 min-w-[220px] rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
         >
           <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-tokyo-comment">
             {t('plugins.openTabLauncher')}

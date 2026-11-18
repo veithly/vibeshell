@@ -59,9 +59,13 @@
   },
   "sidebar": {
     "addServer": "Add Server",
-    "quickCmd": "Quick Cmd",
     "history": "Command history",
     "sftp": "SFTP",
+    "performance": "Performance monitor",
+    "performanceShort": "Performance",
+    "closePerformance": "Close performance monitor",
+    "resizePerformance": "Resize performance panel",
+    "performanceRefresh": "Performance refresh interval",
     "tunnels": "Tunnels",
     "snippets": "Snippets",
     "settings": "Settings"
@@ -71,6 +75,7 @@
     "availableMessage": "VibeShell {{version}} is available. Open Settings > About to download it."
   },
   "session": {
+    "sessions": "Workspace tabs",
     "newSession": "New Session",
     "newConnection": "New connection",
     "noActiveSession": "No Active Session",
@@ -160,11 +165,24 @@
     "keyLoaded": "Key loaded: {{path}}"
   },
   "agentActivity": {
-    "title": "Agent activity",
+    "title": "History",
     "connected": "Ready",
-    "close": "Close Agent activity",
-    "empty": "No Agent activity",
-    "ready": "Gateway ready"
+    "close": "Close history",
+    "empty": "No history yet",
+    "ready": "Gateway ready",
+    "cli": "Agent (CLI)",
+    "user": "User",
+    "legacy": "Unknown source",
+    "earlier": "Load earlier entries",
+    "loading": "Loading…",
+    "failed": "Failed",
+    "started": "Started",
+    "operations": {
+      "session_create": "Open session",
+      "session_attach": "Attach to session",
+      "session_kill": "Close session",
+      "session_detach": "Detach from session"
+    }
   },
   "agentApproval": {
     "title": "Approve agent command?",
@@ -282,6 +300,12 @@
     "theme": "Theme",
     "themeDesc": "Color scheme for the application",
     "themeMode": "Theme Mode",
+    "dayMode": "Day mode",
+    "nightMode": "Night mode",
+    "terminalBackgroundOpacity": "Terminal color mask",
+    "terminalBackgroundOpacityDesc": "Changes only the terminal background, never text opacity. Lower values reveal more behind the window; 90% prioritizes reading.",
+    "windowMaterialOpacity": "Window material tint",
+    "windowMaterialOpacityDesc": "Neutral tint over native frosted glass on toolbars and panels. Lower is more translucent; 100% is solid. macOS reveals the real desktop; other platforms use a solid fallback.",
     "themeModeDesc": "Choose a theme manually or follow the system light/dark mode automatically.",
     "themeModeManual": "Manual",
     "themeModeSystem": "Follow system (auto switch)",
@@ -803,12 +827,6 @@
     "noFingerprints": "No trusted host fingerprints stored.",
     "deleteFingerprint": "Delete fingerprint",
     "clearAll": "Clear All"
-  },
-  "quickCommand": {
-    "title": "Quick Command",
-    "placeholder": "Type a command...",
-    "recentCommands": "Recent Commands",
-    "noRecent": "No recent commands"
   },
   "commandHistory": {
     "title": "Command history",

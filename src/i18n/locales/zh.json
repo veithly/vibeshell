@@ -59,9 +59,13 @@
   },
   "sidebar": {
     "addServer": "添加服务器",
-    "quickCmd": "快捷命令",
     "history": "指令历史",
     "sftp": "SFTP",
+    "performance": "性能监控",
+    "performanceShort": "性能",
+    "closePerformance": "关闭性能监控",
+    "resizePerformance": "调整性能面板高度",
+    "performanceRefresh": "性能刷新间隔",
     "tunnels": "隧道",
     "snippets": "命令片段",
     "settings": "设置"
@@ -71,6 +75,7 @@
     "availableMessage": "VibeShell {{version}} 已发布。打开 设置 > 关于 即可下载更新。"
   },
   "session": {
+    "sessions": "工作区标签页",
     "newSession": "新建会话",
     "newConnection": "新建连接",
     "noActiveSession": "暂无活跃会话",
@@ -160,11 +165,24 @@
     "keyLoaded": "密钥已加载: {{path}}"
   },
   "agentActivity": {
-    "title": "Agent 活动",
+    "title": "历史记录",
     "connected": "就绪",
-    "close": "关闭 Agent 活动",
-    "empty": "暂无 Agent 活动",
-    "ready": "Gateway 已就绪"
+    "close": "关闭历史记录",
+    "empty": "暂无历史记录",
+    "ready": "Gateway 已就绪",
+    "cli": "Agent（CLI）",
+    "user": "用户",
+    "legacy": "来源未知",
+    "earlier": "加载更早记录",
+    "loading": "加载中…",
+    "failed": "失败",
+    "started": "已发起",
+    "operations": {
+      "session_create": "打开会话",
+      "session_attach": "接入会话",
+      "session_kill": "关闭会话",
+      "session_detach": "离开会话"
+    }
   },
   "agentApproval": {
     "title": "确认执行 Agent 命令？",
@@ -282,6 +300,12 @@
     "theme": "主题",
     "themeDesc": "应用程序的配色方案",
     "themeMode": "主题模式",
+    "dayMode": "日间模式",
+    "nightMode": "夜间模式",
+    "terminalBackgroundOpacity": "终端底色遮罩",
+    "terminalBackgroundOpacityDesc": "只调整终端底色，不改变文字透明度。降低数值可透出更多窗后内容；90% 适合专注阅读。",
+    "windowMaterialOpacity": "窗体底色浓度",
+    "windowMaterialOpacityDesc": "控制顶栏和面板覆盖在原生毛玻璃上的中性底色。数值越低越通透，100% 为实色。macOS 透出真实桌面；其他平台使用实色背景。",
     "themeModeDesc": "可手动选择主题，或跟随系统的日夜模式自动切换。",
     "themeModeManual": "手动选择",
     "themeModeSystem": "跟随系统（自动切换）",
@@ -803,12 +827,6 @@
     "noFingerprints": "暂无受信主机指纹。",
     "deleteFingerprint": "删除指纹",
     "clearAll": "清除全部"
-  },
-  "quickCommand": {
-    "title": "快捷命令",
-    "placeholder": "输入命令...",
-    "recentCommands": "最近使用的命令",
-    "noRecent": "暂无最近命令"
   },
   "commandHistory": {
     "title": "指令历史",

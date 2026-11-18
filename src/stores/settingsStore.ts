@@ -28,6 +28,8 @@ export interface AiTool {
 
 /** Status of the Agent Gateway hosted by the VibeShell GUI. */
 export interface AgentGatewayStatus {
+  configuredPort?: number;
+  error?: string | null;
   running: boolean;
   endpoint: string | null;
   manifestPath: string;
@@ -52,6 +54,24 @@ export type ThemeName = 'paper-white' | 'warm-ivory' | 'ink-black' | 'violet-bla
 
 /** Whether the active theme is chosen manually or follows the OS appearance. */
 export type ThemeMode = 'manual' | 'system';
+
+export function isLightTheme(theme: ThemeName): boolean {
+  return theme === 'paper-white' || theme === 'warm-ivory';
+}
+
+export const DEFAULT_TERMINAL_BACKGROUND_OPACITY = 0.9;
+export const DEFAULT_WINDOW_MATERIAL_OPACITY = 0.12;
+
+export function normalizeWindowMaterialOpacity(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(1, Math.max(0, value)) : DEFAULT_WINDOW_MATERIAL_OPACITY;
+}
+
+export function normalizeTerminalBackgroundOpacity(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(1, Math.max(0.5, value))
+    : DEFAULT_TERMINAL_BACKGROUND_OPACITY;
+}
 
 /**
  * Terminal-related settings.
@@ -83,6 +103,10 @@ export interface AppearanceSettings {
   darkTheme: ThemeName;
   /** Window opacity (0.5-1.0, Windows only) */
   windowOpacity: number;
+  /** Opacity of the terminal's color mask, NOT the glyphs or the whole window. */
+  terminalBackgroundOpacity: number;
+  /** Neutral color tint over native blur; never fades the WebView's text. */
+  windowMaterialOpacity: number;
 }
 
 /**
@@ -134,8 +158,10 @@ export const defaultSettings: AppSettings = {
     theme: 'paper-white',
     themeMode: 'manual',
     lightTheme: 'paper-white',
-    darkTheme: 'violet-black',
+    darkTheme: 'ink-black',
     windowOpacity: 1.0,
+    terminalBackgroundOpacity: DEFAULT_TERMINAL_BACKGROUND_OPACITY,
+    windowMaterialOpacity: DEFAULT_WINDOW_MATERIAL_OPACITY,
   },
   sshDefaults: {
     defaultPort: 22,
@@ -262,18 +288,20 @@ function normalizeAppearanceSettings(value: unknown): AppearanceSettings {
       : LEGACY_THEME_MAP[value] ?? fallback;
   };
   const theme = normalizeTheme(raw.theme, defaultSettings.appearance.theme);
-  const lightTheme = normalizeTheme(raw.lightTheme, theme === 'ink-black' || theme === 'violet-black' || theme === 'cyan-black'
-    ? defaultSettings.appearance.lightTheme
-    : theme);
-  const darkTheme = normalizeTheme(raw.darkTheme, theme === 'paper-white' || theme === 'warm-ivory'
-    ? defaultSettings.appearance.darkTheme
-    : theme);
+  const preferredLight = normalizeTheme(raw.lightTheme, isLightTheme(theme) ? theme : defaultSettings.appearance.lightTheme);
+  const preferredDark = normalizeTheme(raw.darkTheme, isLightTheme(theme) ? defaultSettings.appearance.darkTheme : theme);
+  const lightTheme = isLightTheme(preferredLight) ? preferredLight : defaultSettings.appearance.lightTheme;
+  const darkTheme = isLightTheme(preferredDark) ? defaultSettings.appearance.darkTheme : preferredDark;
   const themeMode: ThemeMode = raw.themeMode === 'system' ? 'system' : 'manual';
   const opacity = typeof raw.windowOpacity === 'number' && Number.isFinite(raw.windowOpacity)
     ? Math.min(1, Math.max(0.5, raw.windowOpacity))
     : defaultSettings.appearance.windowOpacity;
 
-  return { theme, themeMode, lightTheme, darkTheme, windowOpacity: opacity };
+  return {
+    theme, themeMode, lightTheme, darkTheme, windowOpacity: opacity,
+    terminalBackgroundOpacity: normalizeTerminalBackgroundOpacity(raw.terminalBackgroundOpacity),
+    windowMaterialOpacity: normalizeWindowMaterialOpacity(raw.windowMaterialOpacity),
+  };
 }
 
 /**
@@ -495,10 +523,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const currentSettings = get().settings;
     const newSettings: AppSettings = {
       ...currentSettings,
-      appearance: {
+      appearance: normalizeAppearanceSettings({
         ...currentSettings.appearance,
         ...appearanceUpdates,
-      },
+      }),
     };
 
     set({ settings: newSettings });
@@ -585,20 +613,20 @@ export interface ThemeDefinition {
 export const themes: ThemeDefinition[] = [
   {
     name: 'paper-white',
-    displayName: 'Paper White',
+    displayName: 'Day Glass',
     colors: {
-      bg: '#ffffff',
-      bgDark: '#f7f7f5',
-      bgHl: '#e7e7e3',
-      fg: '#171717',
-      fgDark: '#73736e',
-      accent: '#6d4aff',
+      bg: '#f4f5f7',
+      bgDark: '#e8edf4',
+      bgHl: '#d5dce8',
+      fg: '#1c2535',
+      fgDark: '#445369',
+      accent: '#355ac5',
       onAccent: '#ffffff',
       red: '#b52f3e',
-      green: '#18714a',
+      green: '#187148',
       yellow: '#805200',
       magenta: '#743796',
-      cyan: '#087477',
+      cyan: '#236b85',
       orange: '#974117',
     },
   },
@@ -623,20 +651,20 @@ export const themes: ThemeDefinition[] = [
   },
   {
     name: 'ink-black',
-    displayName: 'Ink Black',
+    displayName: 'Night Glass',
     colors: {
-      bg: '#0b0b0c',
-      bgDark: '#050506',
-      bgHl: '#1c1c1f',
-      fg: '#f5f5f4',
-      fgDark: '#85858c',
-      accent: '#a78bfa',
-      onAccent: '#0b0b0c',
-      red: '#ff7b86',
-      green: '#63d9a0',
-      yellow: '#e7b75f',
-      magenta: '#d8a1f0',
-      cyan: '#55d6d8',
+      bg: '#101319',
+      bgDark: '#202630',
+      bgHl: '#354052',
+      fg: '#e9edf4',
+      fgDark: '#bac7db',
+      accent: '#a8bfff',
+      onAccent: '#101319',
+      red: '#ff8991',
+      green: '#8be59f',
+      yellow: '#e6c480',
+      magenta: '#cea6ed',
+      cyan: '#8dcfdf',
       orange: '#ff9c68',
     },
   },

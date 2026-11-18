@@ -18,18 +18,14 @@ pub(super) fn default_path() -> Option<PathBuf> {
 }
 
 pub(super) fn source_available(path: Option<&Path>) -> bool {
-    if path.map(Path::exists).unwrap_or(false) {
-        return true;
-    }
     #[cfg(windows)]
     {
-        return registry_profiles()
-            .map(|profiles| !profiles.is_empty())
-            .unwrap_or(false);
+        path.is_some_and(Path::exists)
+            || registry_profiles().is_ok_and(|profiles| !profiles.is_empty())
     }
     #[cfg(not(windows))]
     {
-        false
+        path.is_some_and(Path::exists)
     }
 }
 
@@ -166,6 +162,8 @@ pub(super) fn parse(
                 .map(parse_bool)
                 .unwrap_or(false),
             tags: vec!["import:putty".to_string()],
+            connection_kind: crate::storage::ConnectionKind::Ssh,
+            teleport_proxy: None,
         });
     }
 

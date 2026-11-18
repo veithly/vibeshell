@@ -48,6 +48,9 @@ pub struct SyncExchangeResponse {
     pub has_more: bool,
 }
 
+// async_trait generates boxed futures that are already #[must_use]; recent
+// Clippy versions flag the macro's redundant attribute on both trait methods.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait SyncTransport: Send + Sync {
     async fn initialize(
@@ -533,7 +536,7 @@ mod tests {
         sync::atomic::{AtomicBool, Ordering},
     };
 
-    use crate::storage::{AuthType, CommandSnippet, Server};
+    use crate::storage::{AuthType, CommandSnippet, ConnectionKind, Server};
 
     use super::*;
 
@@ -674,6 +677,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: Some("secret-command".to_string()),
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
         source.server_add(&mut server).unwrap();
 
@@ -775,6 +780,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
         database.server_add(&mut server).unwrap();
 

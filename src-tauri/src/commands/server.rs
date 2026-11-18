@@ -1,14 +1,223 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
 
 use crate::storage::database::Group;
-use crate::storage::{AuthType, Database, Server};
+use crate::storage::{AuthType, ConnectionKind, Database, Server};
+
+/// Shared add-server payload used by the GUI command and the CLI IPC path.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct AddServerSpec {
+    #[serde(default)]
+    pub connection_kind: Option<String>,
+    #[serde(default)]
+    pub teleport_proxy: Option<String>,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_type: String,
+    #[serde(default)]
+    pub credential_id: Option<String>,
+    pub group_id: Option<String>,
+    #[serde(default)]
+    pub group_name: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub jump_host_id: Option<String>,
+    #[serde(default)]
+    pub jump_host: Option<String>,
+    #[serde(default)]
+    pub post_login_command: Option<String>,
+    #[serde(default)]
+    pub agent_forwarding: bool,
+    #[serde(default)]
+    pub credential: Option<String>,
+    #[serde(default)]
+    pub passphrase: Option<String>,
+    #[serde(default)]
+    pub key_path: Option<String>,
+}
+
+// This payload can contain passwords, private keys, passphrases and commands.
+// Make even accidental Debug logging safe, not just the normal IPC log path.
+impl std::fmt::Debug for AddServerSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AddServerSpec { payload: [REDACTED] }")
+    }
+}
+
+/// Insert a server row and optionally save device-local credentials.
+///
+/// `group_name` / `jump_host` are resolved by unique name when the corresponding
+/// ID is not provided (CLI convenience).
+pub fn add_server_spec(db: &Database, spec: AddServerSpec) -> Result<Server, String> {
+    let name = spec.name.trim().to_string();
+    let host = spec.host.trim().to_string();
+    let username = spec.username.trim().to_string();
+    if name.is_empty() {
+        return Err("Server name is required".to_string());
+    }
+    if host.is_empty() {
+        return Err("Host is required".to_string());
+    }
+    if username.is_empty() {
+        return Err("Username is required".to_string());
+    }
+    if spec.port == 0 {
+        return Err("Port must be between 1 and 65535".to_string());
+    }
+    if !matches!(
+        spec.auth_type.as_str(),
+        "password" | "key" | "key_with_passphrase"
+    ) {
+        return Err("Unknown authentication type".into());
+    }
+    if host.starts_with('-')
+        || host
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "@/[]".contains(c))
+    {
+        return Err("Invalid host".into());
+    }
+    if host.contains(':') && host.parse::<std::net::Ipv6Addr>().is_err() {
+        return Err("Host must not include a port; use the separate port field".into());
+    }
+    if username.starts_with('-')
+        || username
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '@')
+    {
+        return Err("Invalid username".into());
+    }
+    if spec.group_id.is_some() && spec.group_name.is_some() {
+        return Err("Specify a group ID or a group name, not both".into());
+    }
+    if spec.jump_host_id.is_some() && spec.jump_host.is_some() {
+        return Err("Specify a jump host ID or name, not both".into());
+    }
+    if spec.credential_id.is_some() && spec.credential.is_some() {
+        return Err("Specify an existing credential or a new secret, not both".into());
+    }
+    if spec.credential.is_none() && (spec.passphrase.is_some() || spec.key_path.is_some()) {
+        return Err("A password or private key is required with credential options".into());
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    if spec.credential.is_some() {
+        return Err("Saving credentials on mobile requires Keychain or Keystore support".into());
+    }
+
+    if db
+        .server_get_by_name(&name)
+        .map_err(|e| format!("Failed to check existing servers: {e}"))?
+        .is_some()
+    {
+        return Err(format!("A server named '{name}' already exists"));
+    }
+
+    if let Some(id) = &spec.group_id {
+        if !db
+            .group_list()
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|g| &g.id == id)
+        {
+            return Err("Group not found".into());
+        }
+    }
+
+    let jump_host_id = if spec
+        .jump_host_id
+        .as_deref()
+        .is_some_and(|id| !id.is_empty())
+    {
+        Some(resolve_server_id(
+            db,
+            spec.jump_host_id.as_deref().unwrap(),
+        )?)
+    } else if let Some(jump_name) = spec
+        .jump_host
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(resolve_server_id(db, jump_name)?)
+    } else {
+        None
+    };
+
+    let connection_kind = parse_connection_kind(spec.connection_kind.as_deref())?;
+    if connection_kind == ConnectionKind::Teleport
+        && (spec.credential.is_some()
+            || spec.credential_id.is_some()
+            || spec.passphrase.is_some()
+            || spec.key_path.is_some())
+    {
+        return Err("Teleport uses tsh login; do not attach SSH passwords or private keys".into());
+    }
+    let mut new_server = Server {
+        connection_kind,
+        teleport_proxy: spec.teleport_proxy,
+        id: String::new(),
+        name: name.clone(),
+        host,
+        port: spec.port,
+        username,
+        auth_type: string_to_auth_type(&spec.auth_type),
+        credential_id: spec.credential_id,
+        group_id: spec.group_id,
+        tags: spec.tags,
+        created_at: 0,
+        updated_at: 0,
+        jump_host_id,
+        post_login_command: spec.post_login_command.filter(|value| !value.is_empty()),
+        agent_forwarding: spec.agent_forwarding,
+    };
+    validate_transport(&new_server)?;
+
+    let credentials =
+        spec.credential
+            .map(|credential| crate::storage::database::CredentialUpdate {
+                credential: Some(credential),
+                passphrase: spec.passphrase,
+                key_path: spec.key_path,
+            });
+    db.server_add_with_credentials(
+        &mut new_server,
+        spec.group_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+        credentials.as_ref(),
+    )
+    .map_err(|e| format!("Failed to add server: {e}"))?;
+
+    Ok(new_server)
+}
+
+pub(crate) fn resolve_server_id(db: &Database, name_or_id: &str) -> Result<String, String> {
+    let matches: Vec<_> = db
+        .server_list(None, None)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|s| s.id == name_or_id || s.name == name_or_id)
+        .collect();
+    match matches.as_slice() {
+        [server] => Ok(server.id.clone()),
+        [] => Err("Server not found".into()),
+        _ => Err("Ambiguous server name or ID; rename the conflicting profile first".into()),
+    }
+}
 
 /// Server input from frontend (without auto-generated fields)
 /// Frontend sends snake_case field names (auth_type, credential_id, etc.)
 #[derive(Debug, Deserialize)]
 pub struct ServerInput {
+    #[serde(default, alias = "connectionKind")]
+    pub connection_kind: Option<String>,
+    #[serde(default, alias = "teleportProxy")]
+    pub teleport_proxy: Option<String>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -60,32 +269,45 @@ pub fn get_servers(db: State<'_, Arc<Database>>) -> Result<Vec<Server>, String> 
 /// Add a new server
 #[tauri::command]
 pub fn add_server(db: State<'_, Arc<Database>>, server: ServerInput) -> Result<Server, String> {
-    let mut new_server = Server {
-        id: String::new(),
-        name: server.name,
-        host: server.host,
-        port: server.port,
-        username: server.username,
-        auth_type: string_to_auth_type(&server.auth_type),
-        credential_id: server.credential_id,
-        group_id: server.group_id,
-        tags: server.tags,
-        created_at: 0,
-        updated_at: 0,
-        jump_host_id: server.jump_host_id,
-        post_login_command: server.post_login_command,
-        agent_forwarding: server.agent_forwarding,
-    };
+    add_server_spec(db.inner(), server.into())
+}
 
-    db.server_add(&mut new_server)
-        .map_err(|e| format!("Failed to add server: {}", e))?;
-
-    Ok(new_server)
+impl From<ServerInput> for AddServerSpec {
+    fn from(server: ServerInput) -> Self {
+        Self {
+            connection_kind: server.connection_kind,
+            teleport_proxy: server.teleport_proxy,
+            name: server.name,
+            host: server.host,
+            port: server.port,
+            username: server.username,
+            auth_type: server.auth_type,
+            credential_id: server.credential_id,
+            group_id: server.group_id,
+            group_name: None,
+            tags: server.tags,
+            jump_host_id: server.jump_host_id,
+            jump_host: None,
+            post_login_command: server.post_login_command,
+            agent_forwarding: server.agent_forwarding,
+            credential: None,
+            passphrase: None,
+            key_path: None,
+        }
+    }
 }
 
 /// Partial server update input — all fields optional except name/host/port/username
 #[derive(Deserialize)]
 pub struct ServerUpdateInput {
+    #[serde(default, alias = "connectionKind")]
+    pub connection_kind: Option<String>,
+    #[serde(
+        default,
+        alias = "teleportProxy",
+        deserialize_with = "deserialize_present_option"
+    )]
+    pub teleport_proxy: Option<Option<String>>,
     /// Omitted means preserve credentials; never deserialize into Server itself.
     pub credentials: Option<crate::storage::database::CredentialUpdate>,
     pub name: Option<String>,
@@ -160,7 +382,17 @@ pub fn update_server(
         return Err("Unknown authentication type".into());
     }
 
+    if let Some(kind) = updates.connection_kind.as_deref() {
+        if parse_connection_kind(Some(kind))? != existing.connection_kind {
+            return Err("Create a new profile to change its transport; existing credentials and live sessions are preserved".into());
+        }
+    }
+    if existing.is_teleport() && updates.credentials.is_some() {
+        return Err("Teleport credentials are managed by tsh login".into());
+    }
     let updated_server = Server {
+        connection_kind: existing.connection_kind,
+        teleport_proxy: updates.teleport_proxy.unwrap_or(existing.teleport_proxy),
         id: existing.id,
         name: updates.name.unwrap_or(existing.name),
         host: updates.host.unwrap_or(existing.host),
@@ -191,8 +423,33 @@ pub fn update_server(
     {
         return Err("Name, host, username and a valid port are required".into());
     }
+    validate_transport(&updated_server)?;
     db.server_update_with_credentials(&updated_server, updates.credentials.as_ref())
         .map_err(|e| format!("Failed to update server: {}", e))
+}
+
+fn parse_connection_kind(value: Option<&str>) -> Result<ConnectionKind, String> {
+    match value.unwrap_or("ssh") {
+        "ssh" => Ok(ConnectionKind::Ssh),
+        "teleport" => Ok(ConnectionKind::Teleport),
+        _ => Err("Unknown connection type; expected ssh or teleport".into()),
+    }
+}
+
+pub(crate) fn validate_transport(server: &Server) -> Result<(), String> {
+    if server.is_teleport() {
+        if server.jump_host_id.is_some()
+            || server.agent_forwarding
+            || server.port != 22
+            || server.credential_id.is_some()
+        {
+            return Err("Teleport profiles do not accept raw SSH jump hosts, agent forwarding, ports or credentials".into());
+        }
+        crate::teleport::TeleportTarget::from_server(server).map_err(|e| e.to_string())?;
+    } else if server.teleport_proxy.is_some() {
+        return Err("A Teleport proxy requires connection type teleport".into());
+    }
+    Ok(())
 }
 
 /// Delete a server and clean up everything attached to it:
@@ -203,10 +460,23 @@ pub async fn delete_server(
     db: State<'_, Arc<Database>>,
     manager: State<'_, Arc<crate::session::SessionManager>>,
     sftp_state: State<'_, Arc<super::SftpState>>,
+    access: State<'_, Arc<super::session::SessionAccessState>>,
     id: String,
 ) -> Result<(), String> {
-    let server = db
-        .server_get(&id)
+    // When the GUI is attached to a daemon, teardown must happen in the owner.
+    if access.is_remote() {
+        return match super::session::ipc_send(crate::ipc::IpcMessage::DeleteServer {
+            name: id,
+            confirmed: true,
+        })
+        .await?
+        {
+            crate::ipc::IpcMessage::Ok => Ok(()),
+            crate::ipc::IpcMessage::Error { message } => Err(message),
+            _ => Err("Update both the VibeShell GUI and service before deleting profiles".into()),
+        };
+    }
+    db.server_get(&id)
         .map_err(|e| format!("Failed to get server: {}", e))?
         .ok_or_else(|| "Server not found".to_string())?;
 
@@ -217,11 +487,6 @@ pub async fn delete_server(
         .map_err(|e| format!("Failed to close sessions for server: {}", e))?;
     for session_id in &killed_sessions {
         sftp_state.cleanup_session(session_id).await;
-    }
-
-    // Remove device-local credentials tied to this server's name.
-    if let Err(e) = db.credential_delete(&server.name) {
-        log::warn!("Failed to delete credentials for '{}': {}", server.name, e);
     }
 
     db.server_delete(&id)
@@ -360,5 +625,261 @@ mod tests {
         .expect("explicit null fields should deserialize");
         assert!(explicit_null.group_id.is_some());
         assert!(explicit_null.jump_host_id.is_some());
+    }
+
+    #[test]
+    fn add_server_spec_saves_optional_credentials_and_jump_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::storage::Database::new_at(dir.path().join("vibeshell.db")).unwrap();
+
+        let jump = super::add_server_spec(
+            &db,
+            super::AddServerSpec {
+                name: "bastion".to_string(),
+                connection_kind: None,
+                teleport_proxy: None,
+                host: "bastion.example.com".to_string(),
+                port: 22,
+                username: "jump".to_string(),
+                auth_type: "password".to_string(),
+                credential_id: None,
+                group_id: None,
+                group_name: None,
+                tags: vec![],
+                jump_host_id: None,
+                jump_host: None,
+                post_login_command: None,
+                agent_forwarding: false,
+                credential: Some("jump-secret".to_string()),
+                passphrase: None,
+                key_path: None,
+            },
+        )
+        .unwrap();
+
+        let added = super::add_server_spec(
+            &db,
+            super::AddServerSpec {
+                name: "prod-web".to_string(),
+                connection_kind: None,
+                teleport_proxy: None,
+                host: "prod.example.com".to_string(),
+                port: 2222,
+                username: "root".to_string(),
+                auth_type: "key".to_string(),
+                credential_id: None,
+                group_id: None,
+                group_name: Some("production".to_string()),
+                tags: vec!["web".to_string()],
+                jump_host_id: None,
+                jump_host: Some("bastion".to_string()),
+                post_login_command: Some("uptime".to_string()),
+                agent_forwarding: true,
+                credential: Some(include_str!("../../tests/fixtures/server-add-test-key").into()),
+                passphrase: Some(" phrase ".to_string()),
+                key_path: Some("/tmp/id_ed25519".to_string()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(added.host, "prod.example.com");
+        assert_eq!(added.port, 2222);
+        assert_eq!(added.jump_host_id.as_deref(), Some(jump.id.as_str()));
+        assert!(added.agent_forwarding);
+        assert_eq!(added.post_login_command.as_deref(), Some("uptime"));
+        assert_eq!(added.tags, vec!["web".to_string()]);
+        assert!(added.credential_id.is_some());
+        assert!(added.group_id.is_some());
+
+        let cred = db.credential_get("prod-web").unwrap().unwrap();
+        assert_eq!(cred.auth_type, "key_with_passphrase");
+        assert!(cred.passphrase.as_deref() == Some(" phrase "));
+        assert!(cred.credential == include_str!("../../tests/fixtures/server-add-test-key"));
+        assert_eq!(cred.key_path.as_deref(), Some("/tmp/id_ed25519"));
+
+        let duplicate = super::add_server_spec(
+            &db,
+            super::AddServerSpec {
+                name: "prod-web".to_string(),
+                host: "other.example.com".to_string(),
+                connection_kind: None,
+                teleport_proxy: None,
+                port: 22,
+                username: "root".to_string(),
+                auth_type: "password".to_string(),
+                credential_id: None,
+                group_id: None,
+                group_name: None,
+                tags: vec![],
+                jump_host_id: None,
+                jump_host: None,
+                post_login_command: None,
+                agent_forwarding: false,
+                credential: None,
+                passphrase: None,
+                key_path: None,
+            },
+        );
+        assert!(duplicate.unwrap_err().contains("already exists"));
+    }
+
+    #[test]
+    fn gui_adapter_preserves_saved_credential_association() {
+        let input: ServerInput = serde_json::from_value(json!({
+            "name":"gui", "host":"host.invalid", "port":22, "username":"user",
+            "auth_type":"password", "credential_id":"existing-credential"
+        }))
+        .unwrap();
+        let spec = super::AddServerSpec::from(input);
+        assert_eq!(spec.credential_id.as_deref(), Some("existing-credential"));
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::storage::Database::new_at(dir.path().join("gui.db")).unwrap();
+        let server = super::add_server_spec(&db, spec).unwrap();
+        assert_eq!(
+            db.server_get(&server.id)
+                .unwrap()
+                .unwrap()
+                .credential_id
+                .as_deref(),
+            Some("existing-credential")
+        );
+    }
+
+    #[test]
+    fn whitespace_passwords_are_preserved_and_unknown_auth_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::storage::Database::new_at(dir.path().join("password.db")).unwrap();
+        for (i, secret) in [" padded password \n", "   "].into_iter().enumerate() {
+            let name = format!("server-{i}");
+            super::add_server_spec(
+                &db,
+                super::AddServerSpec {
+                    name: name.clone(),
+                    host: "host.invalid".into(),
+                    port: 22,
+                    username: "u".into(),
+                    auth_type: "password".into(),
+                    credential: Some(secret.into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(db.credential_get(&name).unwrap().unwrap().credential == secret);
+        }
+        assert!(super::add_server_spec(
+            &db,
+            super::AddServerSpec {
+                name: "bad".into(),
+                host: "host.invalid".into(),
+                port: 22,
+                username: "u".into(),
+                auth_type: "typo".into(),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert_eq!(db.server_list(None, None).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn name_id_collision_is_not_silently_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::storage::Database::new_at(dir.path().join("ambiguous.db")).unwrap();
+        let spec = super::AddServerSpec {
+            name: "one".into(),
+            host: "host.invalid".into(),
+            port: 22,
+            username: "u".into(),
+            auth_type: "password".into(),
+            ..Default::default()
+        };
+        let first = super::add_server_spec(&db, spec.clone()).unwrap();
+        super::add_server_spec(
+            &db,
+            super::AddServerSpec {
+                name: first.id.clone(),
+                ..spec
+            },
+        )
+        .unwrap();
+        assert!(super::resolve_server_id(&db, &first.id)
+            .unwrap_err()
+            .contains("Ambiguous"));
+    }
+
+    #[test]
+    fn teleport_profiles_roundtrip_without_ssh_credentials_or_transport_downgrade() {
+        use crate::storage::{ConnectionKind, Database};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("transport.db");
+        let db = Database::new_at(path.clone()).unwrap();
+        let spec = super::AddServerSpec {
+            connection_kind: Some("teleport".into()),
+            teleport_proxy: Some("proxy.example:443".into()),
+            name: "teleport".into(),
+            host: "node-uuid".into(),
+            port: 22,
+            username: "CaseSensitive".into(),
+            auth_type: "password".into(),
+            ..Default::default()
+        };
+        for invalid in [
+            super::AddServerSpec {
+                credential: Some("must-not-be-saved".into()),
+                ..spec.clone()
+            },
+            super::AddServerSpec {
+                agent_forwarding: true,
+                ..spec.clone()
+            },
+            super::AddServerSpec {
+                port: 2222,
+                ..spec.clone()
+            },
+            super::AddServerSpec {
+                teleport_proxy: None,
+                ..spec.clone()
+            },
+            super::AddServerSpec {
+                host: "env=production".into(),
+                ..spec.clone()
+            },
+        ] {
+            assert!(super::add_server_spec(&db, invalid).is_err());
+            assert!(db.server_list(None, None).unwrap().is_empty());
+            assert!(db.credential_get("teleport").unwrap().is_none());
+        }
+        let server = super::add_server_spec(&db, spec).unwrap();
+        assert!(server.is_teleport());
+        assert!(server.credential_id.is_none());
+        let mut edited = server.clone();
+        edited.name = "renamed".into();
+        edited.teleport_proxy = Some("other-proxy:443".into());
+        db.server_update(&edited).unwrap();
+        let secret_update = crate::storage::database::CredentialUpdate {
+            credential: Some("not-a-tsh-password".into()),
+            passphrase: None,
+            key_path: None,
+        };
+        assert!(db
+            .server_update_with_credentials(&edited, Some(&secret_update))
+            .is_err());
+        let mut downgrade = edited.clone();
+        downgrade.connection_kind = ConnectionKind::Ssh;
+        downgrade.teleport_proxy = None;
+        assert!(db.server_update(&downgrade).is_err());
+        drop(db);
+        let db = Database::new_at(path).unwrap();
+        let restored = db.server_get(&server.id).unwrap().unwrap();
+        assert!(restored.is_teleport());
+        assert_eq!(restored.username, "CaseSensitive");
+        assert_eq!(restored.teleport_proxy.as_deref(), Some("other-proxy:443"));
+        assert!(db.credential_get("renamed").unwrap().is_none());
+        let mut legacy = serde_json::to_value(&restored).unwrap();
+        legacy.as_object_mut().unwrap().remove("connection_kind");
+        legacy.as_object_mut().unwrap().remove("teleport_proxy");
+        let legacy: crate::storage::Server = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.connection_kind, ConnectionKind::Ssh);
+        assert_eq!(legacy.teleport_proxy, None);
     }
 }

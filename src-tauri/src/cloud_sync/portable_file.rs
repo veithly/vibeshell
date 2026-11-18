@@ -102,7 +102,7 @@ pub fn import_from_path(database: &Database, path: &Path) -> Result<CloudSyncFil
 mod tests {
     use std::sync::Arc;
 
-    use crate::storage::{AuthType, Server};
+    use crate::storage::{AuthType, ConnectionKind, Server};
 
     use super::*;
 
@@ -130,6 +130,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
         source.server_add(&mut server).unwrap();
         let path = directory.path().join("workspace.vibeshell-sync.json");
@@ -179,6 +181,8 @@ mod tests {
             jump_host_id: None,
             post_login_command: None,
             agent_forwarding: false,
+            connection_kind: ConnectionKind::Ssh,
+            teleport_proxy: None,
         };
         target.server_add(&mut server).unwrap();
         let path = directory.path().join("deletion.json");

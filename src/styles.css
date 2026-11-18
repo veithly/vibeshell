@@ -4,17 +4,17 @@
 
 @layer base {
   :root {
-    --tokyo-bg: #ffffff;
-    --tokyo-bg-dark: #f7f7f5;
-    --tokyo-bg-hl: #e7e7e3;
-    --tokyo-fg: #171717;
-    --tokyo-fg-dark: #73736e;
-    --tokyo-selection: #e7e7e3;
-    --tokyo-comment: #73736e;
+    --tokyo-bg: #f4f5f7;
+    --tokyo-bg-dark: #e8edf4;
+    --tokyo-bg-hl: #d5dce8;
+    --tokyo-fg: #1c2535;
+    --tokyo-fg-dark: #445369;
+    --tokyo-selection: #d5dce8;
+    --tokyo-comment: #445369;
     --tokyo-red: #b52f3e;
     --tokyo-green: #18714a;
     --tokyo-yellow: #805200;
-    --tokyo-blue: #6d4aff;
+    --tokyo-blue: #355ac5;
     --tokyo-on-accent: #ffffff;
     --tokyo-magenta: #743796;
     --tokyo-cyan: #087477;
@@ -24,6 +24,16 @@
     --safe-area-right: env(safe-area-inset-right, 0px);
     --safe-area-bottom: env(safe-area-inset-bottom, 0px);
     --safe-area-left: env(safe-area-inset-left, 0px);
+    --vibe-titlebar-height: 48px;
+    --vibe-terminal-mask: 90%;
+    --vibe-terminal-surface: color-mix(in srgb, var(--tokyo-bg) var(--vibe-terminal-mask), transparent);
+    --vibe-chrome: color-mix(in srgb, var(--tokyo-bg-dark) 94%, var(--tokyo-blue));
+    --vibe-tab: color-mix(in srgb, var(--tokyo-bg-dark) 90%, var(--tokyo-bg-hl));
+    --vibe-tab-active: var(--tokyo-bg);
+    --vibe-hairline: color-mix(in srgb, var(--tokyo-fg) 12%, transparent);
+    --vibe-control-close: rgb(255 95 87);
+    --vibe-control-minimize: rgb(254 188 46);
+    --vibe-control-maximize: rgb(40 200 64);
 
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   }
@@ -84,6 +94,11 @@
     width: 100%;
     height: var(--app-viewport-height);
     overflow: hidden;
+  }
+
+  :root[data-native-glass='true'],
+  :root[data-native-glass='true'] body {
+    background: transparent;
   }
 
   /* Custom scrollbar for Tokyo Night theme */
@@ -173,14 +188,25 @@
 
 @layer components {
   .app-shell {
+    position: relative;
+    isolation: isolate;
     box-sizing: border-box;
     height: var(--app-viewport-height) !important;
     min-height: 0;
     padding-top: var(--safe-area-top);
     padding-right: var(--safe-area-right);
     padding-left: var(--safe-area-left);
-    background: linear-gradient(180deg, var(--tokyo-bg-dark) 0%, var(--tokyo-bg) 18%, var(--tokyo-bg) 100%);
+    overflow: hidden;
+    /* Platforms without native translucency use an unadorned solid fallback. */
+    background: var(--tokyo-bg);
   }
+
+  :root[data-native-glass='true'] .app-shell {
+    background: transparent;
+    border-radius: 14px;
+  }
+
+  :root[data-window-fullscreen='true'] .app-shell { border-radius: 0; }
 
   .responsive-dialog-layer {
     box-sizing: border-box;
@@ -294,21 +320,19 @@
   }
 
   .main-workspace {
-    background: var(--tokyo-bg);
+    /* This parent must not cover the native behind-window material. */
+    background: transparent;
   }
 
   .titlebar-shell {
-    @apply bg-tokyo-bg-dark border-b border-tokyo-bg-hl;
-    box-shadow: inset 0 -1px 0 var(--tokyo-bg);
-  }
-
-  .titlebar-brand {
-    @apply flex h-6 w-6 flex-shrink-0 items-center justify-center overflow-hidden rounded-md;
-  }
-
-  .titlebar-session {
-    @apply ml-1 flex h-6 items-center gap-1.5 rounded-md border border-tokyo-bg-hl bg-tokyo-bg px-2 text-xs;
-    max-width: min(36vw, 26rem);
+    height: var(--vibe-titlebar-height);
+    min-height: var(--vibe-titlebar-height);
+    background: var(--vibe-chrome);
+    border-bottom: 1px solid var(--vibe-hairline);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--tokyo-bg) 55%, transparent);
+    position: relative;
+    z-index: 20;
+    padding-right: 8px;
   }
 
   .titlebar-drag-gutter {
@@ -319,7 +343,7 @@
   }
 
   .window-controls-macos {
-    @apply flex h-full flex-shrink-0 items-center gap-2 pl-3;
+    @apply flex h-full flex-shrink-0 items-center gap-2 pl-4 pr-2;
   }
 
   .window-control-macos {
@@ -336,9 +360,9 @@
     @apply opacity-70;
   }
 
-  .macos-close { @apply bg-tokyo-red text-tokyo-bg-dark; }
-  .macos-minimize { @apply bg-tokyo-yellow text-tokyo-bg-dark; }
-  .macos-maximize { @apply bg-tokyo-green text-tokyo-bg-dark; }
+  .macos-close { background: var(--vibe-control-close); @apply text-tokyo-bg-dark; }
+  .macos-minimize { background: var(--vibe-control-minimize); @apply text-tokyo-bg-dark; }
+  .macos-maximize { background: var(--vibe-control-maximize); @apply text-tokyo-bg-dark; }
 
   .window-controls-desktop {
     @apply flex h-full flex-shrink-0 items-center;
@@ -370,50 +394,49 @@
   }
 
   .session-tabbar {
-    box-shadow:
-      inset 0 -1px 0 var(--tokyo-bg-hl),
-      0 1px 8px color-mix(in srgb, var(--tokyo-fg) 5%, transparent);
+    background: transparent;
   }
 
-  .session-rail {
-    @apply flex h-8 flex-shrink-0 items-center gap-2 rounded-lg border border-tokyo-bg-hl bg-tokyo-bg px-2 text-[10px] text-tokyo-comment;
+  .session-tabstrip {
+    flex: 0 1 auto;
+    scrollbar-width: none;
+    padding: 4px 1px;
   }
 
-  .session-rail-bars {
-    display: inline-flex;
-    align-items: flex-end;
-    gap: 2px;
-    height: 12px;
+  .session-tabstrip::-webkit-scrollbar { display: none; }
+
+  .session-tabbar .session-tab-item {
+    height: 36px;
+    flex-shrink: 0;
+    border-radius: 12px;
+    border-color: transparent;
+    background: var(--vibe-tab);
+    color: var(--tokyo-fg-dark);
+    transition: background-color 140ms ease, box-shadow 140ms ease;
   }
 
-  .session-rail-bars i {
-    display: block;
-    width: 2px;
-    border-radius: 999px;
-    background: var(--tokyo-cyan);
-    opacity: 0.45;
+  .session-tabbar .session-tab-item:hover { background: var(--tokyo-bg-hl); }
+
+  .session-tabbar .session-tab-item[aria-selected='true'] {
+    background: var(--vibe-tab-active);
+    border-color: var(--vibe-hairline);
+    color: var(--tokyo-fg);
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--tokyo-fg) 9%, transparent);
   }
 
-  .session-rail-bars i:nth-child(1) {
-    height: 5px;
+  :root[data-appearance='dark'] .session-tabbar .session-tab-item[aria-selected='true'] {
+    background: var(--tokyo-bg-hl);
   }
 
-  .session-rail-bars i:nth-child(2) {
-    height: 9px;
-    background: var(--tokyo-cyan);
-    opacity: 1;
+  .titlebar-actions .icon-button,
+  .session-tabbar .session-new-action {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    color: var(--tokyo-fg);
   }
 
-  .session-rail-bars i:nth-child(3) {
-    height: 7px;
-    background: var(--tokyo-cyan);
-    opacity: 0.7;
-  }
-
-  .session-rail-count {
-    min-width: 1ch;
-    font-variant-numeric: tabular-nums;
-  }
+  .titlebar-actions { padding-left: 6px; }
 
   .terminal-card {
     @apply overflow-hidden rounded-lg border border-tokyo-bg-hl bg-tokyo-bg;
@@ -423,17 +446,11 @@
   }
 
   .terminal-viewport {
-    background:
-      linear-gradient(180deg, var(--tokyo-bg) 0%, var(--tokyo-bg-dark) 100%);
-  }
-
-  .terminal-viewport::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    border-radius: inherit;
-    box-shadow: inset 0 0 0 1px var(--tokyo-bg);
+    background: var(--tokyo-bg);
+    background: var(--vibe-terminal-surface);
+    -webkit-backdrop-filter: blur(28px) saturate(75%);
+    backdrop-filter: blur(28px) saturate(75%);
+    padding: 0;
   }
 
   .server-signal {
@@ -629,11 +646,13 @@
 }
 
 @media (hover: none), (pointer: coarse) {
+  :root { --vibe-titlebar-height: 56px; }
+
   .session-tabbar {
     min-height: 52px;
   }
 
-  .session-tab-item {
+  .session-tabbar .session-tab-item {
     height: 44px;
     min-width: 148px;
     max-width: 280px;
@@ -647,7 +666,8 @@
     touch-action: manipulation;
   }
 
-  .session-new-action {
+  .session-tabbar .session-new-action,
+  .titlebar-actions .icon-button {
     width: 44px;
     height: 44px;
     touch-action: manipulation;
@@ -803,7 +823,7 @@
 }
 
 .xterm-viewport::-webkit-scrollbar-track {
-  background: var(--tokyo-bg-dark);
+  background: transparent;
 }
 
 .xterm-viewport::-webkit-scrollbar-thumb {
@@ -820,31 +840,63 @@
    Adapted to the Tokyo Night theme so split panes blend with the rest of the UI.
    ========================================================================= */
 .mosaic-container {
-  background: var(--tokyo-bg-dark);
+  background: transparent;
+  padding: 0;
 }
 
 .mosaic {
-  background: var(--tokyo-bg-dark);
-  gap: 4px;
+  background: transparent;
+}
+
+.mosaic-root {
+  inset: 0;
 }
 
 .mosaic-tile {
   margin: 0;
 }
 
-.mosaic-window,
-.mosaic-window-body {
-  background: var(--tokyo-bg);
+.mosaic-container .mosaic,
+.mosaic-container .mosaic-window,
+.mosaic-container .mosaic-window .mosaic-window-body {
+  background: transparent;
 }
 
 .mosaic-window {
-  border: 1px solid var(--tokyo-bg-hl);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
 }
 
 .mosaic-window.mosaic-window-active {
-  border-color: var(--tokyo-cyan);
+  box-shadow: inset 0 0 0 1px var(--vibe-hairline);
+}
+
+.mosaic-single .mosaic-window .mosaic-window-toolbar { display: none; }
+.mosaic-single .mosaic-window.mosaic-window-active { box-shadow: none; }
+
+/* Mosaic keeps a drag-image template underneath its body. It was previously
+   concealed by an opaque terminal and must not shine through transparent panes.
+   Keep the template rendered offscreen so native drag previews can still use it. */
+.mosaic-window > .mosaic-preview {
+  top: -10000px;
+  left: -10000px;
+  width: 240px;
+  height: 80px;
+  background: var(--tokyo-bg);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .terminal-viewport {
+    background: var(--tokyo-bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-tabbar .session-tab-item { transition: none; }
 }
 
 .mosaic-window-title {

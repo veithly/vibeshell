@@ -21,6 +21,27 @@ use super::server::{AgentActivityEvent, McpServer, TerminalInputEvent, MCP_PROTO
 
 pub const GATEWAY_SCHEMA_VERSION: u32 = 1;
 pub const GATEWAY_MANIFEST_FILE: &str = "agent-gateway.json";
+const PORT_SETTING: &str = "agent_gateway_port";
+
+/// Zero retains OS-assigned ports. A nonzero value is never silently changed.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct GatewayPortSettings {
+    pub port: u16,
+}
+
+impl GatewayPortSettings {
+    pub fn load(database: &Database) -> Result<Self> {
+        database
+            .get_setting(PORT_SETTING)?
+            .map(|value| serde_json::from_str(&value).context("Invalid saved Gateway port"))
+            .transpose()
+            .map(|value| value.unwrap_or_default())
+    }
+
+    pub fn save(&self, database: &Database) -> Result<()> {
+        database.set_setting(PORT_SETTING, &serde_json::to_string(self)?)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -48,6 +69,8 @@ pub struct GatewayManifest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentGatewayStatus {
+    pub configured_port: u16,
+    pub error: Option<String>,
     pub running: bool,
     pub endpoint: Option<String>,
     pub manifest_path: String,
@@ -62,6 +85,8 @@ struct LiveGatewayInfo {
 }
 
 pub struct AgentGateway {
+    configured_port: u16,
+    startup_error: Option<String>,
     manifest_path: PathBuf,
     live: Arc<Mutex<Option<LiveGatewayInfo>>>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
@@ -97,6 +122,7 @@ impl AgentGateway {
         agent_input_tracker: Arc<SharedAgentInputTracker>,
         manifest_path: PathBuf,
     ) -> Result<Self> {
+        let configured_port = GatewayPortSettings::load(&database)?.port;
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<LiveGatewayInfo, String>>(1);
         let live = Arc::new(Mutex::new(None));
@@ -121,11 +147,12 @@ impl AgentGateway {
                 };
 
                 runtime.block_on(async move {
-                    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", 0)).await {
+                    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", configured_port)).await {
                         Ok(listener) => listener,
                         Err(error) => {
+                            let _ = write_manifest_atomic(&thread_manifest_path, &GatewayManifest::stopped());
                             let _ = ready_tx
-                                .send(Err(format!("Failed to bind Agent Gateway: {}", error)));
+                                .send(Err(format!("Cannot bind Agent Gateway to 127.0.0.1:{configured_port}: {error}. Change the port in Settings or free it, then restart. No alternate port was selected.")));
                             return;
                         }
                     };
@@ -164,6 +191,7 @@ impl AgentGateway {
                     let _ = ready_tx.send(Ok(info));
 
                     let server = McpServer::new(database, session_manager)
+                        .with_owner_routing()
                         .with_activity_emitter(activity_emitter)
                         .with_terminal_input_emitter(terminal_input_emitter)
                         .with_approvals(approvals)
@@ -187,20 +215,32 @@ impl AgentGateway {
             })
             .context("Failed to spawn Agent Gateway thread")?;
 
-        let info = ready_rx
-            .recv_timeout(Duration::from_secs(5))
-            .map_err(|_| anyhow!("Timed out while starting Agent Gateway"))?
-            .map_err(anyhow::Error::msg)?;
-        log::info!(
-            "[Agent Gateway] Listening on {} (pid {})",
-            info.endpoint,
-            info.pid
-        );
+        // A port conflict must not prevent the desktop from opening Settings.
+        let mut shutdown_tx = Some(shutdown_tx);
+        let startup_error = match ready_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Ok(info)) => {
+                log::info!(
+                    "[Agent Gateway] Listening on {} (pid {})",
+                    info.endpoint,
+                    info.pid
+                );
+                None
+            }
+            Ok(Err(error)) => Some(error),
+            Err(_) => {
+                if let Some(sender) = shutdown_tx.take() {
+                    let _ = sender.send(());
+                }
+                Some("Timed out while starting Agent Gateway".into())
+            }
+        };
 
         Ok(Self {
+            configured_port,
+            startup_error,
             manifest_path,
             live,
-            shutdown_tx: Mutex::new(Some(shutdown_tx)),
+            shutdown_tx: Mutex::new(shutdown_tx),
             thread: Mutex::new(Some(thread)),
         })
     }
@@ -208,6 +248,8 @@ impl AgentGateway {
     pub fn status(&self) -> AgentGatewayStatus {
         let live = self.live.lock().expect("gateway status lock poisoned");
         AgentGatewayStatus {
+            configured_port: self.configured_port,
+            error: self.startup_error.clone(),
             running: live.is_some(),
             endpoint: live.as_ref().map(|info| info.endpoint.clone()),
             manifest_path: self.manifest_path.to_string_lossy().into_owned(),
@@ -459,5 +501,64 @@ mod tests {
         assert!(stopped.endpoint.is_none());
         assert!(stopped.token.is_none());
         assert!(!stopped.launch_path.is_empty());
+    }
+
+    #[test]
+    fn fixed_port_persists_and_busy_port_never_falls_back_or_crashes_desktop() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("gateway.db");
+        let database = Arc::new(Database::new_at(path.clone()).unwrap());
+        // Use a reserved test port outside the OS ephemeral-client range.
+        // Releasing an ephemeral port (typically 49152+) lets unrelated,
+        // concurrent sockets claim it between the busy-port and restart
+        // assertions, making this otherwise valid regression test flaky.
+        let occupied = (25_000u16..25_256u16)
+            .find_map(|port| std::net::TcpListener::bind(("127.0.0.1", port)).ok())
+            .expect("an isolated Gateway test port is available");
+        let port = occupied.local_addr().unwrap().port();
+        GatewayPortSettings { port }.save(&database).unwrap();
+        let start = || {
+            AgentGateway::start_at_path(
+                database.clone(),
+                Arc::new(SessionManager::new(database.clone())),
+                Arc::new(|_| {}),
+                Arc::new(|_| {}),
+                Arc::new(AgentApprovalManager::new(Arc::new(|_| {}))),
+                Arc::new(SharedAgentInputTracker::default()),
+                temp.path().join(GATEWAY_MANIFEST_FILE),
+            )
+            .unwrap()
+        };
+        let stopped = start();
+        assert!(!stopped.status().running);
+        assert_eq!(stopped.status().configured_port, port);
+        assert!(stopped
+            .status()
+            .error
+            .unwrap()
+            .contains("No alternate port"));
+        drop(stopped);
+        drop(occupied);
+        for _ in 0..2 {
+            let gateway = start();
+            let status = gateway.status();
+            assert_eq!(
+                status.endpoint,
+                Some(format!("http://127.0.0.1:{port}")),
+                "Gateway restart failed: {:?}",
+                status.error
+            );
+            assert!(gateway.status().error.is_none());
+            drop(gateway);
+        }
+        assert_eq!(
+            GatewayPortSettings::load(&Database::new_at(path).unwrap())
+                .unwrap()
+                .port,
+            port
+        );
+        for invalid in [r#"{"port":-1}"#, r#"{"port":65536}"#, r#"{"port":3.5}"#] {
+            assert!(serde_json::from_str::<GatewayPortSettings>(invalid).is_err());
+        }
     }
 }

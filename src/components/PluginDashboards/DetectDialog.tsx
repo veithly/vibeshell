@@ -74,14 +74,12 @@ export function DetectDialog({ onClose, onAdopt }: DetectDialogProps) {
 
   return (
     <div
-      className="responsive-dialog-layer fixed inset-0 z-[120] flex items-center justify-center bg-tokyo-bg-dark/70 px-4"
-      role="dialog"
-      aria-modal="true"
+      className="responsive-dialog-layer glass-scrim fixed inset-0 z-[120] flex items-center justify-center px-4"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md rounded-xl border border-tokyo-bg-hl bg-tokyo-bg-dark p-5 shadow-2xl">
+      <div role="dialog" aria-modal="true" aria-label={t('plugins.dbConn.detectTitle')} className="glass-dialog glass-form w-full max-w-md p-5">
         <h3 className="text-sm font-semibold text-tokyo-fg">{t('plugins.dbConn.detectTitle')}</h3>
         <p className="mt-1 text-xs text-tokyo-comment">{t('plugins.dbConn.detectHint')}</p>
 

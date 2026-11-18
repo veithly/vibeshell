@@ -110,6 +110,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Isolated OpenSSH compatibility
         run: bash scripts/test-ssh-compatibility.sh
+      - name: Isolated persistent container sessions
+        run: bash scripts/test-container-sessions.sh
 
   status-finish:
     name: Report verified CI statuses

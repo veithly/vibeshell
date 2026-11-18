@@ -84,7 +84,7 @@ export function MobileWorkspaceActions({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
+          className="glass-menu glass-form absolute right-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
         >
           {menuItems.map((item) => (
             <button

@@ -9,6 +9,7 @@ mod commands;
 mod daemon;
 mod ipc_support;
 mod session_alias;
+mod ssh_target;
 mod terminal;
 
 use std::path::PathBuf;
@@ -40,10 +41,13 @@ use vibeshell_core::ipc::IpcMessage;
       vibeshell ssh prod-web -- uname -a\n\
       vibeshell ssh prod-web --command-file .\\remote-command.sh\n\
       vibeshell ssh-session 001 -- journalctl -u nginx -n 200\n\
-      vibeshell sftp prod-web ls /var/www\n\
-      vibeshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
+          vibeshell sftp prod-web ls /var/www\n\
+          vibeshell sftp --session 001 pwd\n\
+          vibeshell sftp prod-web get /etc/nginx/nginx.conf .\\nginx.conf\n\
       vibeshell sftp prod-web\n\
-      vibeshell sessions\n\
+      vibeshell servers\n\
+      vibeshell servers add root@prod.example.com:22 --name prod-web --identity ~/.ssh/id_ed25519\n\
+      vibeshell servers delete prod-web --yes\n\
       vibeshell daemon status"
 )]
 struct Cli {
@@ -53,6 +57,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Configure application outbound routing (not the Teleport server proxy).
+    Proxy {
+        #[command(subcommand)]
+        command: commands::proxy::ProxyCommand,
+    },
+    /// Discover containers and open independent container sessions.
+    Containers {
+        #[command(subcommand)]
+        command: commands::container::ContainerCommand,
+    },
     /// Show version information
     Version,
 
@@ -82,7 +96,8 @@ enum Commands {
         Pass `--new` to force creation of a fresh session.\n\
         For heavily quoted commands, use `--command-file <path>` or pipe the command into\n\
         `--command-stdin` to bypass local shell parsing.\n\
-        The target server must already exist in the VibeShell database.\n\n\
+        The target server must already exist in the VibeShell database.\n\
+        Add one with `vibeshell servers add user@host` if it is not listed by `vibeshell servers`.\n\n\
         Examples:\n\
           vibeshell ssh prod-web\n\
           vibeshell ssh prod-web --new\n\
@@ -119,6 +134,8 @@ enum Commands {
           vibeshell sftp prod-web put ./local-file /remote/file\n\
           vibeshell sftp prod-web put ./local-folder /remote/parent\n\
           vibeshell sftp prod-web sync ./dist /var/www --delete\n\n\
+          vibeshell sftp --session 001 pwd\n\
+          vibeshell sftp --session 001 ls /var/www\n\n\
         Or start the interactive prompt:\n\
           vibeshell sftp prod-web\n\n\
         Supported commands inside the prompt or direct mode:\n\
@@ -179,9 +196,9 @@ enum Commands {
     )]
     EditFile(EditFileArgs),
 
-    /// List all configured servers
+    /// List, add, or delete configured servers
     #[command(alias = "server-list")]
-    Servers,
+    Servers(ServersArgs),
 
     /// Import OpenSSH, PuTTY, and Tabby connection profiles
     #[command(
@@ -231,6 +248,93 @@ enum Commands {
 
     /// Uninstall VibeShell skill from an AI tool
     Uninstall(UninstallArgs),
+}
+
+#[derive(Args)]
+struct ServersArgs {
+    #[command(subcommand)]
+    command: Option<ServersCommand>,
+}
+
+#[derive(Subcommand)]
+enum ServersCommand {
+    /// Add a server from user@host[:port] shorthand
+    #[command(
+        long_about = "Add a saved SSH server without using the desktop UI.\n\n\
+        The first argument is `user@host` or `user@host:port`. Optional flags match the Add Server dialog.\n\
+        Passwords are read from SSH_PASSWORD or VIBESHELL_PASSWORD (never from argv).\n\
+        Key files are passed with --identity; encrypted-key passphrases use VIBESHELL_KEY_PASSPHRASE.\n\
+        If no password env var and no --identity are provided, the server is stored without credentials.\n\n\
+        Examples:\n\
+          vibeshell servers add root@prod.example.com\n\
+          SSH_PASSWORD=... vibeshell servers add root@prod.example.com --name prod-web\n\
+          vibeshell servers add ubuntu@10.0.0.8:2222 --identity ~/.ssh/id_ed25519 --jump bastion"
+    )]
+    Add(Box<ServerAddCliArgs>),
+    /// Delete a saved server by name or ID
+    #[command(alias = "rm", alias = "remove")]
+    Delete(ServerDeleteCliArgs),
+    /// List configured servers
+    List,
+}
+
+#[derive(Args)]
+struct ServerAddCliArgs {
+    /// Connection target: user@host, user@host:port, or host (with --user)
+    target: String,
+
+    /// Display name (defaults to the host)
+    #[arg(long)]
+    name: Option<String>,
+
+    /// Username (overrides the user@ portion of the target)
+    #[arg(long, short = 'u')]
+    user: Option<String>,
+
+    /// SSH port (overrides :port in the target; default 22)
+    #[arg(long, short = 'p')]
+    port: Option<u16>,
+
+    /// Path to an OpenSSH private key (enables key auth)
+    #[arg(long, short = 'i', value_name = "KEYFILE")]
+    identity: Option<PathBuf>,
+
+    /// Jump host display name or ID
+    #[arg(long)]
+    jump: Option<String>,
+
+    /// Enable SSH agent forwarding
+    #[arg(long)]
+    agent_forwarding: bool,
+
+    /// Command to run after login
+    #[arg(long = "post-login")]
+    post_login: Option<String>,
+
+    /// Group name (created if missing)
+    #[arg(long)]
+    group: Option<String>,
+
+    /// Tags (repeatable)
+    #[arg(long = "tag")]
+    tags: Vec<String>,
+
+    /// Connection type: ssh (default) or teleport
+    #[arg(long = "type", default_value = "ssh", value_parser = ["ssh", "teleport"])]
+    connection_type: String,
+
+    /// Teleport proxy, e.g. teleport.example.com:443 (required with --type teleport)
+    #[arg(long)]
+    proxy: Option<String>,
+}
+
+#[derive(Args)]
+struct ServerDeleteCliArgs {
+    /// Server display name or ID
+    name: String,
+    /// Confirm deletion of the profile, credentials and its active sessions
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Args)]
@@ -297,6 +401,39 @@ struct SftpArgs {
     /// Run a single SFTP operation directly instead of entering the interactive prompt
     #[arg(trailing_var_arg = true)]
     args: Vec<String>,
+}
+
+impl SftpArgs {
+    fn target_and_command(&self) -> (Option<&str>, Vec<String>) {
+        let mut command = self.args.clone();
+        let mut server = self.server.as_deref();
+        // clap assigns the first positional word to `server`, even with
+        // --session. In that mode, a leading SFTP verb is the command instead.
+        if self.session.is_some()
+            && matches!(
+                server,
+                Some(
+                    "pwd"
+                        | "ls"
+                        | "cd"
+                        | "cat"
+                        | "get"
+                        | "put"
+                        | "sync"
+                        | "mkdir"
+                        | "rm"
+                        | "mv"
+                        | "help"
+                        | "quit"
+                        | "exit"
+                )
+            )
+        {
+            command.insert(0, server.expect("matched SFTP verb").to_string());
+            server = None;
+        }
+        (server, command)
+    }
 }
 
 #[derive(Args)]
@@ -403,6 +540,7 @@ enum ImportSourceArg {
     OpenSsh,
     Putty,
     Tabby,
+    Teleport,
 }
 
 impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
@@ -412,13 +550,20 @@ impl From<ImportSourceArg> for vibeshell_core::ssh_import::ImportSourceKind {
             ImportSourceArg::OpenSsh => Self::OpenSsh,
             ImportSourceArg::Putty => Self::Putty,
             ImportSourceArg::Tabby => Self::Tabby,
+            ImportSourceArg::Teleport => Self::Teleport,
         }
     }
 }
 
 #[derive(Args)]
 struct ImportArgs {
-    /// Source to import: auto, openssh, putty, or tabby
+    /// Teleport proxy host[:port]; required for explicit Teleport import
+    #[arg(long)]
+    proxy: Option<String>,
+    /// Unix login on the Teleport nodes (not the Teleport account identity)
+    #[arg(long)]
+    user: Option<String>,
+    /// Source to import: auto, openssh, putty, tabby, or teleport
     #[arg(value_enum, default_value = "auto")]
     source: ImportSourceArg,
 
@@ -473,7 +618,21 @@ struct UninstallArgs {
     tool: String,
 }
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
+    match run() {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error:#}");
+            let code = error
+                .downcast_ref::<terminal::RemoteCommandExit>()
+                .map(|status| status.0.clamp(1, 255) as u8)
+                .unwrap_or(1);
+            std::process::ExitCode::from(code)
+        }
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse();
 
     // The native binary carries the canonical Skill. Keep agent directories
@@ -485,6 +644,8 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
+        Some(Commands::Proxy { command }) => commands::proxy::run(command),
+        Some(Commands::Containers { command }) => commands::container::run(command),
         Some(Commands::Plugins { command }) => commands::plugins::run(command),
         Some(Commands::SendSecret { session_id, enter }) => {
             use std::io::{IsTerminal, Read};
@@ -531,11 +692,8 @@ fn main() -> Result<()> {
                 .session
                 .as_ref()
                 .map(|id| session_alias::resolve(id).unwrap_or_else(|| id.clone()));
-            commands::sftp::connect(
-                args.server.as_deref(),
-                resolved_session.as_deref(),
-                &args.args,
-            )
+            let (server, command) = args.target_and_command();
+            commands::sftp::connect(server, resolved_session.as_deref(), &command)
         }
         Some(Commands::Rg(args)) => commands::file_tools::rg(
             &args.target,
@@ -571,10 +729,36 @@ fn main() -> Result<()> {
             args.with_text.as_deref(),
             args.all,
         ),
-        Some(Commands::Servers) => commands::server::list(),
-        Some(Commands::Import(args)) => {
-            commands::import::run(args.source.into(), args.path, args.dry_run, args.json)
-        }
+        Some(Commands::Servers(args)) => match args.command {
+            None | Some(ServersCommand::List) => commands::server::list(),
+            Some(ServersCommand::Add(add)) => {
+                commands::server::add(commands::server::AddServerArgs {
+                    target: add.target,
+                    name: add.name,
+                    user: add.user,
+                    port: add.port,
+                    identity: add.identity,
+                    jump: add.jump,
+                    agent_forwarding: add.agent_forwarding,
+                    post_login: add.post_login,
+                    group: add.group,
+                    tags: add.tags,
+                    connection_kind: add.connection_type,
+                    teleport_proxy: add.proxy,
+                })
+            }
+            Some(ServersCommand::Delete(delete)) => {
+                commands::server::delete(&delete.name, delete.yes)
+            }
+        },
+        Some(Commands::Import(args)) => commands::import::run(
+            args.source.into(),
+            args.path,
+            args.dry_run,
+            args.json,
+            args.proxy,
+            args.user,
+        ),
         Some(Commands::Sessions) => commands::session::list(),
         Some(Commands::Attach(args)) => {
             let resolved =
@@ -648,6 +832,53 @@ mod tests {
     fn parses_servers_command() {
         let parsed = Cli::try_parse_from(["vibeshell", "servers"]);
         assert!(parsed.is_ok(), "vibeshell servers should parse");
+    }
+
+    #[test]
+    fn parses_servers_add_shorthand() {
+        let parsed = Cli::try_parse_from([
+            "vibeshell",
+            "servers",
+            "add",
+            "root@prod.example.com:2222",
+            "--name",
+            "prod-web",
+            "--identity",
+            "/tmp/id_ed25519",
+            "--jump",
+            "bastion",
+            "--agent-forwarding",
+            "--post-login",
+            "uptime",
+            "--group",
+            "production",
+            "--tag",
+            "web",
+        ]);
+        assert!(parsed.is_ok(), "vibeshell servers add should parse");
+    }
+
+    #[test]
+    fn parses_servers_add_teleport() {
+        let parsed = Cli::try_parse_from([
+            "vibeshell",
+            "servers",
+            "add",
+            "alice@web-1",
+            "--type",
+            "teleport",
+            "--proxy",
+            "teleport.example.com:443",
+        ]);
+        assert!(parsed.is_ok(), "teleport servers add should parse");
+    }
+
+    #[test]
+    fn parses_servers_delete() {
+        let parsed = Cli::try_parse_from(["vibeshell", "servers", "delete", "prod-web"]);
+        assert!(parsed.is_ok(), "vibeshell servers delete should parse");
+        let parsed = Cli::try_parse_from(["vibeshell", "servers", "rm", "prod-web"]);
+        assert!(parsed.is_ok(), "vibeshell servers rm should parse");
     }
 
     #[test]
@@ -735,6 +966,43 @@ mod tests {
     fn parses_sftp_session_command() {
         let parsed = Cli::try_parse_from(["vibeshell", "sftp", "--session", "abc-123"]);
         assert!(parsed.is_ok(), "vibeshell sftp --session <id> should parse");
+    }
+
+    #[test]
+    fn sftp_session_command_without_server_is_not_interactive() {
+        for words in [
+            vec!["vibeshell", "sftp", "--session", "001", "pwd"],
+            vec!["vibeshell", "sftp", "--session", "001", "ls", "/tmp"],
+        ] {
+            let parsed = Cli::try_parse_from(words).unwrap();
+            let Some(Commands::Sftp(args)) = parsed.command else {
+                panic!("expected sftp");
+            };
+            let (server, command) = args.target_and_command();
+            assert!(server.is_none());
+            assert!(!command.is_empty());
+            assert!(matches!(command[0].as_str(), "pwd" | "ls"));
+        }
+    }
+
+    #[test]
+    fn sftp_session_still_accepts_explicit_server_and_interactive_mode() {
+        let parsed =
+            Cli::try_parse_from(["vibeshell", "sftp", "TencentJP", "--session", "001", "pwd"])
+                .unwrap();
+        let Some(Commands::Sftp(args)) = parsed.command else {
+            panic!("expected sftp");
+        };
+        let (server, command) = args.target_and_command();
+        assert_eq!(server, Some("TencentJP"));
+        assert_eq!(command, ["pwd"]);
+
+        let parsed = Cli::try_parse_from(["vibeshell", "sftp", "--session", "001"]).unwrap();
+        let Some(Commands::Sftp(args)) = parsed.command else {
+            panic!("expected sftp");
+        };
+        let (server, command) = args.target_and_command();
+        assert!(server.is_none() && command.is_empty());
     }
 
     #[test]

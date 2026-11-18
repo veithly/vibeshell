@@ -106,8 +106,8 @@ export function PluginMarketplace() {
   };
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-[1480px] overflow-hidden">
-      <aside className="hidden w-56 flex-shrink-0 border-r border-tokyo-bg-hl bg-tokyo-bg-dark/60 px-3 py-5 md:flex md:flex-col">
+    <div className="plugin-marketplace glass-page glass-form mx-auto flex h-full w-full max-w-[1480px] overflow-hidden">
+      <aside className="glass-toolbar hidden w-56 flex-shrink-0 border-r border-tokyo-bg-hl px-3 py-5 md:flex md:flex-col">
         <div className="px-2 pb-5">
           <div className="text-[11px] font-semibold uppercase text-tokyo-comment">
             {t('plugins.registry')}
@@ -150,13 +150,14 @@ export function PluginMarketplace() {
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-wrap items-center gap-3 border-b border-tokyo-bg-hl px-4 py-3 lg:px-6">
+        <div className="glass-toolbar flex flex-wrap items-center gap-3 border-b border-tokyo-bg-hl px-4 py-3 lg:px-6">
           <label className="relative min-w-[220px] flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-tokyo-comment" />
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder={t('plugins.search')}
+              aria-label={t('plugins.search')}
               className="h-9 w-full rounded-md border border-tokyo-bg-hl bg-tokyo-bg pl-9 pr-3 text-sm text-tokyo-fg outline-none transition-colors focus:border-tokyo-cyan"
             />
           </label>
@@ -170,6 +171,7 @@ export function PluginMarketplace() {
                   installFilter === filter && 'bg-tokyo-bg-hl text-tokyo-fg'
                 )}
                 onClick={() => setInstallFilter(filter)}
+                aria-pressed={installFilter === filter}
               >
                 {t(`plugins.filter.${filter}`)}
               </button>

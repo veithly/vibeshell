@@ -1,20 +1,15 @@
 import { useCallback, useState, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  Zap,
   FolderOpen,
   Settings as SettingsIcon,
   ArrowLeft,
   Terminal as TerminalIcon,
   ArrowRightLeft,
-  Columns2,
-  ExternalLink,
-  Rows2,
-  PanelRightClose,
+  Activity,
   Loader2,
+  ExternalLink,
   X,
-  Bot,
-  Code2,
   FileDiff,
   Blocks,
   Store,
@@ -46,19 +41,18 @@ import { AddServerDialog } from './components/AddServerDialog';
 import { EditServerDialog } from './components/EditServerDialog';
 import { ConnectDialog } from './components/ConnectDialog';
 import { SelectServerDialog } from './components/SelectServerDialog';
-import { QuickCommandDialog } from './components/QuickCommandDialog';
-import { CommandHistoryDialog } from './components/CommandHistoryDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { Notifications } from './components/Notifications';
-import { AgentActivityPanel, AgentActivityNotice } from './components/AgentActivityPanel';
+import { AgentActivityPanel } from './components/AgentActivityPanel';
 import { AgentApprovalDialog } from './components/AgentApprovalDialog';
 import { WorkspaceChangesPanel } from './components/WorkspaceChangesPanel';
-import { MobileWorkspaceActions } from './components/MobileWorkspaceActions';
+import { isPluginCompatible, localizedPluginName } from './plugins/pluginUtils';
 import { WorkspaceToolbar } from './components/WorkspaceToolbar';
+import { ContainerPanel } from './components/ContainerPanel';
 import { FingerprintVerificationDialog, FingerprintManagerDialog } from './components/FingerprintDialog';
 import { SnippetManagerDialog } from './components/SnippetManager/SnippetManagerDialog';
 import { TunnelPanelDialog } from './components/TunnelPanel/TunnelPanelDialog';
-import { useServerStore, type Server } from './stores/serverStore';
+import { useServerStore, type Server, isTeleportServer } from './stores/serverStore';
 import { useRuntimeCapabilitiesStore } from './stores/runtimeCapabilitiesStore';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { usePluginStore } from './stores/pluginStore';
@@ -68,8 +62,8 @@ import {
 } from './stores/pluginWorkspaceStore';
 import { useFileWorkspaceStore } from './stores/fileWorkspaceStore';
 import { SessionPluginDock } from './components/SessionPluginDock';
+import { PerformanceDock } from './components/ServerStatus/PerformanceDock';
 import { PluginPanel } from './components/PluginPanel';
-import { PluginTabLauncher } from './components/PluginTabLauncher';
 import { PaneDropZone } from './components/PaneDropZone';
 import {
   parsePaneId,
@@ -81,8 +75,6 @@ import {
 } from './lib/paneIds';
 import type { TerminalHandle } from './components/Terminal';
 import {
-  MAX_TERMINAL_PANES,
-  addPane,
   removePane,
   pruneLeaves,
   getLeaves,
@@ -133,6 +125,7 @@ function App() {
   const isCompactWorkspace = useMediaQuery('(max-width: 767px)');
   const fetchPlugins = usePluginStore((state) => state.fetchPlugins);
   const plugins = usePluginStore((state) => state.plugins);
+  const performanceBusy = usePluginStore((state) => state.operationId === 'server-performance');
   const fileTabs = useFileWorkspaceStore((state) => state.tabs);
   const activeFileTabId = useFileWorkspaceStore((state) => state.activeTabId);
   const activateFileTab = useFileWorkspaceStore((state) => state.activateTab);
@@ -144,23 +137,21 @@ function App() {
 
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
   const [isConnectOpen, setIsConnectOpen] = useState(false);
-  const [isQuickCommandOpen, setIsQuickCommandOpen] = useState(false);
-  const [isCommandHistoryOpen, setIsCommandHistoryOpen] = useState(false);
   const [isEditServerOpen, setIsEditServerOpen] = useState(false);
   const [isSelectServerOpen, setIsSelectServerOpen] = useState(false);
-  const [sessionLauncherTab, setSessionLauncherTab] = useState<'agent' | 'local' | 'ssh' | undefined>();
   const [isSnippetManagerOpen, setIsSnippetManagerOpen] = useState(false);
   const [isTunnelPanelOpen, setIsTunnelPanelOpen] = useState(false);
   const [isSftpOpen, setIsSftpOpen] = useState(false);
-  const [isAgentActivityOpen, setIsAgentActivityOpen] = useState(false);
+  const [containerParentId, setContainerParentId] = useState<string | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isWorkspaceChangesOpen, setIsWorkspaceChangesOpen] = useState(false);
   const [isPluginDockOpen, setIsPluginDockOpen] = useState(false);
+  const [isPerformanceOpen, setIsPerformanceOpen] = useState(false);
   const [serverToConnect, setServerToConnect] = useState<Server | null>(null);
   const [connectForceNew, setConnectForceNew] = useState(false);
   const [serverToEdit, setServerToEdit] = useState<Server | null>(null);
   const [sessionToClose, setSessionToClose] = useState<string | null>(null);
   const [mosaicTree, setMosaicTree] = useState<MosaicNode<string> | null>(null);
-  const [isCreatingTerminalPane, setIsCreatingTerminalPane] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(!('__TAURI_INTERNALS__' in window));
   const workspaceInitialized = useRef(!('__TAURI_INTERNALS__' in window));
   const detachedOwners = useDetachedOwnership((state) => state.owners);
@@ -174,7 +165,6 @@ function App() {
   const terminalRefs = useRef<Map<string, TerminalHandle>>(new Map());
   const sftpPanelRef = useRef<SftpPanelHandle>(null);
   const sessionBootstrapRef = useRef<Promise<void> | null>(null);
-  const terminalPaneCreationRef = useRef(false);
 
   useThemeSync();
 
@@ -415,10 +405,6 @@ function App() {
             event.preventDefault();
             setIsAddServerOpen(true);
             break;
-          case 'k':
-            event.preventDefault();
-            setIsQuickCommandOpen(true);
-            break;
           case ',':
             event.preventDefault();
             goToSettings();
@@ -544,6 +530,22 @@ function App() {
   const handleConnect = useCallback(async (server: Server, options?: { forceNew?: boolean }) => {
     const forceNew = options?.forceNew ?? false;
 
+    if (isTeleportServer(server)) {
+      const session = await connectWithCredentials(
+        server.name,
+        'password',
+        '',
+        undefined,
+        80,
+        24,
+        forceNew
+      );
+      if (session) {
+        handleConnected(session.id);
+      }
+      return;
+    }
+
     const credResult = await safeInvoke<{
       id: string;
       server_name: string;
@@ -604,6 +606,13 @@ function App() {
       return;
     }
 
+    if (session.container) {
+      const parent = useSessionStore.getState().getSession(session.container.parent_session_id);
+      if (parent?.state === 'connected') setContainerParentId(parent.id);
+      else notifyWarning('Container parent disconnected', 'Reconnect the host session, then select the container again. This container tab will never reconnect as a host shell.');
+      return;
+    }
+
     const server = await resolveServerForSession(session);
     if (!server) {
       notifyWarning('Server Not Found', `Could not find a saved server for ${session.serverName}.`);
@@ -624,14 +633,9 @@ function App() {
   }, []);
 
   const handleNewSession = useCallback(() => {
-    setSessionLauncherTab(undefined);
     setIsSelectServerOpen(true);
   }, []);
 
-  const handleOpenCodingAgent = useCallback(() => {
-    setSessionLauncherTab('agent');
-    setIsSelectServerOpen(true);
-  }, []);
 
   const handleCodingAgentLaunched = useCallback((sessionId: string) => {
     activateFileTab(null);
@@ -640,46 +644,6 @@ function App() {
     setMosaicTree(sessionPaneId(sessionId));
     window.setTimeout(() => terminalRefs.current.get(sessionId)?.focus(), 100);
   }, [activateFileTab, activatePluginTab, setActiveSession]);
-
-  const handleSplitPane = useCallback(async (direction: 'row' | 'column') => {
-    if (terminalPaneCreationRef.current) return;
-
-    const storeState = useSessionStore.getState();
-    const currentTree = mosaicTree;
-    if (currentTree !== null && countLeaves(currentTree) >= MAX_TERMINAL_PANES) {
-      notifyWarning(t('session.splitLimitTitle'), t('session.splitLimitMessage'));
-      return;
-    }
-
-    const targetId = storeState.activeSessionId;
-    if (!targetId) return;
-
-    terminalPaneCreationRef.current = true;
-    setIsCreatingTerminalPane(true);
-
-    try {
-      const sourceSession = storeState.sessions.find((session) => session.id === targetId);
-      const shellId = sourceSession?.sessionType === 'local' && sourceSession.purpose !== 'coding_agent'
-        ? sourceSession.serverId
-        : undefined;
-      const session = await createLocalShellSession(shellId, 80, 24);
-      if (!session) return;
-
-      setMosaicTree((current) => addPane(current, sessionPaneId(targetId), sessionPaneId(session.id), direction));
-      // Keep the current pane active so repeated splits build outward from the
-      // same origin pane instead of chaining off each newly-created pane.
-      // The new pane is still immediately usable — clicking it focuses it.
-    } catch (error) {
-      console.error('[App] Failed to create terminal pane:', error);
-      notifyError(
-        t('session.splitFailedTitle'),
-        error instanceof Error ? error.message : t('session.splitFailedMessage')
-      );
-    } finally {
-      terminalPaneCreationRef.current = false;
-      setIsCreatingTerminalPane(false);
-    }
-  }, [createLocalShellSession, mosaicTree, notifyError, notifyWarning, setActiveSession, t]);
 
   const handleRemoveTerminalPane = useCallback((paneId: string) => {
     setMosaicTree((current) => {
@@ -696,29 +660,6 @@ function App() {
       return next;
     });
   }, [activeSessionId, setActiveSession]);
-
-  const handleCollapseTerminalPanes = useCallback(() => {
-    if (activeSessionId) setMosaicTree(sessionPaneId(activeSessionId));
-  }, [activeSessionId]);
-
-  // Split a plugin tab into the mosaic layout next to the active terminal.
-  const handleSplitPluginTab = useCallback((tabId: string, direction: 'row' | 'column') => {
-    const paneId = pluginPaneId(tabId);
-    if (mosaicTree !== null && getLeaves(mosaicTree).includes(paneId)) return;
-    if (mosaicTree !== null && countLeaves(mosaicTree) >= MAX_TERMINAL_PANES) {
-      notifyWarning(t('session.splitLimitTitle'), t('session.splitLimitMessage'));
-      return;
-    }
-
-    const leaves = mosaicTree !== null ? getLeaves(mosaicTree) : [];
-    const target = activeSessionId && leaves.includes(sessionPaneId(activeSessionId))
-      ? sessionPaneId(activeSessionId)
-      : leaves[0] ?? null;
-
-    setMosaicTree((current) => addPane(current, target, paneId, direction));
-    // Switch back to the terminal view so the split result is visible.
-    activateFileTab(null);
-  }, [mosaicTree, activeSessionId, notifyWarning, t, activateFileTab]);
 
   const handlePaneDropTab = useCallback((targetPaneId: string, kind: 'session' | 'plugin' | 'file', tabId: string, direction: 'row' | 'column', side?: DockSide) => {
     const paneId = kind === 'file' ? filePaneId(tabId) : kind === 'plugin' ? pluginPaneId(tabId) : sessionPaneId(tabId);
@@ -771,6 +712,38 @@ function App() {
     activateFileTab(null);
   }, [activeSession, sessions, notifyWarning, t, activateFileTab]);
 
+  // A first-use click enables the bundled, read-only performance view. Nothing
+  // is installed in the background and no external plugin is downloaded.
+  const handleOpenPerformance = useCallback(async () => {
+    if (!activeSession || activeSession.state !== 'connected') return;
+    if (isPerformanceOpen && activePluginTabId === null && activeFileTabId === null) {
+      setIsPerformanceOpen(false);
+      return;
+    }
+    const store = usePluginStore.getState();
+    if (store.operationId === 'server-performance') return;
+    let plugin = store.plugins.find((item) => item.manifest.id === 'server-performance');
+    if (!plugin || plugin.source !== 'builtin') {
+      notifyWarning(t('sidebar.performance'), t('plugins.tabPluginMissing'));
+      return;
+    }
+    if (!plugin.installed && !await store.installPlugin('server-performance')) {
+      notifyError(t('sidebar.performance'), usePluginStore.getState().error ?? t('plugins.tabPluginMissing'));
+      return;
+    }
+    plugin = usePluginStore.getState().plugins.find((item) => item.manifest.id === 'server-performance');
+    if (!plugin?.enabled && !await store.setPluginEnabled('server-performance', true)) {
+      notifyError(t('sidebar.performance'), usePluginStore.getState().error ?? t('plugins.tabPluginMissing'));
+      return;
+    }
+    // Installation can finish after the user switches or closes a session.
+    if (useSessionStore.getState().activeSessionId !== activeSession.id) return;
+    activateFileTab(null);
+    activatePluginTab(null);
+    setIsPluginDockOpen(false);
+    setIsPerformanceOpen(true);
+  }, [activeSession, isPerformanceOpen, activePluginTabId, activeFileTabId, activateFileTab, activatePluginTab, notifyError, notifyWarning, t]);
+
   const handleClosePluginTab = useCallback((tab: PluginWorkspaceTab) => {
     closePluginTab(tab.id);
     // If the tab was split into the layout, drop its pane as well.
@@ -792,33 +765,6 @@ function App() {
       title: session.serverName,
     });
   }, []);
-
-  const handleSaveLayout = useCallback(async () => {
-    if (!workspaceReady) return;
-    try {
-      saveWorkspaceLayout(treeRef.current, focusedPaneRef.current);
-      workspaceInitialized.current = true;
-      if ('__TAURI_INTERNALS__' in window) await withDeadline(captureWindowGeometry('main'), 1500, 'Window geometry capture timed out');
-      useNotificationStore.getState().success(t('workspaceLayout.saved'), t('workspaceLayout.savedDescription'));
-    } catch (error) { notifyError(t('workspaceLayout.saveFailed'), String(error)); }
-  }, [workspaceReady, notifyError, t]);
-
-  const handleQuickCommand = useCallback(() => {
-    setIsQuickCommandOpen(true);
-  }, []);
-
-  const handleOpenCommandHistory = useCallback(() => {
-    if (!activeSession || activeSession.sessionType !== 'ssh') {
-      notifyWarning(t('commandHistory.title'), t('commandHistory.connectFirst'));
-      return;
-    }
-    setIsCommandHistoryOpen(true);
-  }, [activeSession, notifyWarning, t]);
-
-  const handleUseHistoryCommand = useCallback((command: string) => {
-    if (!activeSessionId || activeSession?.sessionType !== 'ssh') return;
-    terminalRefs.current.get(activeSessionId)?.sendCommand(command);
-  }, [activeSession?.sessionType, activeSessionId]);
 
   const handleOpenSnippets = useCallback(() => {
     setIsSnippetManagerOpen(true);
@@ -844,14 +790,14 @@ function App() {
     }
 
     if (!isSftpOpen) {
-      setIsAgentActivityOpen(false);
+      setIsHistoryOpen(false);
       setIsWorkspaceChangesOpen(false);
     }
     sftpPanelRef.current?.toggle();
   }, [activeSession, isSftpOpen, notifyWarning]);
 
-  const handleOpenAgentActivity = useCallback(() => {
-    setIsAgentActivityOpen((current) => {
+  const handleOpenHistory = useCallback(() => {
+    setIsHistoryOpen((current) => {
       const next = !current;
       if (next && isSftpOpen) {
         sftpPanelRef.current?.toggle();
@@ -872,7 +818,7 @@ function App() {
     setIsWorkspaceChangesOpen((current) => {
       const next = !current;
       if (next) {
-        setIsAgentActivityOpen(false);
+        setIsHistoryOpen(false);
         if (isSftpOpen) sftpPanelRef.current?.toggle();
       }
       return next;
@@ -936,19 +882,14 @@ function App() {
     || (activePluginTab !== null && !activePluginTabPinned && !detachedOwners[pluginPaneId(activePluginTab.id)]);
 
   return (
-    <div className="app-shell h-screen flex flex-col bg-tokyo-bg">
-      <TitleBar
-        activeSessionName={activeSession?.serverName}
-        activeSessionType={activeSession?.sessionType}
-        activeSessionState={activeSession?.state}
-        activeSessionPurpose={activeSession?.purpose}
-      />
+    <div className="app-shell h-screen flex flex-col">
       <div
-        className="app-shell absolute inset-x-0 bottom-0 top-9 z-10 flex flex-col bg-tokyo-bg"
+        className="workspace-overlay glass-workspace absolute inset-0 z-30 flex flex-col"
         style={{ display: isOverlayView ? 'flex' : 'none' }}
       >
+        <TitleBar activeSessionName={isPluginsView ? t('plugins.marketplace') : t('settings.title')} />
         <Notifications />
-        <header className="h-11 flex items-center px-4 bg-tokyo-bg-dark border-b border-tokyo-bg-hl">
+        <header className="glass-toolbar h-11 flex items-center px-4 border-b border-tokyo-bg-hl">
           <button
             className={cn(
               'flex items-center gap-2 px-3 py-1.5 rounded-lg border border-transparent',
@@ -961,11 +902,8 @@ function App() {
             <ArrowLeft className="w-4 h-4" />
             <span className="text-sm">{t('common.back')}</span>
           </button>
-          <h1 className="ml-4 text-tokyo-fg font-semibold">
-            {isPluginsView ? t('plugins.marketplace') : t('settings.title')}
-          </h1>
         </header>
-        <div className="flex-1 overflow-y-auto bg-tokyo-bg">
+        <div className="flex-1 overflow-y-auto">
           {isSettingsView && (
             <Suspense fallback={<div className="h-full bg-tokyo-bg" />}>
               <Settings />
@@ -980,167 +918,65 @@ function App() {
       </div>
 
       <div
-        className="h-full flex flex-col flex-1"
-        style={{ visibility: isOverlayView ? 'hidden' : 'visible' }}
+        className="min-h-0 h-full flex flex-col flex-1"
+        style={{ display: isOverlayView ? 'none' : 'flex' }}
       >
         <Notifications />
 
-        <div className="flex-1 flex overflow-hidden">
+        <div className="min-h-0 flex-1 flex overflow-hidden">
           <main className="main-workspace flex-1 flex flex-col min-w-0 relative overflow-x-hidden w-full max-w-full">
+            <TitleBar>
             <SessionTabs
               onNewSession={handleNewSession}
               onReconnectSession={handleReconnectSession}
               onOpenSessionInWindow={handleOpenSessionInWindow}
               onPaneDropTab={handlePaneDropTab}
-              onSaveLayout={() => { void handleSaveLayout(); }}
               rightActions={(
-                runtimeCapabilities.isMobile || isCompactWorkspace ? (
-                  <MobileWorkspaceActions
-                    isSftpOpen={isSftpOpen}
-                    sftpDisabled={!activeSession}
-                    labels={{
-                      sftp: t('sidebar.sftp'),
-                      more: t('common.more'),
-                    }}
-                    menuItems={[
-                      {
-                        id: 'quick-command',
-                        label: t('sidebar.quickCmd'),
-                        icon: <Zap className="h-4 w-4" />,
-                        onSelect: handleQuickCommand,
-                      },
-                      {
-                        id: 'command-history',
-                        label: t('sidebar.history'),
-                        icon: <History className="h-4 w-4" />,
-                        disabled: !activeSession || activeSession.sessionType !== 'ssh',
-                        pressed: isCommandHistoryOpen,
-                        onSelect: handleOpenCommandHistory,
-                      },
-                      {
-                        id: 'snippets',
-                        label: t('sidebar.snippets'),
-                        icon: <TerminalIcon className="h-4 w-4" />,
-                        onSelect: handleOpenSnippets,
-                      },
-                      ...(runtimeCapabilities.localShell ? [{
-                        id: 'coding-agent',
-                        label: t('codingAgent.start'),
-                        icon: <Code2 className="h-4 w-4" />,
-                        onSelect: handleOpenCodingAgent,
-                      }] : []),
-                      {
-                        id: 'workspace-changes',
-                        label: t('workspaceChanges.title'),
-                        icon: <FileDiff className="h-4 w-4" />,
-                        disabled: activeSession?.purpose !== 'coding_agent' || !activeSession.cwd,
-                        pressed: isWorkspaceChangesOpen,
-                        onSelect: handleOpenWorkspaceChanges,
-                      },
-                      ...(runtimeCapabilities.agentGateway ? [{
-                        id: 'agent-activity',
-                        label: t('agentActivity.title'),
-                        icon: <Bot className="h-4 w-4" />,
-                        pressed: isAgentActivityOpen,
-                        onSelect: handleOpenAgentActivity,
-                      }] : []),
-                      {
-                        id: 'plugin-workspace',
-                        label: t('plugins.workspace'),
-                        icon: <Blocks className="h-4 w-4" />,
-                        disabled: !activeSession,
-                        pressed: isPluginDockOpen,
-                        onSelect: () => setIsPluginDockOpen((open) => !open),
-                      },
-                      {
-                        id: 'plugin-marketplace',
-                        label: t('plugins.marketplace'),
-                        icon: <Store className="h-4 w-4" />,
-                        onSelect: goToPlugins,
-                      },
-                      {
-                        id: 'settings',
-                        label: t('sidebar.settings'),
-                        icon: <SettingsIcon className="h-4 w-4" />,
-                        onSelect: goToSettings,
-                      },
-                    ]}
-                    onToggleSftp={handleOpenSftp}
-                  />
-                ) : (
-                  <div className="flex flex-shrink-0 items-center gap-0.5 border-l border-tokyo-bg-hl pl-1.5">
-                  {/* High-frequency session actions stay as direct buttons */}
-                  <button className="icon-button tooltip-button" data-tooltip={`${t('sidebar.quickCmd')} (Ctrl+K)`} onClick={handleQuickCommand} aria-label={t('sidebar.quickCmd')}>
-                    <Zap className="h-4 w-4" />
+                  <div className="titlebar-actions flex flex-shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    className={cn('glass-action tooltip-button', isSftpOpen && 'is-active')}
+                    data-tooltip={t('sidebar.sftp')}
+                    aria-label={t('sidebar.sftp')}
+                    aria-pressed={isSftpOpen}
+                    disabled={!activeSession || activeSession.state !== 'connected' || !!activeSession.container}
+                    onClick={handleOpenSftp}
+                  >
+                    <FolderOpen className="h-4 w-4" aria-hidden="true" />
                   </button>
                   <button
-                    className={cn('icon-button tooltip-button', isCommandHistoryOpen && 'is-active')}
+                    type="button"
+                    className={cn('glass-action tooltip-button', isPerformanceOpen && !terminalAreaHidden && 'is-active')}
+                    data-tooltip={t('sidebar.performance')}
+                    aria-label={t('sidebar.performance')}
+                    aria-pressed={isPerformanceOpen && !terminalAreaHidden}
+                    aria-busy={performanceBusy}
+                    disabled={!activeSession || activeSession.state !== 'connected' || performanceBusy}
+                    onClick={() => { void handleOpenPerformance(); }}
+                  >
+                    {performanceBusy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Activity className="h-4 w-4" aria-hidden="true" />}
+                  </button>
+                  <button
+                    className={cn('icon-button tooltip-button', (runtimeCapabilities.isMobile || isCompactWorkspace) && 'h-11 w-11', isHistoryOpen && 'is-active')}
                     data-tooltip={t('sidebar.history')}
-                    onClick={handleOpenCommandHistory}
-                    disabled={!activeSession || activeSession.sessionType !== 'ssh'}
-                    aria-pressed={isCommandHistoryOpen}
+                    onClick={handleOpenHistory}
+                    aria-pressed={isHistoryOpen}
                     aria-label={t('sidebar.history')}
                   >
-                    <History className="h-4 w-4" />
+                    <History className="h-4 w-4" aria-hidden="true" />
                   </button>
-                  <button
-                    className={cn('icon-button tooltip-button', isSftpOpen && 'is-active')}
-                    data-tooltip={t('sidebar.sftp')}
-                    onClick={handleOpenSftp}
-                    disabled={!activeSession}
-                    aria-pressed={isSftpOpen}
-                    aria-label={t('sidebar.sftp')}
-                  >
-                    <FolderOpen className="h-4 w-4" />
-                  </button>
-                  {runtimeCapabilities.localShell && (
-                    <>
-                      <button
-                        className="icon-button tooltip-button"
-                        data-tooltip={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitHorizontal')}
-                        onClick={() => { void handleSplitPane('row'); }}
-                        disabled={isCreatingTerminalPane}
-                        aria-label={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitHorizontal')}
-                      >
-                        {isCreatingTerminalPane
-                          ? <Loader2 className="h-4 w-4 animate-spin" />
-                          : <Columns2 className="h-4 w-4" />}
-                      </button>
-                      <button
-                        className="icon-button tooltip-button"
-                        data-tooltip={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitVertical')}
-                        onClick={() => { void handleSplitPane('column'); }}
-                        disabled={isCreatingTerminalPane}
-                        aria-label={isCreatingTerminalPane ? t('session.creatingPane') : t('session.splitVertical')}
-                      >
-                        {isCreatingTerminalPane
-                          ? <Loader2 className="h-4 w-4 animate-spin" />
-                          : <Rows2 className="h-4 w-4" />}
-                      </button>
-                    </>
-                  )}
-                  {activeSession && (
-                    <button
-                      className="icon-button tooltip-button"
-                      data-tooltip={t('session.openInWindow')}
-                      aria-label={t('session.openInWindow')}
-                      onClick={() => handleOpenSessionInWindow(activeSession)}
-                    >
-                      <ExternalLink className="h-4 w-4" />
-                    </button>
-                  )}
-                  <PluginTabLauncher
-                    sessionType={activeSession ? activeSession.sessionType : null}
-                    onOpenPluginTab={handleOpenPluginTab}
-                  />
-                  {/* Lower-frequency actions collapse into an overflow menu */}
                   <WorkspaceToolbar
                     label={t('common.more')}
-                    anyPressed={isWorkspaceChangesOpen || isAgentActivityOpen || isPluginDockOpen}
+                    anyPressed={isWorkspaceChangesOpen || isPluginDockOpen}
                     items={[
+                      { id: 'containers', label: 'Docker containers', icon: <Blocks className="h-4 w-4" />, disabled: !activeSession || activeSession.sessionType !== 'ssh' || activeSession.state !== 'connected' || !!activeSession.container, onSelect: () => { if (activeSession) setContainerParentId(activeSession.id); } },
+                      ...(activeSession ? plugins.filter((p) => p.manifest.id !== 'server-performance' && isPluginCompatible(p, activeSession.sessionType)).map((p) => ({
+                        id: `plugin-${p.manifest.id}`, label: localizedPluginName(t, p), icon: <Blocks className="h-4 w-4" />, onSelect: () => handleOpenPluginTab(p.manifest.id),
+                      })) : []),
                       ...(runtimeCapabilities.backgroundTunnels ? [{
                         id: 'tunnels',
                         label: t('sidebar.tunnels'),
+                        disabled: !!activeSession?.container,
                         icon: <ArrowRightLeft className="h-4 w-4" />,
                         onSelect: handleOpenTunnels,
                       }] : []),
@@ -1151,20 +987,6 @@ function App() {
                         onSelect: handleOpenSnippets,
                       },
                       {
-                        id: 'command-history',
-                        label: t('sidebar.history'),
-                        icon: <History className="h-4 w-4" />,
-                        disabled: !activeSession || activeSession.sessionType !== 'ssh',
-                        pressed: isCommandHistoryOpen,
-                        onSelect: handleOpenCommandHistory,
-                      },
-                      ...(runtimeCapabilities.localShell ? [{
-                        id: 'coding-agent',
-                        label: t('codingAgent.start'),
-                        icon: <Code2 className="h-4 w-4" />,
-                        onSelect: handleOpenCodingAgent,
-                      }] : []),
-                      {
                         id: 'workspace-changes',
                         label: t('workspaceChanges.title'),
                         icon: <FileDiff className="h-4 w-4" />,
@@ -1172,27 +994,14 @@ function App() {
                         pressed: isWorkspaceChangesOpen,
                         onSelect: handleOpenWorkspaceChanges,
                       },
-                      ...(runtimeCapabilities.agentGateway ? [{
-                        id: 'agent-activity',
-                        label: t('agentActivity.title'),
-                        icon: <Bot className="h-4 w-4" />,
-                        pressed: isAgentActivityOpen,
-                        onSelect: handleOpenAgentActivity,
-                      }] : []),
                       {
                         id: 'plugin-workspace',
                         label: t('plugins.workspace'),
                         icon: <Blocks className="h-4 w-4" />,
                         disabled: !activeSession,
                         pressed: isPluginDockOpen,
-                        onSelect: () => setIsPluginDockOpen((open) => !open),
+                        onSelect: () => { setIsPerformanceOpen(false); setIsPluginDockOpen((open) => !open); },
                       },
-                      ...(runtimeCapabilities.localShell && mosaicTree !== null && countLeaves(mosaicTree) > 1 ? [{
-                        id: 'close-splits',
-                        label: t('session.closeSplits'),
-                        icon: <PanelRightClose className="h-4 w-4" />,
-                        onSelect: handleCollapseTerminalPanes,
-                      }] : []),
                       {
                         id: 'plugin-marketplace',
                         label: t('plugins.marketplace'),
@@ -1208,11 +1017,10 @@ function App() {
                     ]}
                   />
                   </div>
-                )
               )}
             />
+            </TitleBar>
 
-            {runtimeCapabilities.agentGateway && <AgentActivityNotice onOpen={() => setIsAgentActivityOpen(true)} />}
             <div className="relative flex min-h-0 flex-1">
               <div className="workspace-return-zone flex min-w-0 flex-1 flex-col" onMouseDownCapture={(event) => {
                 const pane = (event.target as Element).closest<HTMLElement>('[data-pane-id]');
@@ -1244,7 +1052,6 @@ function App() {
                         tab={tab}
                         plugin={plugins.find((candidate) => candidate.manifest.id === tab.pluginId)}
                         onClose={() => handleClosePluginTab(tab)}
-                        onSplit={handleSplitPluginTab}
                       />
                     </Suspense>
                   </div>
@@ -1252,8 +1059,9 @@ function App() {
                 <div className={cn('min-h-0 flex-1 flex-col', terminalAreaHidden ? 'hidden' : 'flex')}>
                   {sessions.length > 0 || mosaicTree !== null ? (
                     <>
-                    <div className="mosaic-container relative min-h-0 flex-1 p-2">
+                    <div className={cn('mosaic-container relative min-h-0 flex-1', !canRemoveTerminalPane && 'mosaic-single')}>
                       <Mosaic<string>
+                        className="vibeshell-mosaic"
                         value={mosaicTree}
                         onChange={(node) => { treeRef.current = node; setMosaicTree(node); }}
                         zeroStateView={<div className="workspace-return-zone flex h-full items-center justify-center p-8 text-center text-sm text-tokyo-comment">{t(workspaceReady ? 'workspaceLayout.empty' : 'common.loading')}</div>}
@@ -1265,9 +1073,10 @@ function App() {
                             if (!tab) return <div />;
                             return (
                               <MosaicWindow<string> path={path} title={`${tab.dirty ? '● ' : ''}${tab.name}`} draggable
+                                className={cn('vibe-mosaic-pane--file', activeFileTabId === tab.id && 'mosaic-window-active')}
                                 toolbarControls={[
-                                  <button key="detach" className="icon-button h-5 w-5" aria-label={t('workspaceLayout.detach')} title={t('workspaceLayout.detach')} onClick={() => { void openDetachedWindow({ kind: 'file', sessionId: tab.sessionId, path: tab.path, name: tab.name, size: tab.size }); }}><ExternalLink className="h-3 w-3" /></button>,
-                                  ...(canRemoveTerminalPane ? [<button key="close" className="icon-button h-5 w-5" onClick={() => handleRemoveTerminalPane(id)} aria-label={t('session.removePane', { name: tab.name })}><X className="h-3 w-3" /></button>] : []),
+                                  <button key="detach" type="button" className="pane-chrome-button pane-chrome-detach" aria-label={t('workspaceLayout.detach')} title={t('workspaceLayout.detach')} onClick={() => { void openDetachedWindow({ kind: 'file', sessionId: tab.sessionId, path: tab.path, name: tab.name, size: tab.size }); }}><ExternalLink className="h-3.5 w-3.5" aria-hidden="true" /></button>,
+                                  ...(canRemoveTerminalPane ? [<button key="close" type="button" className="pane-chrome-button pane-chrome-close" onClick={() => handleRemoveTerminalPane(id)} aria-label={t('session.removePane', { name: tab.name })} title={t('session.removePane', { name: tab.name })}><X className="h-3.5 w-3.5" aria-hidden="true" /></button>] : []),
                                 ]}>
                                 <PaneDropZone paneId={id}><Suspense fallback={<div className="h-full bg-tokyo-bg" />}><FileWorkspace tab={tab} isActive={activeFileTabId === tab.id} /></Suspense></PaneDropZone>
                               </MosaicWindow>
@@ -1288,15 +1097,17 @@ function App() {
                                 path={path}
                                 title={paneTitle}
                                 draggable
+                                className={cn('vibe-mosaic-pane--plugin', activePluginTabId === tab?.id && 'mosaic-window-active')}
                                 toolbarControls={canRemoveTerminalPane ? [
                                   <button
                                     key="close"
-                                    className="icon-button h-5 w-5"
+                                    type="button"
+                                    className="pane-chrome-button pane-chrome-close"
                                     onClick={() => handleRemoveTerminalPane(id)}
                                     aria-label={t('session.removePane', { name: paneTitle })}
                                     title={t('session.removePane', { name: paneTitle })}
                                   >
-                                    <X className="h-3 w-3" />
+                                    <X className="h-3.5 w-3.5" aria-hidden="true" />
                                   </button>,
                                 ] : []}
                               >
@@ -1329,19 +1140,20 @@ function App() {
                               toolbarControls={canRemoveTerminalPane ? [
                                 <button
                                   key="close"
-                                  className="icon-button h-5 w-5"
+                                  type="button"
+                                  className="pane-chrome-button pane-chrome-close"
                                   onClick={() => handleRemoveTerminalPane(id)}
                                   aria-label={t('session.removePane', { name: serverName })}
                                   title={t('session.removePane', { name: serverName })}
                                 >
-                                  <X className="h-3 w-3" />
+                                  <X className="h-3.5 w-3.5" aria-hidden="true" />
                                 </button>,
                               ] : []}
-                              className={cn(activeSessionId && id === sessionPaneId(activeSessionId) && 'mosaic-window-active')}
+                              className={cn('vibe-mosaic-pane--terminal', activeSessionId && id === sessionPaneId(activeSessionId) && 'mosaic-window-active')}
                             >
                               <PaneDropZone paneId={id}>
                                 <div
-                                  className="relative h-full bg-tokyo-bg"
+                                  className="relative h-full"
                                   onMouseDown={() => {
                                     if (pane.id !== activeSessionId) setActiveSession(pane.id);
                                   }}
@@ -1366,6 +1178,14 @@ function App() {
                         }}
                       />
                     </div>
+                    {isPerformanceOpen && activeSession?.state === 'connected' && (
+                      <PerformanceDock
+                        key={activeSession.id}
+                        session={activeSession}
+                        plugin={plugins.find((plugin) => plugin.manifest.id === 'server-performance')}
+                        onClose={() => setIsPerformanceOpen(false)}
+                      />
+                    )}
                     {activeSession && (
                       <SessionPluginDock
                         sessionId={activeSession.id}
@@ -1383,27 +1203,27 @@ function App() {
                 </div>
               </div>
 
-              <SftpPanel
+              {!activeSession?.container && <SftpPanel
                 ref={sftpPanelRef}
                 sessionId={activeSession?.id}
                 sessionType={activeSession?.sessionType}
                 defaultCollapsed={true}
                 dock="right"
                 onCollapsedChange={handleSftpCollapsedChange}
-              />
+              />}
+              {containerParentId && <ContainerPanel key={containerParentId} parentId={containerParentId} onConnected={handleConnected} onClose={() => setContainerParentId(null)} />}
               <WorkspaceChangesPanel
                 open={isWorkspaceChangesOpen}
                 cwd={activeSession?.purpose === 'coding_agent' ? activeSession.cwd : undefined}
                 sessionName={activeSession?.purpose === 'coding_agent' ? activeSession.serverName : undefined}
                 onClose={() => setIsWorkspaceChangesOpen(false)}
               />
-              {runtimeCapabilities.agentGateway && (
                 <AgentActivityPanel
-                  open={isAgentActivityOpen}
-                  onClose={() => setIsAgentActivityOpen(false)}
+                  open={isHistoryOpen}
+                  onClose={() => setIsHistoryOpen(false)}
                   onSessionsChanged={handleGatewaySessionsChanged}
+                  onSelectSession={handleConnected}
                 />
-              )}
             </div>
           </main>
         </div>
@@ -1435,22 +1255,8 @@ function App() {
         onConnected={handleConnected}
       />
 
-      <QuickCommandDialog
-        isOpen={isQuickCommandOpen}
-        onClose={() => setIsQuickCommandOpen(false)}
-      />
-
-      <CommandHistoryDialog
-        isOpen={isCommandHistoryOpen}
-        serverId={activeSession?.sessionType === 'ssh' ? activeSession.serverId : undefined}
-        serverName={activeSession?.sessionType === 'ssh' ? activeSession.serverName : undefined}
-        onClose={() => setIsCommandHistoryOpen(false)}
-        onUseCommand={handleUseHistoryCommand}
-      />
-
       <SelectServerDialog
         isOpen={isSelectServerOpen}
-        initialTab={sessionLauncherTab}
         initialWorkspace={activeSession?.cwd}
         onClose={() => setIsSelectServerOpen(false)}
         onSelectServer={handleConnect}

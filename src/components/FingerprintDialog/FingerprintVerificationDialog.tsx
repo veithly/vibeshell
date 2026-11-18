@@ -56,12 +56,12 @@ export function FingerprintVerificationDialog() {
     >
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/70"
+        className="absolute inset-0 glass-scrim"
         onClick={handleReject}
       />
 
       {/* Dialog */}
-      <div className="relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-lg mx-4">
+      <div className="glass-dialog glass-form relative border border-tokyo-bg-hl rounded-lg w-full max-w-lg mx-4">
         {/* Header */}
         <div className={cn(
           "flex items-center justify-between px-4 py-3 border-b",

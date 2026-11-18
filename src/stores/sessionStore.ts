@@ -29,6 +29,7 @@ function mapSessionInfo(info: SessionInfo): Session {
     state: info.state,
     createdAt: info.created_at * 1000,
     sessionType: 'ssh',
+    container: info.container,
   };
 }
 
@@ -81,6 +82,7 @@ export type SessionType = 'ssh' | 'local';
  * Session info returned from the backend
  */
 export interface SessionInfo {
+  container?: { parent_session_id: string; container_id: string; name: string; user?: string; workdir?: string; shell: string };
   id: string;
   server_id: string;
   server_name: string;
@@ -113,6 +115,7 @@ export type SessionPurpose = 'shell' | 'coding_agent';
  * Represents an active session (SSH or Local Shell)
  */
 export interface Session {
+  container?: SessionInfo['container'];
   /** Unique identifier for the session */
   id: string;
   /** Server ID this session is connected to (for SSH) or shell ID (for local) */

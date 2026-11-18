@@ -14,6 +14,21 @@ use crate::storage::Database;
 
 const APP_SETTINGS_KEY: &str = "app_settings";
 
+#[tauri::command]
+pub fn get_gateway_port(
+    db: State<'_, Arc<Database>>,
+) -> Result<crate::mcp::gateway::GatewayPortSettings, String> {
+    crate::mcp::gateway::GatewayPortSettings::load(&db).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_gateway_port(
+    db: State<'_, Arc<Database>>,
+    settings: crate::mcp::gateway::GatewayPortSettings,
+) -> Result<(), String> {
+    settings.save(&db).map_err(|e| e.to_string())
+}
+
 /// Load the persisted app settings, or `null` when nothing was saved yet.
 #[tauri::command]
 pub fn load_settings(db: State<'_, Arc<Database>>) -> Result<Option<Value>, String> {

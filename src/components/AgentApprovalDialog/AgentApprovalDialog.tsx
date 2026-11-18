@@ -100,13 +100,13 @@ export function AgentApprovalDialog() {
           className="fixed inset-0 z-[60] flex items-center justify-center"
           onKeyDown={handleKeyDown}
         >
-          <div className="absolute inset-0 bg-tokyo-bg-dark/80" />
+          <div className="glass-scrim absolute inset-0" />
 
           <div
             role="alertdialog"
             aria-modal="true"
             aria-describedby="agent-approval-description"
-            className="relative mx-4 w-full max-w-lg rounded-lg border border-tokyo-red/50 bg-tokyo-bg-dark shadow-xl"
+            className="glass-dialog glass-form relative mx-4 w-full max-w-lg rounded-lg border border-tokyo-red/50"
           >
         <div className="flex items-center gap-2 border-b border-tokyo-bg-hl px-4 py-3">
           <AlertTriangle className="h-5 w-5 text-tokyo-red" aria-hidden="true" />

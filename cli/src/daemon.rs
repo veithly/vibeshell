@@ -14,6 +14,7 @@ pub fn run_foreground() -> Result<()> {
         let database =
             Arc::new(vibeshell_core::Database::new().context("Failed to open database")?);
         let session_manager = Arc::new(vibeshell_core::SessionManager::new(database.clone()));
+        vibeshell_core::network::initialize(database.clone());
         session_manager.set_tunnel_manager(Arc::new(vibeshell_core::tunnel::TunnelManager::new()));
         session_manager.set_session_logger(Arc::new(vibeshell_core::logging::SessionLogger::new(
             database.clone(),

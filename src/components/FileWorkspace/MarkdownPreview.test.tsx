@@ -21,11 +21,11 @@ describe('safe basic Markdown preview', () => {
     expect(container.querySelector('a[href^="javascript"],a[href^="data"]')).toBeNull();
     expect(container).toHaveTextContent('<script>alert(1)</script>');
   });
-  it('requires explicit consent for external images', () => {
+  it('requires explicit consent for external images', async () => {
     render(<MarkdownPreview tab={tab} text={'![photo](https://example.com/photo.png)'} />);
     expect(screen.queryByRole('img')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /markdown.loadImage/ }));
-    expect(screen.getByRole('img')).toHaveAttribute('referrerpolicy', 'no-referrer');
+    expect(await screen.findByRole('img')).toHaveAttribute('referrerpolicy', 'no-referrer');
   });
   it('resolves escaped local filenames without accepting URL handlers', () => {
     expect(resolveDocumentPath('images/picture%20one.png', tab.path)).toBe('/docs/images/picture one.png');

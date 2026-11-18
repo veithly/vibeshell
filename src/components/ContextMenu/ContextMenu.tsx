@@ -128,7 +128,7 @@ export function ContextMenu({
       data-testid={testId}
       className={cn(
         'fixed z-[100] py-1',
-        'bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl',
+        'glass-menu rounded-xl',
         'overflow-y-auto overscroll-contain',
         'animate-fade-in'
       )}

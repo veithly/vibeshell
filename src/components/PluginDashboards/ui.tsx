@@ -28,7 +28,7 @@ export function StatCard({
   tone?: 'default' | 'good' | 'warn' | 'bad';
 }) {
   return (
-    <div className="min-w-[110px] flex-1 rounded-lg border border-tokyo-bg-hl bg-tokyo-bg px-3 py-2">
+    <div className="glass-well min-w-[110px] flex-1 rounded-lg border border-tokyo-bg-hl px-3 py-2">
       <div className="truncate text-[10px] uppercase tracking-wide text-tokyo-comment">{label}</div>
       <div
         className={cn(
@@ -72,7 +72,7 @@ export function DashboardHeader({
   extra?: ReactNode;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-tokyo-bg-hl px-3 py-2">
+    <div className="glass-toolbar flex flex-wrap items-center gap-2 border-b border-tokyo-bg-hl px-3 py-2">
       <div className="flex items-center gap-2">
         {icon}
         <span className="text-sm font-semibold text-tokyo-fg">{title}</span>
@@ -140,17 +140,17 @@ export function DashboardModal({
   const { t } = useTranslation();
   return (
     <div
-      className="responsive-dialog-layer fixed inset-0 z-[120] flex items-center justify-center bg-tokyo-bg-dark/70 px-4 py-8"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
+      className="responsive-dialog-layer glass-scrim fixed inset-0 z-[120] flex items-center justify-center px-4 py-8"
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         className={cn(
-          'flex max-h-full min-h-0 w-full flex-col rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark shadow-2xl',
+          'glass-dialog glass-form flex max-h-full min-h-0 w-full flex-col',
           wide ? 'max-w-4xl' : 'max-w-2xl'
         )}
       >

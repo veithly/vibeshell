@@ -1,4 +1,4 @@
-pub(crate) mod runtime_services;
+pub mod runtime_services;
 pub mod socket;
 pub use runtime_services::RuntimeRequest;
 

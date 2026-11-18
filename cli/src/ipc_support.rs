@@ -21,16 +21,16 @@ pub fn send(message: &IpcMessage) -> Result<IpcMessage> {
     ensure_ipc_ready()?;
     // A lost reply does not prove the operation was not executed. Never replay
     // writes/commands/session creation without a server-side idempotency key.
-    IpcClient::send(message).map_err(connect_error_context)
+    IpcClient::send_with_origin(message, true).map_err(connect_error_context)
 }
 
 pub fn connect_streaming(message: &IpcMessage) -> Result<BufReader<Stream>> {
     ensure_ipc_ready()?;
-    match IpcClient::connect_streaming(message) {
+    match IpcClient::stream_with_origin(message, true) {
         Ok(stream) => Ok(stream),
         Err(_) => {
             ensure_ipc_ready()?;
-            IpcClient::connect_streaming(message).map_err(connect_error_context)
+            IpcClient::stream_with_origin(message, true).map_err(connect_error_context)
         }
     }
 }
@@ -38,19 +38,6 @@ pub fn connect_streaming(message: &IpcMessage) -> Result<BufReader<Stream>> {
 #[allow(dead_code)]
 pub fn send_without_autostart(message: &IpcMessage) -> Result<IpcMessage> {
     IpcClient::send(message).context("IPC server is unavailable")
-}
-
-/// Return the number of clients currently attached to a session.
-/// Returns 0 on any IPC error so callers can fall back to the default path.
-pub fn session_client_count(session_id: &str) -> usize {
-    match send(&IpcMessage::ListSessions) {
-        Ok(IpcMessage::SessionList { sessions }) => sessions
-            .iter()
-            .find(|s| s.id == session_id)
-            .map(|s| s.clients)
-            .unwrap_or(0),
-        _ => 0,
-    }
 }
 
 /// Execute a command via SSH exec channel (separate from the shared PTY).

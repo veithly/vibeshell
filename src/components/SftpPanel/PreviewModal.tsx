@@ -370,14 +370,14 @@ export function PreviewModal({
     >
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/80"
+        className="absolute inset-0 glass-scrim"
         onClick={handleClose}
       />
 
       {/* Modal */}
       <div
         className={cn(
-          'relative bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl',
+          'glass-dialog glass-form relative border border-tokyo-bg-hl rounded-lg',
           'flex flex-col overflow-hidden',
           isFullscreen
             ? 'w-full h-full rounded-none'

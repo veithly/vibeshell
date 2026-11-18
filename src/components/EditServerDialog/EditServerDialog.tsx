@@ -19,6 +19,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
   const { success: notifySuccess } = useNotificationStore();
 
   const { servers } = useServerStore();
+  const isTeleport = server?.connection_kind === 'teleport';
 
   const [formData, setFormData] = useState({
     name: '',
@@ -29,6 +30,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
     jumpHostId: '',
     agentForwarding: false,
     postLoginCommand: '',
+    teleportProxy: '',
   });
 
   const [localError, setLocalError] = useState<string | null>(null);
@@ -62,6 +64,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
         jumpHostId: server.jump_host_id || '',
         agentForwarding: server.agent_forwarding || false,
         postLoginCommand: server.post_login_command || '',
+        teleportProxy: server.teleport_proxy || '',
       });
     }
   }, [isOpen, server, reset]);
@@ -79,6 +82,10 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
     setLocalError(null);
 
     if (!server || isLoadingKey) return;
+    if (isTeleport && !formData.teleportProxy.trim()) {
+      setLocalError('Teleport proxy is required');
+      return;
+    }
 
     // Validate
     if (!formData.name.trim()) {
@@ -99,15 +106,15 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
       return;
     }
     const authChanged = isKeyAuthType(server.auth_type) !== isKey;
-    if (authChanged && (isKey ? !keyContent : !newPassword)) {
+    if (!isTeleport && authChanged && (isKey ? !keyContent : !newPassword)) {
       setLocalError(isKey ? 'Select or paste the new private key' : 'Enter the new password');
       return;
     }
     const credentials: NonNullable<UpdateServerInput['credentials']> = {};
-    if (isKey) {
+    if (!isTeleport && isKey) {
       if (keyContent) { credentials.credential = keyContent; credentials.keyPath = keyPath ?? ''; }
       if (changePassphrase) credentials.passphrase = newPassphrase;
-    } else if (newPassword) {
+    } else if (!isTeleport && newPassword) {
       credentials.credential = newPassword;
     }
 
@@ -121,6 +128,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
         jump_host_id: formData.jumpHostId || null,
         agent_forwarding: formData.agentForwarding,
         post_login_command: formData.postLoginCommand.trim() || null,
+        ...(isTeleport ? { teleport_proxy: formData.teleportProxy.trim() } : {}),
         ...(Object.keys(credentials).length ? { credentials } : {}),
       });
 
@@ -129,7 +137,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : 'Failed to update server');
     }
-  }, [server, formData, updateServer, notifySuccess, onClose, isKey, newPassword, keyContent, keyPath, changePassphrase, newPassphrase, isLoadingKey]);
+  }, [server, formData, updateServer, notifySuccess, onClose, isKey, isTeleport, newPassword, keyContent, keyPath, changePassphrase, newPassphrase, isLoadingKey]);
 
   const handleChange = useCallback((field: string, value: string | number) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -145,12 +153,12 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
     <div className="responsive-dialog-layer fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60"
+        className="absolute inset-0 glass-scrim"
         onClick={() => { if (!loading) onClose(); }}
       />
 
       {/* Dialog */}
-      <div className="responsive-dialog-panel relative min-w-0 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-md mx-3 sm:mx-4">
+      <div className="responsive-dialog-panel glass-dialog glass-form relative min-w-0 bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg shadow-xl w-full max-w-md mx-3 sm:mx-4">
         {/* Header */}
         <div className="responsive-dialog-header flex items-center justify-between gap-3 px-4 py-3 border-b border-tokyo-bg-hl">
           <h2 className="text-lg font-semibold text-tokyo-fg">Edit Server</h2>
@@ -250,6 +258,13 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
           </div>
 
           {/* Auth Type */}
+          {isTeleport && <div>
+            <label htmlFor="edit-teleport-proxy" className="block text-sm font-medium text-tokyo-fg mb-1">Teleport proxy</label>
+            <input id="edit-teleport-proxy" value={formData.teleportProxy} onChange={(event) => handleChange('teleportProxy', event.target.value)}
+              className="w-full rounded-md border border-tokyo-bg-hl bg-tokyo-bg px-3 py-2 text-tokyo-fg focus:ring-1 focus:ring-tokyo-blue" />
+            <p className="mt-2 text-xs text-tokyo-comment">Authentication is managed by tsh login. File access requires a standard sftp-server on the node. Create a new profile to change the connection type.</p>
+          </div>}
+          {!isTeleport && <>
           <div>
             <label className="block text-sm font-medium text-tokyo-fg mb-1">
               Authentication
@@ -302,12 +317,14 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
               </>
             )}
           </fieldset>
+          </>}
 
           {/* Advanced Section */}
           <div className="space-y-3 pt-2 border-t border-tokyo-bg-hl">
             <h3 className="text-sm font-medium text-tokyo-comment uppercase tracking-wider pt-2">Advanced</h3>
 
             {/* Jump Host */}
+            {!isTeleport && <>
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">Jump Host</label>
               <select
@@ -344,6 +361,7 @@ export function EditServerDialog({ isOpen, server, onClose }: EditServerDialogPr
             </div>
 
             {/* Post-login Command */}
+            </>}
             <div>
               <label className="block text-sm font-medium text-tokyo-fg mb-1">Post-login Command</label>
               <textarea
