@@ -18,6 +18,10 @@ fn macos_window_is_transparent_and_has_a_pre_liquid_glass_fallback() {
         "window must be transparent for behind-window Liquid Glass"
     );
     assert!(
+        !main.decorations && !main.shadow,
+        "borderless native glass must not cast a square shadow outside the rounded window corner"
+    );
+    assert!(
         main.window_effects
             .as_ref()
             .is_some_and(|effect| !effect.effects.is_empty()),

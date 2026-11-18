@@ -12,6 +12,10 @@ macOS versions retain their existing native fallback. The default terminal
 color mask is now 60% to let the background show through while keeping glyphs
 fully opaque. Existing saved appearance preferences remain respected.
 
+The native drop shadow is disabled on undecorated macOS glass windows,
+including detached panes, to avoid a sharp dark outline projecting beyond
+the rounded upper corners.
+
 ## 1.2.0 — 2026-11-18
 
 ### Container sessions, outbound routing and Gateway preferences

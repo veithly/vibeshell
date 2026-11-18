@@ -171,7 +171,7 @@ export function openDetachedWindow(
             minWidth: 480, minHeight: 320, decorations: false, dragDropEnabled: false, visible: false,
             ...(useRuntimeCapabilitiesStore.getState().capabilities.platform === 'macos' ? {
               transparent: true,
-              shadow: true,
+              shadow: false,
               windowEffects: { effects: [Effect.Sidebar], state: EffectState.Active, radius: 14 },
             } : {}),
           });
