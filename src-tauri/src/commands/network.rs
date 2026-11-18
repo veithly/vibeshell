@@ -80,6 +80,41 @@ pub fn network_cancel(id: String) {
     }
 }
 
+/// Remote Markdown images frequently redirect to a CDN. Follow only bounded,
+/// credential-free HTTP(S) hops via the same native proxy route; never allow
+/// an HTTPS downgrade or a public URL redirecting into a local network.
+fn protected_redirect_target(url: &reqwest::Url) -> bool {
+    let host = url.host_str().unwrap_or_default();
+    let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified()
+        }
+        Ok(std::net::IpAddr::V6(ip)) => {
+            ip.is_loopback()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.is_unspecified()
+        }
+        Err(_) => false,
+    }
+}
+
+fn allow_image_redirect(next: &reqwest::Url, previous: &[reqwest::Url]) -> bool {
+    previous.len() < 5
+        && matches!(next.scheme(), "http" | "https")
+        && next.host_str().is_some()
+        && next.username().is_empty()
+        && next.password().is_none()
+        && !(previous.iter().any(|url| url.scheme() == "https") && next.scheme() == "http")
+        && !previous.first().is_some_and(|first| {
+            !protected_redirect_target(first) && protected_redirect_target(next)
+        })
+}
+
 #[tauri::command]
 pub async fn network_request(request: NetworkRequest) -> Result<NetworkResponse, String> {
     let url = reqwest::Url::parse(&request.url).map_err(|_| "Invalid HTTP destination")?;
@@ -107,11 +142,27 @@ pub async fn network_request(request: NetworkRequest) -> Result<NetworkResponse,
         "POST" => reqwest::Method::POST,
         _ => return Err("Only GET and POST are supported".into()),
     };
+    if request.image
+        && (method != reqwest::Method::GET || request.body.is_some() || !request.headers.is_empty())
+    {
+        return Err("Remote image requests must use GET without custom headers or a body".into());
+    }
     let route = Route::current().map_err(|e| e.to_string())?;
+    let redirect_policy = if request.image {
+        reqwest::redirect::Policy::custom(|attempt| {
+            if allow_image_redirect(attempt.url(), attempt.previous()) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        })
+    } else {
+        reqwest::redirect::Policy::none()
+    };
     let client = route
         .configure_http(reqwest::Client::builder())
         .user_agent(concat!("VibeShell/", env!("CARGO_PKG_VERSION")))
-        .redirect(reqwest::redirect::Policy::none())
+        .redirect(redirect_policy)
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(30))
         .build()
@@ -248,6 +299,82 @@ pub async fn network_check_update() -> Result<Option<serde_json::Value>, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn image_redirects_block_credentials_downgrades_private_hops_and_loops() {
+        let original = reqwest::Url::parse("https://images.example.org/start.png").unwrap();
+        let cdn = reqwest::Url::parse("https://cdn.example.net/final.png").unwrap();
+        assert!(allow_image_redirect(&cdn, std::slice::from_ref(&original)));
+        for refused in [
+            "http://cdn.example.net/final.png",
+            "https://user:password@cdn.example.net/final.png",
+            "file:///tmp/secret.png",
+            "http://127.0.0.1/admin",
+            "https://10.0.0.1/admin",
+            "https://[::1]/admin",
+            "https://localhost/admin",
+        ] {
+            let url = reqwest::Url::parse(refused).unwrap();
+            assert!(
+                !allow_image_redirect(&url, std::slice::from_ref(&original)),
+                "{refused}"
+            );
+        }
+        assert!(!allow_image_redirect(
+            &cdn,
+            &std::array::from_fn::<_, 5, _>(|_| original.clone())
+        ));
+    }
+
+    #[tokio::test]
+    async fn approved_image_follows_cdn_redirect_but_api_requests_remain_nonredirecting() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let redirect = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let image = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let origin = format!("http://{}/source.png", redirect.local_addr().unwrap());
+        let destination = format!("http://{}/image.png", image.local_addr().unwrap());
+        let redirect_server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut client, _) = redirect.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    assert!(headers.len() < 16384);
+                    headers.push(client.read_u8().await.unwrap());
+                }
+                client.write_all(format!(
+                    "HTTP/1.1 302 Found\r\nLocation: {destination}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ).as_bytes()).await.unwrap();
+            }
+        });
+        let image_server = tokio::spawn(async move {
+            let (mut client, _) = image.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                assert!(headers.len() < 16384);
+                headers.push(client.read_u8().await.unwrap());
+            }
+            client.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 4\r\nConnection: close\r\n\r\nPNG!").await.unwrap();
+        });
+        let request = |image| NetworkRequest {
+            image,
+            id: uuid::Uuid::new_v4().to_string(),
+            url: origin.clone(),
+            method: "GET".into(),
+            headers: HashMap::new(),
+            body: None,
+        };
+        let result = network_request(request(true)).await.unwrap();
+        assert_eq!(result.status, 200);
+        assert_eq!(result.body, "data:image/png;base64,UE5HIQ==");
+        let ordinary = network_request(request(false)).await.unwrap();
+        assert_eq!(ordinary.status, 302);
+        assert!(ordinary.body.is_empty());
+        redirect_server.await.unwrap();
+        image_server.await.unwrap();
+    }
     #[test]
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     fn signed_update_dates_retain_the_js_rfc3339_contract() {

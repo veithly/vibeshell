@@ -508,7 +508,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("gateway.db");
         let database = Arc::new(Database::new_at(path.clone()).unwrap());
-        let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        // Use a reserved test port outside the OS ephemeral-client range.
+        // Releasing an ephemeral port (typically 49152+) lets unrelated,
+        // concurrent sockets claim it between the busy-port and restart
+        // assertions, making this otherwise valid regression test flaky.
+        let occupied = (25_000u16..25_256u16)
+            .find_map(|port| std::net::TcpListener::bind(("127.0.0.1", port)).ok())
+            .expect("an isolated Gateway test port is available");
         let port = occupied.local_addr().unwrap().port();
         GatewayPortSettings { port }.save(&database).unwrap();
         let start = || {
@@ -535,9 +541,12 @@ mod tests {
         drop(occupied);
         for _ in 0..2 {
             let gateway = start();
+            let status = gateway.status();
             assert_eq!(
-                gateway.status().endpoint,
-                Some(format!("http://127.0.0.1:{port}"))
+                status.endpoint,
+                Some(format!("http://127.0.0.1:{port}")),
+                "Gateway restart failed: {:?}",
+                status.error
             );
             assert!(gateway.status().error.is_none());
             drop(gateway);
