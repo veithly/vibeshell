@@ -225,6 +225,9 @@ jobs:
       PUBLISH_RELEASE: ${{ inputs.publish }}
       HAS_APPLE_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' || secrets.APPLE_SIGNING_IDENTITY != '' }}
       HAS_APPLE_NOTARIZATION: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+      # Never download into the checked-out repository's tracked assets/ folder.
+      # It contains readme/ and must not be included in release uploads/checksums.
+      RELEASE_ASSETS: ${{ github.workspace }}/vibeshell-release-assets-staging
     steps:
       - uses: actions/checkout@v4
         with:
@@ -235,19 +238,20 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
-          path: assets
+          path: ${{ env.RELEASE_ASSETS }}
           merge-multiple: true
       - name: Verify and generate updater manifest
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y minisign
-          python3 scripts/verify-updater.py assets
-          node scripts/generate-latest-json.js assets "$VERSION" "$TAG" "$GITHUB_REPOSITORY"
-          test -s "assets/VibeShell-Source-$VERSION.tar.gz"
-          cp LICENSE NOTICE assets/
-          cp licenses/legacy-MIT.txt assets/legacy-MIT.txt
-          (cd assets && sha256sum ./* > SHA256SUMS.txt)
+          python3 scripts/verify-updater.py "$RELEASE_ASSETS"
+          node scripts/generate-latest-json.js "$RELEASE_ASSETS" "$VERSION" "$TAG" "$GITHUB_REPOSITORY"
+          test -s "$RELEASE_ASSETS/VibeShell-Source-$VERSION.tar.gz"
+          cp LICENSE NOTICE "$RELEASE_ASSETS/"
+          cp licenses/legacy-MIT.txt "$RELEASE_ASSETS/legacy-MIT.txt"
+          test -z "$(find "$RELEASE_ASSETS" -mindepth 1 -type d -print -quit)"
+          (cd "$RELEASE_ASSETS" && find . -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt)
       - name: Upload verified assets; publish only when explicitly requested
         run: |
           set -euo pipefail
@@ -262,7 +266,7 @@ jobs:
           else
             printf '\nApple signing and notarization were configured; successful bundling completed before publication.\n' >> "$RUNNER_TEMP/notes.md"
           fi
-          gh release upload "$TAG" assets/* --clobber
+          gh release upload "$TAG" "$RELEASE_ASSETS"/* --clobber
           if [[ "$PUBLISH_RELEASE" == 'true' ]]; then
             gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --draft=false --latest
             echo "Published verified release $TAG." >> "$GITHUB_STEP_SUMMARY"
