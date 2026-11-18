@@ -303,7 +303,7 @@
     "dayMode": "日间模式",
     "nightMode": "夜间模式",
     "terminalBackgroundOpacity": "终端底色遮罩",
-    "terminalBackgroundOpacityDesc": "只调整终端底色，不改变文字透明度。降低数值可透出更多窗后内容；90% 适合专注阅读。",
+    "terminalBackgroundOpacityDesc": "只调整终端底色，不影响文字清晰度。降低数值可更明显地看到窗后的毛玻璃；60% 平衡通透与可读性。",
     "windowMaterialOpacity": "窗体底色浓度",
     "windowMaterialOpacityDesc": "控制顶栏和面板覆盖在原生毛玻璃上的中性底色。数值越低越通透，100% 为实色。macOS 透出真实桌面；其他平台使用实色背景。",
     "themeModeDesc": "可手动选择主题，或跟随系统的日夜模式自动切换。",

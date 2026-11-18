@@ -25,7 +25,7 @@
     --safe-area-bottom: env(safe-area-inset-bottom, 0px);
     --safe-area-left: env(safe-area-inset-left, 0px);
     --vibe-titlebar-height: 48px;
-    --vibe-terminal-mask: 90%;
+    --vibe-terminal-mask: 60%;
     --vibe-terminal-surface: color-mix(in srgb, var(--tokyo-bg) var(--vibe-terminal-mask), transparent);
     --vibe-chrome: color-mix(in srgb, var(--tokyo-bg-dark) 94%, var(--tokyo-blue));
     --vibe-tab: color-mix(in srgb, var(--tokyo-bg-dark) 90%, var(--tokyo-bg-hl));

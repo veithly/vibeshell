@@ -59,7 +59,9 @@ export function isLightTheme(theme: ThemeName): boolean {
   return theme === 'paper-white' || theme === 'warm-ivory';
 }
 
-export const DEFAULT_TERMINAL_BACKGROUND_OPACITY = 0.9;
+// Preserve readable glyphs while letting native macOS glass show through
+// without requiring users to discover a hidden appearance slider first.
+export const DEFAULT_TERMINAL_BACKGROUND_OPACITY = 0.6;
 export const DEFAULT_WINDOW_MATERIAL_OPACITY = 0.12;
 
 export function normalizeWindowMaterialOpacity(value: unknown): number {

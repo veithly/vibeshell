@@ -236,6 +236,9 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            platform::configure_native_glass(app);
+
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             commands::local_files::install_workspace_menu(app)?;
             if let Ok(cwd) = std::env::current_dir() {
@@ -422,6 +425,7 @@ pub fn run() {
             commands::history::agent_activity_list,
             open_devtools,
             commands::workspace_window::workspace_pointer_state,
+            commands::workspace_window::workspace_configure_native_glass,
             commands::workspace_window::workspace_exit,
             commands::workspace_window::workspace_save_handler_ready,
             open_external_url,

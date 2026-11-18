@@ -15,6 +15,7 @@ import { captureWindowGeometry, restoreWindowGeometry, trackWindowGeometry } fro
 import { dragNativeWindow, requestDock } from '../../lib/nativeDock';
 import { setTextBufferLocked, waitForTextSave } from '../../lib/fileEditBuffer';
 import { withDeadline } from '../../lib/deadline';
+import { invokeOrThrow } from '../../lib/tauri';
 
 const FileWorkspace = lazy(() => import('../FileWorkspace').then((module) => ({ default: module.FileWorkspace })));
 type Handoff = NonNullable<ReturnType<typeof readHandoff>>;
@@ -23,6 +24,12 @@ function bootstrapWindow(): Promise<Handoff> {
   if (bootstrap) return bootstrap;
   bootstrap = (async () => {
     const native = getCurrentWindow();
+    // Detached windows are created after Tauri startup, so the main window's
+    // AppKit material setup does not cover them. The native command is a no-op
+    // off macOS and preserves the older macOS fallback.
+    await invokeOrThrow('workspace_configure_native_glass').catch((reason) => {
+      console.warn('[Workspace] Detached native glass unavailable:', reason);
+    });
     const handoff = readHandoff(native.label);
     if (!handoff) throw new Error('Window content handoff is missing');
     hydrateTransfer(handoff.snapshot);
