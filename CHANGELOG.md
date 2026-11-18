@@ -1,10 +1,10 @@
 # Changelog
 
-## 1.2.0 — Unreleased
+## 1.2.0 — 2026-11-18
 
 ### Container sessions, outbound routing and Gateway preferences
 
-Running Docker containers can open as independent persistent child sessions, with a shared immutable container context across terminal/CLI/MCP/plugin execution and explicit teardown isolation. Native outbound requests support HTTP/HTTPS/SOCKS4/4a/5/5h routing, encrypted proxy credentials and fail-closed errors. Agent Gateway ports are configurable and persisted, with occupied-port errors that leave Settings accessible. See [setup and support boundaries](docs/NETWORK_AND_CONTAINERS.md). These changes do not publish a release or replace an installed application.
+Running Docker containers can open as independent persistent child sessions, with a shared immutable container context across terminal/CLI/MCP/plugin execution and explicit teardown isolation. Native outbound requests support HTTP/HTTPS/SOCKS4/4a/5/5h routing, encrypted proxy credentials and fail-closed errors. Approved remote Markdown images follow bounded, validated HTTP(S) redirects through that same network policy. Agent Gateway ports are configurable and persisted, with occupied-port errors that leave Settings accessible. See [setup and support boundaries](docs/NETWORK_AND_CONTAINERS.md). Installing this release does not automatically replace a running application.
 
 ### A more flexible, translucent desktop workspace
 
@@ -26,7 +26,7 @@ Teleport profiles use the current shared-session owner, authenticated PTY readin
 
 The English, Simplified Chinese and Japanese READMEs focus on practical workflows: mixing several terminals/plugins/previews in one window, command completion, editing and previewing files over SFTP, and reviewing Agent activity. Gallery images show the current interface with synthetic example data; the macOS glass screenshots were captured in an isolated virtual display rather than over an operator's desktop.
 
-Desktop, CLI, Tauri, Cargo workspace packages and agent plugin metadata move together to version **1.2.0**. This entry describes the proposed source update, not a published release or an already installed application.
+Desktop, CLI, Tauri, Cargo workspace packages and agent plugin metadata are aligned at version **1.2.0**. Updating an installed application and its native CLI is a separate step from the published source release; save active sessions before restarting.
 
 ## 1.1.0 — 2026-09-18
 
