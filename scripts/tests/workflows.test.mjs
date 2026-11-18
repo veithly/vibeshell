@@ -80,6 +80,19 @@ test('release is restricted to main and defaults to an unpublished draft', () =>
   assert.doesNotMatch(text, /inputs\.tag \|\| github\.ref_name/);
 });
 
+test('release staging excludes tracked README imagery and never hashes its own checksum file', () => {
+  const text = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+  const publish = text.split(/^  publish:\n/m)[1];
+  assert.ok(publish, 'Expected a dedicated final release job');
+  assert.match(publish, /RELEASE_ASSETS: \$\{\{ github\.workspace \}\}\/vibeshell-release-assets-staging/);
+  assert.match(publish, /path: \$\{\{ env\.RELEASE_ASSETS \}\}/);
+  assert.match(publish, /python3 scripts\/verify-updater\.py "\$RELEASE_ASSETS"/);
+  assert.match(publish, /find \. -maxdepth 1 -type f ! -name 'SHA256SUMS\.txt'/);
+  assert.match(publish, /sha256sum -c SHA256SUMS\.txt/);
+  assert.match(publish, /gh release upload "\$TAG" "\$RELEASE_ASSETS"\/\* --clobber/);
+  assert.doesNotMatch(publish, /(?:path: assets\s*$|sha256sum \.\/\*|gh release upload "\$TAG" assets\/\*)/m);
+});
+
 test('manual CI reports evidence-backed statuses without granting write access to builds', () => {
   const text = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
   for (const id of ['check-frontend', 'check-backend', 'check-clippy']) {
