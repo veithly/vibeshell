@@ -105,6 +105,7 @@ pub async fn spawn_tsh_ssh(
     rows: u32,
     output: mpsc::Sender<Vec<u8>>,
 ) -> Result<TeleportPty> {
+    crate::network::require_native_route_compatible_transport("Teleport tsh")?;
     let nonce = uuid::Uuid::new_v4().simple().to_string();
     let marker = format!("\x1b]999;vibeshell-ready;{nonce}\x07").into_bytes();
     let startup = format!(

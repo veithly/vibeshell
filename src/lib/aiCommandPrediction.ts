@@ -145,7 +145,7 @@ async function predictWithOpenAi(
   prompt: string,
   signal?: AbortSignal
 ): Promise<string> {
-  const response = await fetch(`${trimBaseUrl(settings.baseUrl)}/chat/completions`, {
+  const response = await networkFetch(`${trimBaseUrl(settings.baseUrl)}/chat/completions`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${settings.apiKey.trim()}`,
@@ -183,7 +183,7 @@ async function predictWithClaude(
   prompt: string,
   signal?: AbortSignal
 ): Promise<string> {
-  const response = await fetch(`${trimBaseUrl(settings.baseUrl)}/messages`, {
+  const response = await networkFetch(`${trimBaseUrl(settings.baseUrl)}/messages`, {
     method: 'POST',
     headers: {
       'x-api-key': settings.apiKey.trim(),
@@ -290,3 +290,4 @@ export function normalizePredictionToSuffix(input: string, rawPrediction: string
 
   return prediction;
 }
+import { networkFetch } from './network';

@@ -269,6 +269,7 @@ fn parse_remote_session_state(state: &str) -> crate::session::SessionState {
 
 fn map_remote_session(info: IpcSessionInfo) -> SessionInfo {
     SessionInfo {
+        container: info.container,
         id: info.id,
         server_id: info.server_id,
         server_name: info.server_name,

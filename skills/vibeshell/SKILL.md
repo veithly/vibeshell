@@ -65,6 +65,12 @@ vibeshell import putty --path ~/putty-sessions.reg
 
 Use `--json` when structured output is more useful. Never import or expose plaintext passwords from third-party profiles. VibeShell may reference an existing private-key path and reads that local key only when establishing a connection.
 
+## Container sessions and outbound proxies
+
+Use `vibeshell containers list --session PARENT_ID` to inspect a connected SSH host. `vibeshell containers open --session PARENT_ID CONTAINER_ID` creates an independent persistent child; optional `--user`, `--workdir` and `--shell` specify its context. Prefer full IDs. Reuse the returned child ID with `attach`, `ssh-session`, `send-key` and plugin actions. Do not automatically start stopped containers or use sudo. Container file/SFTP and tunnel operations are explicitly unsupported: never substitute the host filesystem or host shell. Closing the child does not stop its container or parent session.
+
+Inspect native outbound routing with `vibeshell proxy show`. With user authorization, set `vibeshell proxy set --mode custom --url socks5h://127.0.0.1:1080`, or select `--mode direct` / `--mode system`. Proxy passwords belong in protected stdin (`--password-stdin`) or Settings, never arguments or URLs. Existing SSH sessions retain their route until reconnected. A proxy failure must not be retried directly. Teleport's profile proxy is separate; external `tsh` refuses to run when it cannot enforce the selected native outbound policy.
+
 ## SSH sessions and remote commands
 
 Open or reuse a persistent terminal session:

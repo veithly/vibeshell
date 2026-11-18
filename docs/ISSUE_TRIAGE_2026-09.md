@@ -1,5 +1,9 @@
 # September 2026 PR and issue review
 
+## November 17 implementation update
+
+The current development work implements #9 persistent Docker child sessions, #12 native outbound proxy routing and #19 persisted Gateway ports. The September statements below are historical, not the current feature inventory. See [implementation, verification and explicit support boundaries](NETWORK_AND_CONTAINERS.md). Issues are not closed merely by submitting the PR; review, merge and release remain separate steps.
+
 Reviewed on **2026-09-29**. This document distinguishes implemented changes from proposed work. The application version remains 1.1.0; changing source does not update an installed application or publish a release.
 
 ## November 17 integration follow-up

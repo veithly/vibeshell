@@ -70,6 +70,8 @@ pub struct IpcServerInfo {
 /// Session metadata returned to CLI for `vibeshell sessions`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcSessionInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<crate::session::container::ContainerContext>,
     pub id: String,
     pub server_id: String,
     pub server_name: String,
@@ -91,6 +93,20 @@ pub enum IpcEndpointStatus {
     Reachable,
     Occupied,
     NotRunning,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OwnerToolArguments(pub serde_json::Value);
+impl From<serde_json::Value> for OwnerToolArguments {
+    fn from(value: serde_json::Value) -> Self {
+        Self(value)
+    }
+}
+impl std::fmt::Debug for OwnerToolArguments {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[REDACTED]")
+    }
 }
 
 #[derive(Debug)]
@@ -141,6 +157,12 @@ pub enum IpcMessage {
     },
     /// List all active sessions
     ListSessions,
+    /// Gateway-to-owner forwarding. The owner re-applies MCP guards; an IPC
+    /// caller cannot claim that an agent command has already been approved.
+    McpSessionCall {
+        tool: String,
+        arguments: OwnerToolArguments,
+    },
     SessionService {
         request: super::runtime_services::RuntimeRequest,
     },
@@ -660,6 +682,10 @@ fn listener_options(socket_name: SocketName) -> Result<ListenerOptions<'static>>
 /// credentials never reach the log output.
 fn redact_for_log(message: &IpcMessage) -> IpcMessage {
     match message {
+        IpcMessage::McpSessionCall { tool, .. } => IpcMessage::McpSessionCall {
+            tool: tool.clone(),
+            arguments: serde_json::Value::Null.into(),
+        },
         IpcMessage::AddServer { .. } => IpcMessage::AddServer {
             spec: crate::commands::server::AddServerSpec::default(),
         },
@@ -1239,6 +1265,8 @@ impl IpcServer {
                 ..
             } | IpcMessage::ExecQuickCommand {session_id, command} => descriptions.push(("cli.exec".into(), Some(session_id.clone()), command.clone())),
             IpcMessage::ListSessions if cli => descriptions.push(("cli.sessions".into(), None, "List sessions".into())),
+            IpcMessage::SessionService { request: crate::ipc::runtime_services::RuntimeRequest::ContainerList { parent_session_id } } if cli => descriptions.push(("cli.container_list".into(), Some(parent_session_id.clone()), "List Docker containers".into())),
+            IpcMessage::SessionService { request: crate::ipc::runtime_services::RuntimeRequest::ContainerOpen { request } } if cli => descriptions.push(("cli.container_open".into(), Some(request.parent_session_id.clone()), format!("Open container {}", request.container))),
             IpcMessage::ListServers if cli => descriptions.push(("cli.servers".into(), None, "List servers".into())),
             IpcMessage::AddServer { .. } if cli => descriptions.push(("cli.server_add".into(), None, "Add saved server (credentials omitted)".into())),
             IpcMessage::DeleteServer { .. } if cli => descriptions.push(("cli.server_delete".into(), None, "Delete saved server".into())),
@@ -1364,6 +1392,21 @@ impl IpcServer {
             other => other,
         };
         match message {
+            IpcMessage::McpSessionCall { tool, arguments } => {
+                let tracker = session_manager.agent_input_tracker.clone();
+                let state = crate::mcp::server::McpState::new(database, session_manager)
+                    .with_agent_input_tracker(tracker);
+                match rt.block_on(crate::mcp::server::execute_owner_tool(
+                    &state,
+                    &tool,
+                    &arguments.0,
+                )) {
+                    Ok(content) => IpcMessage::ServiceResult {
+                        value: serde_json::json!(content),
+                    },
+                    Err(message) => IpcMessage::Error { message },
+                }
+            }
             IpcMessage::SessionService { request } => {
                 match rt.block_on(super::runtime_services::dispatch(&session_manager, request)) {
                     Ok(value) => IpcMessage::ServiceResult { value },
@@ -1480,6 +1523,7 @@ impl IpcServer {
                         .await
                         .into_iter()
                         .map(|s| IpcSessionInfo {
+                            container: s.container.clone(),
                             id: s.id.clone(),
                             server_id: s.server_id.clone(),
                             server_name: s.server_name.clone(),
@@ -2954,6 +2998,11 @@ mod tests {
 
     #[test]
     fn command_secrets_are_redacted_and_exit_codes_roundtrip() {
+        let forwarded = IpcMessage::McpSessionCall { tool: "plugin_execute".into(), arguments: serde_json::json!({"sudoPassword":"sentinel-forwarded-secret", "inputs":{"password":"sentinel-forwarded-secret"}}).into() };
+        assert!(!format!("{forwarded:?}").contains("sentinel"));
+        assert!(!serde_json::to_string(&redact_for_log(&forwarded))
+            .unwrap()
+            .contains("sentinel"));
         for message in [
             IpcMessage::ExecCommand {
                 session_id: "s".into(),

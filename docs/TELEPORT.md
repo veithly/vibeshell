@@ -41,3 +41,7 @@ Subprocess input/output is bounded and drained concurrently. Commands have deadl
 This transport supports desktop platforms with a compatible installed `tsh`. Mobile Teleport sessions, using a Teleport profile as a raw SSH jump host, raw SSH port/agent-forwarding options and SSH tunnels through a Teleport session are not supported. These operations must not silently fall back to an unrelated SSH host or credential.
 
 Automated regressions use isolated subprocesses, a `tsh`-shaped fixture and real SFTP protocol messages, not user profiles or cluster credentials. They cover authentication failure, PTY readiness/EOF, input/output deadlocks and limits, cancellation, shared-session command dispatch, binary transfers, overwrite refusal, exact paths, ignore retention and sync counts. A real cluster's client version, access policy, MFA configuration and availability of an external SFTP server still require environment-specific acceptance testing.
+
+## Outbound network policy
+
+The profile proxy above is a Teleport cluster address, not the application HTTP/SOCKS proxy. The external `tsh` process cannot enforce VibeShell's native outbound route; when such a route is active, Teleport connections/exec/import/SFTP fail explicitly before starting a process rather than bypassing it. Native SSH supports the configured route. See [network scope](NETWORK_AND_CONTAINERS.md).

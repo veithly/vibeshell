@@ -1,6 +1,7 @@
 import { createElement, memo, useDeferredValue, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { safeInvoke } from '../../lib/tauri';
+import { networkImageUrl } from '../../lib/network';
 import { getBrowserMimeType, getFileViewerKind } from '../../lib/fileWorkspace';
 import { decodeBase64 } from '../../lib/archivePreview';
 import { openLocalFiles } from '../../lib/localFiles';
@@ -29,7 +30,13 @@ function DocumentImage({ src, alt, tab }: { src: string; alt: string; tab: FileW
   useEffect(() => {
     let disposed = false; let objectUrl: string | undefined;
     setUrl(null); setError('');
-    if (external) return;
+    if (external) {
+      if (approvedSource !== external) return;
+      const abort = new AbortController();
+      void networkImageUrl(external, abort.signal).then(value => { if (!disposed) setUrl(value); })
+        .catch(reason => { if (!disposed) setError(String(reason)); });
+      return () => { disposed = true; abort.abort(); };
+    }
     const path = resolveDocumentPath(src, tab.path);
     const directory = tab.path.slice(0, tab.path.lastIndexOf('/') + 1);
     if (!path || !path.startsWith(directory) || getFileViewerKind(path) !== 'image') { setError('blocked-image'); return; }
@@ -42,10 +49,10 @@ function DocumentImage({ src, alt, tab }: { src: string; alt: string; tab: FileW
       setUrl(objectUrl);
     }).catch(reason => { if (!disposed) setError(String(reason)); });
     return () => { disposed = true; if (objectUrl) URL.revokeObjectURL(objectUrl); };
-  }, [src, external, tab.source, tab.path, tab.sessionId]);
+  }, [src, external, approvedSource, tab.source, tab.path, tab.sessionId]);
   if (external && approvedSource !== external) return <button type="button" className="workspace-action" onClick={() => setApprovedSource(external)} title={external}>{t('markdown.loadImage')}: {alt || t('markdown.image')}</button>;
   if (error) return <span role="note" className="text-tokyo-comment">[{alt || t('markdown.image')}: {error === 'blocked-image' ? t('markdown.blockedImage') : error}]</span>;
-  return (external || url) ? <img src={external ?? url!} alt={alt} loading="lazy" referrerPolicy="no-referrer" /> : <span>{alt}</span>;
+  return url ? <img src={url} alt={alt} loading="lazy" referrerPolicy="no-referrer" /> : <span>{alt}</span>;
 }
 function DocumentLink({ href, children, tab }: { href: string; children: ReactNode; tab: FileWorkspaceTab }) {
   const external = externalUrl(href);

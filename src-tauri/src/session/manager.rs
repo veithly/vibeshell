@@ -347,7 +347,7 @@ impl SessionManager {
 
         let mut reusable = Vec::new();
         for session in sessions {
-            if session.server_name != server_name {
+            if session.server_name != server_name || session.container.is_some() {
                 continue;
             }
 
@@ -399,7 +399,22 @@ impl SessionManager {
         };
 
         let mut stale_ids = Vec::new();
-        for session in sessions {
+        for session in &sessions {
+            let mut has_child = false;
+            for child in &sessions {
+                if child
+                    .container
+                    .as_ref()
+                    .is_some_and(|c| c.parent_session_id == session.id)
+                    && child.get_state().await == SessionState::Connected
+                {
+                    has_child = true;
+                    break;
+                }
+            }
+            if has_child {
+                continue;
+            }
             if session.should_reap(max_idle).await {
                 stale_ids.push(session.id.clone());
             }
@@ -430,6 +445,126 @@ impl SessionManager {
             .server_get_by_name(server_name)?
             .ok_or_else(|| anyhow!("Server not found: {}", server_name))?;
         self.create_for_server(&server).await
+    }
+
+    pub async fn list_containers(
+        &self,
+        parent_id: &str,
+    ) -> Result<Vec<super::container::ContainerInfo>> {
+        let parent = self
+            .get(parent_id)
+            .await
+            .ok_or_else(|| anyhow!("Parent session not found"))?;
+        anyhow::ensure!(
+            parent.container.is_none(),
+            "Nested container discovery is not supported"
+        );
+        anyhow::ensure!(
+            parent.get_state().await == SessionState::Connected,
+            "Connect the parent SSH session first"
+        );
+        let output = parent
+            .exec_quick_command("docker ps --all --no-trunc --format '{{json .}}'")
+            .await?;
+        anyhow::ensure!(output.exit_code == 0, "Docker inventory failed; check Docker installation and permissions (no automatic sudo)");
+        output
+            .output
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).map_err(Into::into))
+            .collect()
+    }
+
+    pub async fn create_container(
+        &self,
+        request: super::container::ContainerOpenRequest,
+    ) -> Result<Arc<Session>> {
+        use super::container::{quote, validate_request, ContainerContext, Inspect};
+        validate_request(&request)?;
+        let parent = self
+            .get(&request.parent_session_id)
+            .await
+            .ok_or_else(|| anyhow!("Parent session not found"))?;
+        anyhow::ensure!(
+            parent.container.is_none(),
+            "Nested container sessions are not supported"
+        );
+        anyhow::ensure!(
+            parent.get_state().await == SessionState::Connected,
+            "Parent session is not connected"
+        );
+        let client = parent.get_ssh_client().await.ok_or_else(|| anyhow!("Container PTYs currently require a direct SSH parent; this transport cannot open an independent channel"))?;
+        let inspect = format!(
+            "docker inspect --type container --format '{}' -- {}",
+            r#"{"id":{{json .Id}},"name":{{json .Name}},"running":{{json .State.Running}}}"#,
+            quote(&request.container)
+        );
+        let result = parent.exec_quick_command(&inspect).await?;
+        anyhow::ensure!(
+            result.exit_code == 0,
+            "Docker inspect failed; container was not opened"
+        );
+        let context = ContainerContext::from_inspect(
+            request,
+            serde_json::from_str::<Inspect>(&result.output)?,
+        )?;
+        let nonce = uuid::Uuid::new_v4().simple().to_string();
+        let marker = format!("\x1b]999;vibeshell-container;{nonce}\x07");
+        let start = format!(
+            "printf '\\033]999;vibeshell-container;{nonce}\\007'; exec {} -il",
+            quote(&context.shell)
+        );
+        let (input, mut inputs) = tokio::sync::mpsc::channel(256);
+        let (output, _) = tokio::sync::broadcast::channel(256);
+        let (terminal_output, mut bytes) = tokio::sync::mpsc::channel(256);
+        let mut child_client = client.fork_terminal(terminal_output);
+        child_client
+            .open_exec_terminal(
+                &context.command(&start, true),
+                marker.as_bytes(),
+                Some(PtyConfig::default()),
+            )
+            .await?;
+        let mut child = Session::new(
+            parent.server_id.clone(),
+            format!(
+                "{} / {} [{}]",
+                parent.server_name,
+                context.name,
+                &context.container_id[..12]
+            ),
+            input,
+            output,
+        );
+        child.container = Some(context);
+        let child = Arc::new(child);
+        child.set_ssh_client(child_client).await;
+        child.set_state(SessionState::Connected).await;
+        let weak = Arc::downgrade(&child);
+        tokio::spawn(async move {
+            while let Some(data) = inputs.recv().await {
+                let Some(child) = weak.upgrade() else {
+                    break;
+                };
+                if child.write_to_ssh(&data).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let weak = Arc::downgrade(&child);
+        tokio::spawn(async move {
+            while let Some(data) = bytes.recv().await {
+                let Some(child) = weak.upgrade() else {
+                    break;
+                };
+                child.publish_output(data).await;
+            }
+        });
+        self.sessions
+            .write()
+            .await
+            .insert(child.id.clone(), child.clone());
+        Ok(child)
     }
 
     async fn create_for_server(&self, server: &Server) -> Result<Arc<Session>> {
@@ -621,6 +756,7 @@ impl SessionManager {
 
             // Now connect the target SSH through our local bridge
             let mut ssh_client = SshClient::new(ssh_output_tx);
+            ssh_client.use_internal_bridge();
             // TOFU: the SSH handshake traverses the jump tunnel, so the key
             // presented during this handshake belongs to the TARGET server.
             // Verify it under the target's real identity, not the local
@@ -913,6 +1049,8 @@ impl SessionManager {
                 anyhow!("Session not found: {}", session_id)
             })?
         };
+
+        anyhow::ensure!(session.container.is_none(), "Container sessions cannot reconnect as a host shell; open a new container session from its connected parent");
 
         // Get server info
         let server = self

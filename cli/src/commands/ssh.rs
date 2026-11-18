@@ -163,6 +163,7 @@ mod tests {
 
     fn session(id: &str, server_name: &str, state: &str, created_at: i64) -> IpcSessionInfo {
         IpcSessionInfo {
+            container: None,
             id: id.to_string(),
             server_id: format!("server-{server_name}"),
             server_name: server_name.to_string(),

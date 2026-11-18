@@ -16,6 +16,7 @@ pub fn run(
     user: Option<String>,
 ) -> Result<()> {
     let preview = if source == ImportSourceKind::Teleport {
+        vibeshell_core::network::initialize(std::sync::Arc::new(vibeshell_core::Database::new()?));
         if path.is_some() {
             bail!("Teleport uses --proxy, not --path");
         }

@@ -206,6 +206,10 @@ vibeshell plugins list --installed --json
 
 [CLI のインストールとコマンド](cli/README.md) · [機能・プラットフォーム詳細](docs/FEATURES.md) · [変更履歴](CHANGELOG.md)
 
+### コンテナとネットワーク設定
+
+**コンテナごとに独立したターミナル。** SSH セッションの **More → Docker containers** から実行中のコンテナを選ぶと、ターミナル・ネイティブ CLI・MCP・プラグインの実行先がそのコンテナに固定されます。停止中のコンテナは自動起動しません。設定では HTTP/HTTPS/SOCKS の送信プロキシと Agent Gateway の固定ポートも指定できます。[設定と対応範囲](docs/NETWORK_AND_CONTAINERS.md)。
+
 ### Teleport ノード
 
 開発ブランチでは、デスクトップとネイティブ `vibeshell` CLI で Teleport 接続を管理できます。`tsh` でログインしてから `vibeshell servers add alice@node --type teleport --proxy proxy.example:443` で登録し、同じターミナル・コマンド・ファイル操作を利用します。ファイル操作にはノード上で実行できる標準 SFTP サーバーが必要です。未対応の構成は明示的にエラーを返します。[設定と対応範囲](docs/TELEPORT.md)。
