@@ -110,6 +110,7 @@ pub async fn network_request(request: NetworkRequest) -> Result<NetworkResponse,
     let route = Route::current().map_err(|e| e.to_string())?;
     let client = route
         .configure_http(reqwest::Client::builder())
+        .user_agent(concat!("VibeShell/", env!("CARGO_PKG_VERSION")))
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(30))
@@ -200,6 +201,15 @@ pub async fn network_request(request: NetworkRequest) -> Result<NetworkResponse,
 /// Keep the updater's own signature verification and installation, but create
 /// its HTTP clients with the same policy. No proxy password crosses to JS.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn update_timestamp_rfc3339(seconds: i64, nanoseconds: u32) -> Result<String, String> {
+    // Match the updater plugin's JS metadata contract. OffsetDateTime's Display
+    // output is not RFC 3339 and is not portable across WebView date parsers.
+    chrono::DateTime::from_timestamp(seconds, nanoseconds)
+        .map(|date| date.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
+        .ok_or_else(|| "Invalid signed update timestamp".into())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 pub async fn network_check_update(
     webview: tauri::Webview,
@@ -220,8 +230,12 @@ pub async fn network_check_update(
     else {
         return Ok(None);
     };
+    let date = update
+        .date
+        .map(|date| update_timestamp_rfc3339(date.unix_timestamp(), date.nanosecond()))
+        .transpose()?;
     let mut metadata = serde_json::json!({ "rid":0, "currentVersion":update.current_version, "version":update.version,
-        "date":update.date.map(|d| d.to_string()), "body":update.body, "rawJson":update.raw_json });
+        "date":date, "body":update.body, "rawJson":update.raw_json });
     metadata["rid"] = serde_json::json!(webview.resources_table().add(update));
     Ok(Some(metadata))
 }
@@ -234,6 +248,51 @@ pub async fn network_check_update() -> Result<Option<serde_json::Value>, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn signed_update_dates_retain_the_js_rfc3339_contract() {
+        let date = update_timestamp_rfc3339(0, 123_456_789).unwrap();
+        assert_eq!(date, "1970-01-01T00:00:00.123456789Z");
+        let parsed = chrono::DateTime::parse_from_rfc3339(&date).unwrap();
+        assert_eq!(parsed.timestamp_nanos_opt(), Some(123_456_789));
+        assert!(update_timestamp_rfc3339(i64::MAX, 0).is_err());
+    }
+
+    #[tokio::test]
+    async fn native_http_keeps_api_headers_and_identifies_the_application() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let server = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}/releases/latest", server.local_addr().unwrap());
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = server.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                assert!(head.len() < 16_384);
+                head.push(socket.read_u8().await.unwrap());
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+            String::from_utf8(head).unwrap().to_ascii_lowercase()
+        });
+        let response = network_request(NetworkRequest {
+            image: false,
+            id: uuid::Uuid::new_v4().to_string(),
+            url,
+            method: "GET".into(),
+            headers: HashMap::from([("Accept".into(), "application/vnd.github+json".into())]),
+            body: None,
+        })
+        .await
+        .unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, "{}");
+        let head = peer.await.unwrap();
+        assert!(head.contains("accept: application/vnd.github+json\r\n"));
+        assert!(head.contains(&format!("user-agent: vibeshell/{}\r\n", env!("CARGO_PKG_VERSION"))),
+            "The native HTTP bridge must identify VibeShell; GitHub rejects missing User-Agent headers");
+    }
+
     #[tokio::test]
     async fn early_and_inflight_cancellation_are_bounded_and_release_slots() {
         let id = uuid::Uuid::new_v4().to_string();
