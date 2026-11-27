@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { MoreHorizontal } from 'lucide-react';
+import { Check, MoreHorizontal } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { focusMenuItem, handleMenuNavigation } from '../../lib/menuNavigation';
 import type { MobileWorkspaceMenuItem } from '../MobileWorkspaceActions/MobileWorkspaceActions';
 
 export type WorkspaceMenuItem = MobileWorkspaceMenuItem;
@@ -23,6 +24,7 @@ export function WorkspaceToolbar({ label, items, anyPressed = false }: Workspace
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -31,7 +33,7 @@ export function WorkspaceToolbar({ label, items, anyPressed = false }: Workspace
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); }
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
@@ -41,6 +43,8 @@ export function WorkspaceToolbar({ label, items, anyPressed = false }: Workspace
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [open]);
+
+  useEffect(() => { if (open) focusMenuItem(menuRef.current); }, [open]);
 
   const run = (action: () => void) => {
     triggerRef.current?.focus();
@@ -65,9 +69,11 @@ export function WorkspaceToolbar({ label, items, anyPressed = false }: Workspace
 
       {open && (
         <div
+          ref={menuRef}
           role="menu"
           aria-label={label}
-          className="glass-menu absolute right-0 top-full z-50 mt-2 max-h-[70vh] w-56 overflow-y-auto rounded-xl p-1.5"
+          className="glass-menu glass-menu-popover absolute right-0 top-full z-50 mt-2 w-60"
+          onKeyDown={handleMenuNavigation}
         >
           {items.map((item) => (
             <button
@@ -75,8 +81,7 @@ export function WorkspaceToolbar({ label, items, anyPressed = false }: Workspace
               type="button"
               role="menuitem"
               className={cn(
-                'flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-tokyo-fg transition-colors',
-                'hover:bg-tokyo-bg-hl focus:outline-none focus:ring-1 focus:ring-inset focus:ring-tokyo-blue',
+                'glass-menu-item',
                 item.disabled && 'cursor-not-allowed opacity-50 hover:bg-transparent',
                 item.pressed && 'bg-tokyo-selection'
               )}
@@ -84,8 +89,9 @@ export function WorkspaceToolbar({ label, items, anyPressed = false }: Workspace
               aria-pressed={item.pressed}
               onClick={() => run(item.onSelect)}
             >
-              {item.icon}
-              <span>{item.label}</span>
+              <span className="glass-menu-icon">{item.icon}</span>
+              <span className="glass-menu-label">{item.label}</span>
+              {item.pressed && <Check className="glass-menu-check" aria-hidden="true" />}
             </button>
           ))}
         </div>

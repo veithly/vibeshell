@@ -15,7 +15,7 @@
         "devtools": true,
         "dragDropEnabled": false,
         "transparent": true,
-        "shadow": true,
+        "shadow": false,
         "windowEffects": {
           "effects": ["sidebar"],
           "state": "active",

@@ -36,7 +36,7 @@ export function ContainerPanel({ parentId, onClose, onConnected }: { parentId: s
   };
   const running = items.filter(item => item.State === 'running');
   const stopped = items.filter(item => item.State !== 'running');
-  return <aside aria-label="Docker containers" className="glass-panel w-80 max-w-[90vw] shrink-0 overflow-y-auto border-l border-tokyo-bg-hl p-4">
+  return <aside aria-label="Docker containers" className="glass-panel glass-form w-80 max-w-[90vw] shrink-0 overflow-y-auto border-l border-tokyo-bg-hl p-4">
     <div className="mb-3 flex items-center justify-between"><h2 className="font-medium text-tokyo-fg">Docker containers</h2>
       <div className="flex"><button aria-label="Refresh containers" className="icon-button" disabled={loading || opening} onClick={() => void refresh()}><RefreshCw className="h-4 w-4" /></button><button aria-label="Close containers" className="icon-button" onClick={onClose}><X className="h-4 w-4" /></button></div></div>
     <p className="mb-3 text-xs text-tokyo-comment">Open a separate terminal inside a running container. Closing the terminal leaves the container and host session running.</p>

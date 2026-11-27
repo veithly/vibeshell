@@ -107,7 +107,7 @@ export function RedisConsole({ plugin, sessionId }: { plugin: PluginRecord; sess
       />
       <ErrorBanner message={error} onDismiss={clearError} />
 
-      <div className="flex flex-wrap gap-2 px-3 py-2">
+      <div className="glass-stat-strip">
         <StatCard
           label={t('plugins.redis.status')}
           value={pingOk === null ? '…' : pingOk ? 'PONG' : t('plugins.redis.down')}

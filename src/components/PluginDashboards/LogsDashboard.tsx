@@ -124,7 +124,7 @@ export function LogsDashboard({ plugin, sessionId }: { plugin: PluginRecord; ses
         )}
       </div>
 
-      <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto bg-tokyo-bg p-2">
+      <div ref={bodyRef} className="min-h-0 flex-1 overflow-auto p-3">
         {visibleLines === null ? (
           <div className="flex h-full items-center justify-center gap-2 text-xs text-tokyo-comment">
             <RefreshCw className="h-4 w-4 animate-spin" />
@@ -135,7 +135,7 @@ export function LogsDashboard({ plugin, sessionId }: { plugin: PluginRecord; ses
             {t('common.noData')}
           </div>
         ) : (
-          <div className="rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark/40 p-2 font-mono text-[11px] leading-5">
+          <div className="glass-code-output p-3 font-mono text-[11px] leading-5">
             {visibleLines.map((line, index) => (
               <div key={index} className={cn('whitespace-pre-wrap break-all', lineTone(line))}>
                 {line}

@@ -331,7 +331,7 @@ export function FileWorkspace({ tab, isActive }: FileWorkspaceProps) {
             className="max-h-full max-w-full select-none object-contain transition-transform duration-150"
             style={{ transform: `scale(${zoom}) rotate(${rotation}deg)` }}
           />
-          <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-tokyo-bg-hl bg-tokyo-bg/90 p-1">
+          <div className="glass-floating-toolbar absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1 p-1">
             <button className="icon-button" onClick={() => setZoom((value) => Math.max(0.25, value - 0.25))} aria-label={t('fileWorkspace.zoomOut')}><ZoomOut className="h-4 w-4" /></button>
             <span className="min-w-14 text-center text-xs text-tokyo-fg">{Math.round(zoom * 100)}%</span>
             <button className="icon-button" onClick={() => setZoom((value) => Math.min(5, value + 0.25))} aria-label={t('fileWorkspace.zoomIn')}><ZoomIn className="h-4 w-4" /></button>

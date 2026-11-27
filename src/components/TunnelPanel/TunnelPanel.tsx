@@ -71,7 +71,7 @@ export default function TunnelPanel({ serverId, sessionId }: TunnelPanelProps) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-tokyo-bg text-tokyo-fg">
+    <div className="glass-page glass-form flex flex-col h-full text-tokyo-fg">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
         <div className="flex items-center gap-2">
@@ -206,7 +206,7 @@ export default function TunnelPanel({ serverId, sessionId }: TunnelPanelProps) {
             <p className="text-xs mt-1">Click <span className="text-tokyo-green">+</span> to add a port forward</p>
           </div>
         ) : (
-          <div className="space-y-1.5 p-3">
+          <div className="glass-data-list">
             {configs.map(config => {
               const active = isActive(config.id);
               const activeTunnel = activeTunnels.find(t => t.config.id === config.id);
@@ -214,10 +214,10 @@ export default function TunnelPanel({ serverId, sessionId }: TunnelPanelProps) {
                 <div
                   key={config.id}
                   className={cn(
-                    'flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs transition-all duration-200',
+                    'glass-data-row flex items-center gap-3 px-3 py-3 text-xs transition-colors duration-200',
                     active
-                      ? 'bg-tokyo-green/5 border border-tokyo-green/20 shadow-sm shadow-tokyo-green/5'
-                      : 'bg-tokyo-bg-dark border border-tokyo-bg-hl hover:border-tokyo-selection'
+                      ? 'bg-tokyo-green/5'
+                      : 'hover:bg-tokyo-bg-hl/40'
                   )}
                 >
                   <span className={active ? 'text-tokyo-green' : 'text-tokyo-comment'}>

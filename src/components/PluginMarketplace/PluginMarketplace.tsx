@@ -123,6 +123,7 @@ export function PluginMarketplace() {
         <nav className="space-y-1" aria-label={t('plugins.categories')}>
           <button
             className={cn('plugin-category-button', category === 'all' && 'is-active')}
+            aria-pressed={category === 'all'}
             onClick={() => setCategory('all')}
           >
             <span>{t('plugins.allCategories')}</span>
@@ -132,6 +133,7 @@ export function PluginMarketplace() {
             <button
               key={item}
               className={cn('plugin-category-button', category === item && 'is-active')}
+              aria-pressed={category === item}
               onClick={() => setCategory(item)}
             >
               <span>{t(`plugins.category.${item}`, { defaultValue: item })}</span>
@@ -151,7 +153,7 @@ export function PluginMarketplace() {
 
       <section className="flex min-w-0 flex-1 flex-col">
         <div className="glass-toolbar flex flex-wrap items-center gap-3 border-b border-tokyo-bg-hl px-4 py-3 lg:px-6">
-          <label className="relative min-w-[220px] flex-1">
+          <label className="relative min-w-0 flex-1 basis-[160px] sm:min-w-[220px]">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-tokyo-comment" />
             <input
               value={search}
@@ -162,7 +164,7 @@ export function PluginMarketplace() {
             />
           </label>
 
-          <div className="flex h-9 rounded-md border border-tokyo-bg-hl bg-tokyo-bg p-0.5">
+          <div className="glass-segment flex h-9 items-center gap-0.5 p-0.5">
             {(['all', 'installed'] as InstallFilter[]).map((filter) => (
               <button
                 key={filter}
@@ -177,6 +179,18 @@ export function PluginMarketplace() {
               </button>
             ))}
           </div>
+
+          <select
+            className="h-9 min-w-0 max-w-full px-2 text-xs md:hidden"
+            value={category}
+            onChange={(event) => setCategory(event.target.value)}
+            aria-label={t('plugins.categories')}
+          >
+            <option value="all">{t('plugins.allCategories')}</option>
+            {categories.map(([item, count]) => (
+              <option key={item} value={item}>{t(`plugins.category.${item}`, { defaultValue: item })} ({count})</option>
+            ))}
+          </select>
 
           <button
             className="flex h-9 items-center gap-2 rounded-md border border-tokyo-bg-hl bg-tokyo-bg px-3 text-sm text-tokyo-fg transition-colors hover:border-tokyo-cyan hover:bg-tokyo-bg-hl disabled:opacity-50"
@@ -210,17 +224,18 @@ export function PluginMarketplace() {
               <p className="text-sm">{t('plugins.noResults')}</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+            <div className="plugin-catalog-list" role="list">
               {visiblePlugins.map((plugin) => {
                 const pluginId = plugin.manifest.id;
                 const busy = operationId === pluginId;
                 return (
                   <article
                     key={pluginId}
-                    className="plugin-market-card flex min-h-[238px] flex-col border border-tokyo-bg-hl bg-tokyo-bg p-4"
+                    className="plugin-catalog-row"
+                    role="listitem"
                   >
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark text-tokyo-cyan">
+                    <div className="plugin-catalog-identity flex min-w-0 items-start gap-3">
+                      <div className="plugin-catalog-icon flex h-10 w-10 flex-shrink-0 items-center justify-center text-tokyo-cyan">
                         <PluginIcon name={plugin.manifest.icon} className="h-5 w-5" />
                       </div>
                       <div className="min-w-0 flex-1">
@@ -232,7 +247,7 @@ export function PluginMarketplace() {
                             <Check className="h-4 w-4 flex-shrink-0 text-tokyo-green" />
                           )}
                         </div>
-                        <div className="mt-1 flex items-center gap-2 text-[11px] text-tokyo-comment">
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-tokyo-comment">
                           <span>{plugin.manifest.author}</span>
                           <span>v{plugin.manifest.version}</span>
                           <span className={cn(
@@ -247,11 +262,11 @@ export function PluginMarketplace() {
                       </div>
                     </div>
 
-                    <p className="mt-3 min-h-[60px] overflow-hidden text-sm leading-5 text-tokyo-comment">
+                    <div className="plugin-catalog-detail min-w-0">
+                    <p className="text-xs leading-5 text-tokyo-fg-dark">
                       {pluginText(t, plugin, 'description')}
                     </p>
-
-                    <div className="mt-3 flex flex-wrap gap-1.5 text-[10px]">
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
                       <span className="rounded border border-tokyo-bg-hl bg-tokyo-bg-dark px-2 py-1 text-tokyo-comment">
                         {plugin.manifest.sessionTypes.map((type) => type.toUpperCase()).join(' + ')}
                       </span>
@@ -261,8 +276,9 @@ export function PluginMarketplace() {
                         </span>
                       ))}
                     </div>
+                    </div>
 
-                    <div className="mt-auto flex h-9 items-center justify-between border-t border-tokyo-bg-hl pt-3">
+                    <div className="plugin-catalog-actions flex min-w-0 flex-wrap items-center justify-end gap-2">
                       {plugin.installed ? (
                         <>
                           <label className="flex cursor-pointer items-center gap-2 text-xs text-tokyo-comment">

@@ -1,6 +1,12 @@
 mod app_data;
 mod capabilities;
 
+#[cfg(target_os = "macos")]
+mod native_glass;
+
+#[cfg(target_os = "macos")]
+pub(crate) use native_glass::{configure_native_glass, configure_native_glass_window};
+
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) use app_data::{copy_legacy_app_data, APP_BUNDLE_IDENTIFIER};
 pub(crate) use app_data::{

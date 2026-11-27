@@ -120,7 +120,7 @@ async function run() {
     assert(state.bodyBackground === 'rgba(0, 0, 0, 0)', 'WebView body blocks native material');
     assertClearAncestors(visible('.terminal-viewport')[0]);
     assertClearAncestors(visible('.titlebar-shell')[0]);
-    assert(!state.tabBackground.startsWith('rgba('), 'Tabs must remain opaque');
+    translucent(visible('[role=tab]')[0], 'Session tab');
     for (const key of ['sidebar.sftp','sidebar.performance','sidebar.history','common.more']) {
       const action = button(key);
       assert(action, 'Missing direct action: '+key);
@@ -198,11 +198,12 @@ async function run() {
     report('settings-controls-verified', {theme, sections:sections.length, fields:fields.length, width:innerWidth});
 
     useNavigationStore.getState().goToPlugins();
-    await until(() => visible('.plugin-marketplace').length && visible('.plugin-market-card').length, 'marketplace');
-    visible('.plugin-market-card').forEach(card => translucent(card, 'Plugin card'));
+    await until(() => visible('.plugin-marketplace').length && visible('.plugin-catalog-row').length, 'marketplace');
+    visible('.plugin-catalog-row').forEach(row => translucent(row, 'Plugin directory row'));
     translucent(document.querySelector('.plugin-marketplace input'), 'Plugin search');
     assert(document.documentElement.scrollWidth <= innerWidth + 1, 'Marketplace overflows');
-    report('marketplace-verified', {theme, cards:visible('.plugin-market-card').length});
+    assert(visible('.plugin-market-card').length === 0, 'Legacy plugin cards remain');
+    report('marketplace-verified', {theme, rows:visible('.plugin-catalog-row').length});
 
     useNavigationStore.getState().goToMain();
     await until(() => button('session.newSession'), 'main actions');

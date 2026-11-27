@@ -1,3 +1,14 @@
+// A CSS variable containing a complete color is not parseable by Tailwind's
+// default alpha modifier. Keep the full theme token for ordinary utilities
+// and emit a real translucent color for /10, /30, etc. (including custom themes).
+const themeColor = (name) => ({ opacityValue, opacityVariable } = {}) => {
+  const color = `var(--${name})`;
+  if (opacityValue === undefined || opacityVariable) return color;
+  const alpha = Number(opacityValue);
+  const weight = Number.isFinite(alpha) ? `${alpha * 100}%` : `calc(${opacityValue} * 100%)`;
+  return `color-mix(in srgb, ${color} ${weight}, transparent)`;
+};
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
@@ -8,21 +19,21 @@ export default {
     extend: {
       colors: {
         // Tokyo Night theme colors - using CSS variables for dynamic theming
-        'tokyo-bg': 'var(--tokyo-bg)',
-        'tokyo-bg-dark': 'var(--tokyo-bg-dark)',
-        'tokyo-bg-hl': 'var(--tokyo-bg-hl)',
-        'tokyo-fg': 'var(--tokyo-fg)',
-        'tokyo-fg-dark': 'var(--tokyo-fg-dark)',
-        'tokyo-selection': 'var(--tokyo-selection)',
-        'tokyo-comment': 'var(--tokyo-comment)',
-        'tokyo-red': 'var(--tokyo-red)',
-        'tokyo-green': 'var(--tokyo-green)',
-        'tokyo-yellow': 'var(--tokyo-yellow)',
-        'tokyo-blue': 'var(--tokyo-blue)',
-        'tokyo-on-accent': 'var(--tokyo-on-accent)',
-        'tokyo-magenta': 'var(--tokyo-magenta)',
-        'tokyo-cyan': 'var(--tokyo-cyan)',
-        'tokyo-orange': 'var(--tokyo-orange)',
+        'tokyo-bg': themeColor('tokyo-bg'),
+        'tokyo-bg-dark': themeColor('tokyo-bg-dark'),
+        'tokyo-bg-hl': themeColor('tokyo-bg-hl'),
+        'tokyo-fg': themeColor('tokyo-fg'),
+        'tokyo-fg-dark': themeColor('tokyo-fg-dark'),
+        'tokyo-selection': themeColor('tokyo-selection'),
+        'tokyo-comment': themeColor('tokyo-comment'),
+        'tokyo-red': themeColor('tokyo-red'),
+        'tokyo-green': themeColor('tokyo-green'),
+        'tokyo-yellow': themeColor('tokyo-yellow'),
+        'tokyo-blue': themeColor('tokyo-blue'),
+        'tokyo-on-accent': themeColor('tokyo-on-accent'),
+        'tokyo-magenta': themeColor('tokyo-magenta'),
+        'tokyo-cyan': themeColor('tokyo-cyan'),
+        'tokyo-orange': themeColor('tokyo-orange'),
       },
       animation: {
         'fade-in': 'fadeIn 0.15s ease-out forwards',

@@ -163,7 +163,7 @@ interface MetricCardProps {
 // Memoized metric card component for performance
 const MetricCard = memo(function MetricCard({ icon, title, children, className }: MetricCardProps) {
   return (
-    <div className={cn('glass-well metric-card rounded-xl p-3', className)}>
+    <div className={cn('glass-stat metric-card p-3', className)}>
       <div className="flex items-center gap-2 mb-2">
         <span className="text-tokyo-blue">{icon}</span>
         <h3 className="text-sm font-medium text-tokyo-fg">{title}</h3>
@@ -542,7 +542,7 @@ export function ServerStatus({
               </div>
 
               {/* Metrics Grid */}
-              <div className="performance-metrics grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="performance-metrics glass-stat-strip grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4">
                 {/* CPU */}
                 <MetricCard icon={<Cpu className="w-4 h-4" />} title="CPU">
                   <ProgressBar value={status.cpu.usagePercent} />
