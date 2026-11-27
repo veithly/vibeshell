@@ -1,27 +1,46 @@
-/* Real native translucency: no wallpaper, gradient, colored bloom or sheen.
-   AppKit blurs the OTHER windows behind this transparent WebView. CSS only
-   adds neutral tints; text and controls are never made translucent as a group. */
+/* The window is one continuous native material, not a stack of cards.
+   AppKit supplies the actual behind-window blur on macOS. The web layer
+   supplies tonal depth, hairlines and control states; only floating surfaces
+   need their own backdrop filter. Never reduce the opacity of text. */
 :root {
   --vibe-window-mask: 12%;
   --vibe-glass-tint: color-mix(in srgb, var(--tokyo-bg) var(--vibe-window-mask), transparent);
-  --vibe-menu-tint: color-mix(in srgb, var(--tokyo-bg-dark) 82%, transparent);
-  --vibe-well-tint: color-mix(in srgb, var(--tokyo-fg) 5%, transparent);
-  --vibe-edge: color-mix(in srgb, var(--tokyo-fg) 14%, transparent);
-  --vibe-section-tint: color-mix(in srgb, var(--tokyo-bg) 26%, transparent);
-  --vibe-field-tint: color-mix(in srgb, var(--tokyo-bg) 58%, transparent);
-  --vibe-field-edge: color-mix(in srgb, var(--tokyo-fg) 26%, transparent);
-  --vibe-hover-tint: color-mix(in srgb, var(--tokyo-fg) 9%, transparent);
-  --vibe-selected-tint: color-mix(in srgb, var(--tokyo-blue) 14%, transparent);
-  --vibe-dialog-tint: color-mix(in srgb, var(--tokyo-bg) 90%, transparent);
+  --vibe-menu-tint: color-mix(in srgb, var(--tokyo-bg) 84%, transparent);
+  --vibe-well-tint: color-mix(in srgb, var(--tokyo-fg) 6%, transparent);
+  --vibe-edge: color-mix(in srgb, var(--tokyo-fg) 13%, transparent);
+  --vibe-section-tint: color-mix(in srgb, var(--tokyo-bg) 25%, transparent);
+  --vibe-field-tint: color-mix(in srgb, var(--tokyo-bg) 42%, transparent);
+  --vibe-field-edge: color-mix(in srgb, var(--tokyo-fg) 22%, transparent);
+  --vibe-hover-tint: color-mix(in srgb, var(--tokyo-fg) 10%, transparent);
+  --vibe-selected-tint: color-mix(in srgb, var(--tokyo-blue) 18%, transparent);
+  --vibe-selected-edge: color-mix(in srgb, var(--tokyo-blue) 32%, transparent);
+  --vibe-dialog-tint: color-mix(in srgb, var(--tokyo-bg) 80%, transparent);
   --vibe-scrim: color-mix(in srgb, var(--tokyo-bg-dark) 36%, transparent);
+  --vibe-chrome-tint: color-mix(in srgb, var(--vibe-glass-tint) 86%, var(--tokyo-bg-dark));
+  --vibe-content-tint: color-mix(in srgb, var(--tokyo-bg) 18%, transparent);
+  --vibe-control-tint: color-mix(in srgb, var(--tokyo-bg) 56%, transparent);
+  --vibe-glint: color-mix(in srgb, var(--tokyo-bg) 78%, transparent);
+  --vibe-float-shadow: 0 16px 48px color-mix(in srgb, var(--tokyo-fg) 13%, transparent),
+    inset 0 1px 0 var(--vibe-glint);
+  --vibe-control-radius: 8px;
+  --vibe-float-radius: 16px;
 }
 
-.app-shell,
+:root[data-appearance='dark'] {
+  --vibe-menu-tint: color-mix(in srgb, var(--tokyo-bg-dark) 88%, transparent);
+  --vibe-dialog-tint: color-mix(in srgb, var(--tokyo-bg) 84%, transparent);
+  --vibe-glint: color-mix(in srgb, var(--tokyo-fg) 9%, transparent);
+  --vibe-field-tint: color-mix(in srgb, var(--tokyo-bg-dark) 46%, transparent);
+  --vibe-control-tint: color-mix(in srgb, var(--tokyo-fg) 8%, transparent);
+  --vibe-float-shadow: 0 16px 48px color-mix(in srgb, var(--tokyo-bg-dark) 55%, transparent),
+    inset 0 1px 0 var(--vibe-glint);
+}
+
 :root[data-native-glass='true'] .app-shell {
-  background-image: none;
+  /* Preserve the independent terminal opacity setting. */
+  background: transparent;
 }
 
-.titlebar-shell,
 .glass-workspace,
 .sftp-panel-shell,
 .agent-activity-panel,
@@ -31,11 +50,17 @@
   box-shadow: none;
 }
 
-/* Non-native hosts have an honest solid fallback, not an imitation wallpaper. */
+.titlebar-shell {
+  background: var(--vibe-chrome-tint);
+  border-color: var(--vibe-edge);
+  box-shadow: inset 0 1px 0 var(--vibe-glint);
+}
+
+/* Non-native hosts retain an honest themed backing, not a fake wallpaper. */
 :root:not([data-native-glass='true']) .app-shell { background: var(--tokyo-bg); }
 
 .session-tabbar .session-tab-item {
-  background: var(--tokyo-bg-dark);
+  background: transparent;
   border: 1px solid transparent;
   border-radius: 9px;
   box-shadow: none;
@@ -43,11 +68,12 @@
 
 .session-tabbar .session-tab-item[aria-selected='true'],
 :root[data-appearance='dark'] .session-tabbar .session-tab-item[aria-selected='true'] {
-  background: var(--tokyo-bg);
+  background: var(--vibe-control-tint);
   color: var(--tokyo-fg);
   border-color: var(--vibe-edge);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--tokyo-fg) 8%, transparent);
+  box-shadow: inset 0 1px 0 var(--vibe-glint);
 }
+.session-tabbar .session-tab-item:hover { background: var(--vibe-hover-tint); }
 
 .titlebar-actions { gap: 4px; }
 .glass-action {
@@ -121,9 +147,7 @@
 }
 
 .glass-well,
-.glass-section,
-.plugin-market-card,
-.connection-card {
+.glass-section {
   background: var(--vibe-well-tint);
   border-color: var(--vibe-edge);
   box-shadow: none;
@@ -139,8 +163,8 @@
   -webkit-backdrop-filter: blur(24px);
   backdrop-filter: blur(24px);
   border: 1px solid var(--vibe-edge);
-  border-radius: 12px;
-  box-shadow: 0 3px 8px color-mix(in srgb, var(--tokyo-fg) 12%, transparent);
+  border-radius: var(--vibe-float-radius);
+  box-shadow: var(--vibe-float-shadow);
 }
 
 .glass-menu [role='menuitem'] { border-radius: 6px; }
@@ -150,19 +174,12 @@
    wells, never another opaque window-sized layer. Semantic warning/success
    colors and selection states deliberately keep their existing tokens. */
 .glass-page { background: transparent; }
-.glass-section { background: var(--vibe-section-tint); border-radius: 10px; }
+.glass-section { background: var(--vibe-section-tint); border-radius: var(--vibe-control-radius); }
 .glass-dialog,
 .responsive-dialog-panel,
 [role='dialog'][aria-modal='true']:not(.responsive-dialog-layer),
 [role='alertdialog'] { background: var(--vibe-dialog-tint); }
 .glass-scrim { background: var(--vibe-scrim); }
-.glass-form :where(.bg-tokyo-bg, .bg-tokyo-bg-dark, .bg-tokyo-bg-dark\/50, .bg-tokyo-bg-dark\/60) {
-  background-color: var(--vibe-well-tint);
-}
-.glass-form :where(button.bg-tokyo-bg-hl, a.bg-tokyo-bg-hl) { background-color: var(--vibe-hover-tint); }
-.glass-form :where(button.bg-tokyo-bg, button.bg-tokyo-bg-dark, button.bg-tokyo-bg-hl):hover:not(:disabled) {
-  background-color: var(--vibe-hover-tint);
-}
 .glass-form :where(thead) { background: var(--vibe-menu-tint); }
 .glass-form :where(button, a, summary):focus-visible,
 .icon-button:focus-visible,
@@ -212,25 +229,23 @@
 .settings-section-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
 .settings-section-heading h2 { font-size: 15px; line-height: 24px; font-weight: 600; }
 .settings-section-description { color: var(--tokyo-comment); font-size: 12px; line-height: 1.6; margin-bottom: 12px; }
-.settings-section-body { border: 1px solid var(--vibe-edge); border-radius: 10px; background: var(--vibe-section-tint); padding: 4px 16px; }
+.settings-section-body { border-block: 1px solid var(--vibe-edge); background: transparent; padding: 4px 0; }
 .settings-row { border-color: var(--vibe-edge); font-size: 13px; }
 .settings-row-label { color: var(--tokyo-fg); font-weight: 500; }
 .settings-row-description { margin-top: 4px; color: var(--tokyo-comment); font-size: 12px; line-height: 1.5; }
 .settings-section-body > :not(.settings-row) { margin-top: 12px; margin-bottom: 12px; }
-.settings-section-body .integration-card { border-radius: 8px; background: var(--vibe-well-tint); }
+.settings-section-body .integration-card { background: transparent; }
 .settings-section-body .integration-card h3 { font-size: 14px; }
 .settings-section-body .integration-card p { font-size: 12px; line-height: 1.5; }
 .settings-section-body .integration-card > div:first-child { flex-wrap: wrap; gap: 8px; }
 .settings-section-body .integration-card button { font-size: 12px; padding: 6px 10px; }
 
 .glass-form .plugin-category-button.is-active { background: var(--vibe-selected-tint); box-shadow: none; color: var(--tokyo-fg); }
-.glass-form .plugin-market-card { border-color: var(--vibe-edge); background: var(--vibe-section-tint); box-shadow: none; }
-.glass-form .plugin-market-card:hover { transform: none; border-color: var(--vibe-field-edge); box-shadow: none; }
 .glass-form .plugin-toggle-input { background: var(--vibe-hover-tint); border-color: var(--vibe-field-edge); }
 .glass-form .plugin-toggle-input:checked { background: var(--tokyo-blue); border-color: var(--tokyo-blue); }
 .glass-form .plugin-toggle-input:checked::after { background: var(--tokyo-on-accent); }
 .glass-form .plugin-toggle-input:focus-visible { outline: 2px solid var(--tokyo-blue); outline-offset: 3px; }
-.glass-form .connection-card { background: var(--vibe-section-tint); box-shadow: none; }
+.glass-form .connection-card { background: transparent; border-color: var(--vibe-edge); box-shadow: none; }
 .glass-form .connection-card:hover { background: var(--vibe-hover-tint); }
 
 .file-code-editor { background: var(--vibe-terminal-surface); }
@@ -247,20 +262,18 @@
   height: 34px;
   min-height: 34px;
   padding: 0 5px 0 0;
-  background: color-mix(in srgb, var(--tokyo-bg-dark) 74%, transparent);
+  background: var(--vibe-chrome-tint);
   color: var(--tokyo-fg);
   border-bottom: 1px solid var(--vibe-edge);
   box-shadow: none;
-  -webkit-backdrop-filter: blur(18px);
-  backdrop-filter: blur(18px);
 }
 
 :root[data-appearance='dark'] .vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar {
-  background: color-mix(in srgb, var(--tokyo-bg-dark) 82%, transparent);
+  background: var(--vibe-chrome-tint);
 }
 
 .vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar.draggable:hover {
-  background: color-mix(in srgb, var(--tokyo-bg-dark) 88%, transparent);
+  background: var(--vibe-hover-tint);
 }
 
 .vibeshell-mosaic .mosaic-window > .mosaic-window-toolbar .mosaic-window-title {
@@ -353,7 +366,7 @@
 
 .appearance-modes { display: inline-flex; gap: 3px; padding: 3px; border-radius: 9px; background: var(--vibe-well-tint); }
 .appearance-modes button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border-radius: 7px; color: var(--tokyo-fg-dark); }
-.appearance-modes button[aria-pressed='true'] { background: var(--tokyo-bg); color: var(--tokyo-fg); box-shadow: 0 1px 3px var(--vibe-edge); }
+.appearance-modes button[aria-pressed='true'] { background: var(--vibe-control-tint); color: var(--tokyo-fg); box-shadow: inset 0 0 0 1px var(--vibe-edge), inset 0 1px 0 var(--vibe-glint); }
 .appearance-modes button:focus-visible { outline: 2px solid var(--tokyo-blue); outline-offset: 1px; }
 
 /* A compact bottom pane with one header. Native blur is shared with the rest
@@ -362,8 +375,8 @@
 .performance-dock .server-status-panel { border-top: 0; max-height: min(45vh, 420px); display: flex; flex-direction: column; }
 .performance-header { flex-shrink: 0; }
 .performance-content { flex: 1; min-height: 0; }
-.performance-dock .performance-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.performance-dock .metric-card { min-width: 0; padding: 10px; border-radius: 8px; }
+.performance-dock .performance-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; }
+.performance-dock .metric-card { min-width: 0; padding: 10px; }
 .performance-dock .performance-summary { font-size: 11px; }
 @container (max-width: 660px) {
   .performance-dock .performance-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -374,7 +387,7 @@
 }
 
 @media (max-width: 639px) {
-  .settings-section-body { padding: 4px 12px; }
+  .settings-section-body { padding: 4px 0; }
   .settings-navigation { gap: 2px; }
   .settings-navigation button { padding: 7px 9px; }
   .appearance-modes { display: flex; flex-wrap: wrap; }
@@ -418,6 +431,382 @@
 @media (prefers-reduced-motion: reduce) {
   .vibeshell-mosaic .mosaic-window .pane-chrome-button { transition: none; }
   .glass-action, .titlebar-actions .icon-button, .session-tabbar .session-new-action,
-  .glass-form :is(button, input, select, textarea), .glass-form .plugin-market-card { transition: none; }
+  .glass-form :is(button, input, select, textarea), .plugin-catalog-row { transition: none; }
   .notification-toast { animation: none; }
+}
+
+/* Shared interior materials. Neutral utilities still describe their semantic
+   role; inside a UI surface they must never paint another opaque rectangle.
+   Scope the mapping to the application and its portaled glass surfaces, not
+   the document, terminal canvas or an arbitrary custom theme preview. */
+:is(.app-shell, .glass-form, .glass-menu) :where(.bg-tokyo-bg) {
+  background-color: var(--vibe-content-tint);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(.bg-tokyo-bg-dark, .bg-tokyo-bg-dark\/40, .bg-tokyo-bg-dark\/50, .bg-tokyo-bg-dark\/60) {
+  background-color: var(--vibe-chrome-tint);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(.bg-tokyo-bg-hl) {
+  background-color: var(--vibe-hover-tint);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(.bg-tokyo-selection) {
+  background-color: var(--vibe-selected-tint);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(.border-tokyo-bg-hl, .border-tokyo-bg-hl\/50, .border-tokyo-bg-hl\/60, .border-tokyo-bg-hl\/70) {
+  border-color: var(--vibe-edge);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(.divide-tokyo-bg-hl) > :not([hidden]) ~ :not([hidden]) {
+  border-color: var(--vibe-edge);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(.hover\:bg-tokyo-bg:hover, .hover\:bg-tokyo-bg-dark:hover, .hover\:bg-tokyo-bg-hl:hover, .hover\:bg-tokyo-bg-hl\/40:hover, .hover\:bg-tokyo-bg-hl\/60:hover):not(:disabled) {
+  background-color: var(--vibe-hover-tint);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(button.bg-tokyo-bg, button.bg-tokyo-bg-dark, button.bg-tokyo-bg-hl, a.bg-tokyo-bg) {
+  background-color: var(--vibe-control-tint);
+  border-color: var(--vibe-edge);
+  box-shadow: inset 0 1px 0 var(--vibe-glint);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(button.bg-tokyo-blue) {
+  box-shadow: inset 0 1px 0 var(--vibe-glint);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(button, a, summary, [role='button']):focus-visible {
+  outline: 2px solid var(--tokyo-blue);
+  outline-offset: 1px;
+}
+
+/* Form controls are a distinct inset material. Explicit exclusions keep
+   xterm's hidden input, editor overlay and native pickers functional. */
+:is(.app-shell, .glass-form, .glass-menu) :where(input:not([type='range']):not([type='checkbox']):not([type='radio']):not([type='file']):not([type='hidden']):not([type='color']):not(.xterm-helper-textarea):not(.bg-transparent), select, textarea:not(.file-code-editor-input):not(.xterm-helper-textarea)) {
+  background-color: var(--vibe-field-tint);
+  border-color: var(--vibe-field-edge);
+  border-radius: var(--vibe-control-radius);
+  box-shadow: inset 0 1px 2px var(--vibe-well-tint);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(input, textarea, select):not(.xterm-helper-textarea):not(.file-code-editor-input):focus-visible {
+  outline: 2px solid var(--tokyo-blue);
+  outline-offset: 1px;
+  border-color: var(--tokyo-blue);
+}
+:is(.app-shell, .glass-form, .glass-menu) :where(input[type='checkbox'], input[type='radio'], input[type='range']) { accent-color: var(--tokyo-blue); }
+:is(.app-shell, .glass-form, .glass-menu) :where(select option, select optgroup) { background: var(--tokyo-bg); color: var(--tokyo-fg); }
+.app-shell .file-code-editor-input { background: transparent; box-shadow: none; }
+.app-shell .glass-toolbar { background-color: var(--vibe-chrome-tint); }
+.app-shell .glass-dialog, .glass-form .glass-dialog { background-color: var(--vibe-dialog-tint); }
+.app-shell .glass-menu, .glass-form .glass-menu, .app-shell .notification-toast { background-color: var(--vibe-menu-tint); }
+.app-shell .glass-scrim { background-color: var(--vibe-scrim); }
+.app-shell .glass-page { background-color: transparent; }
+.app-shell .glass-workspace, .app-shell .glass-panel { background-color: var(--vibe-glass-tint); }
+.app-shell .terminal-viewport, .app-shell .file-code-editor { background: var(--vibe-terminal-surface); }
+
+.icon-button, .workspace-action { border-radius: var(--vibe-control-radius); }
+.icon-button:hover:not(:disabled), .workspace-action:hover:not(:disabled) { background: var(--vibe-hover-tint); }
+.icon-button.is-active, .workspace-action.is-active, .glass-action.is-active,
+.glass-segment button[aria-pressed='true'] {
+  background: var(--vibe-selected-tint);
+  box-shadow: inset 0 0 0 1px var(--vibe-selected-edge);
+  color: var(--tokyo-fg);
+}
+.glass-segment {
+  border-radius: var(--vibe-control-radius);
+  background: var(--vibe-well-tint);
+  border: 1px solid var(--vibe-edge);
+}
+.glass-segment button { min-height: 25px; border-radius: 6px; }
+.glass-segment button:hover:not(:disabled) { background: var(--vibe-hover-tint); }
+.glass-segment button[aria-pressed='true']:hover { background: var(--vibe-selected-tint); }
+.glass-toolbar, .glass-menu :where(header, footer) { border-color: var(--vibe-edge); }
+
+/* A catalogue is a directory, not a bento grid. A single surface contains
+   identity, purpose/permissions and actions in aligned columns. */
+.plugin-marketplace { container-type: inline-size; }
+.plugin-marketplace > aside { background: var(--vibe-chrome-tint); }
+.plugin-catalog-list { display: flex; flex-direction: column; border-block: 1px solid var(--vibe-edge); }
+.plugin-catalog-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.95fr) minmax(0, 1.6fr) minmax(132px, auto);
+  align-items: center;
+  gap: 16px;
+  padding: 16px 12px;
+  border-bottom: 1px solid var(--vibe-edge);
+  background: transparent;
+  transition: background-color 140ms ease;
+}
+.plugin-catalog-row:last-child { border-bottom: 0; }
+.plugin-catalog-row:hover, .plugin-catalog-row:focus-within { background: var(--vibe-content-tint); }
+.plugin-catalog-icon {
+  border-radius: 11px;
+  background: var(--vibe-control-tint);
+  border: 1px solid var(--vibe-edge);
+  box-shadow: inset 0 1px 0 var(--vibe-glint);
+}
+.plugin-catalog-detail :where(span) { border-radius: 5px; }
+.plugin-catalog-actions > button, .plugin-catalog-actions > label { flex-shrink: 0; }
+.plugin-category-button { border-radius: var(--vibe-control-radius); }
+.plugin-category-button.is-active { background: var(--vibe-selected-tint); box-shadow: inset 0 0 0 1px var(--vibe-selected-edge); }
+@container (max-width: 1040px) {
+  .plugin-catalog-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 14px; }
+  .plugin-catalog-detail { grid-row: 2; grid-column: 1 / -1; padding-inline-start: 52px; }
+  .plugin-catalog-actions { grid-row: 1; grid-column: 2; }
+}
+@container (max-width: 560px) {
+  .plugin-catalog-row { grid-template-columns: minmax(0, 1fr); padding: 14px 4px; }
+  .plugin-catalog-detail, .plugin-catalog-actions { grid-column: 1; grid-row: auto; padding-inline-start: 52px; }
+  .plugin-catalog-actions { justify-content: space-between; }
+}
+
+/* Plugin dashboards are continuous instruments: one toolbar, one data plane,
+   a metric strip, and readable inset output. No blur per table row. */
+.plugin-dashboard, .plugin-runner, .server-status-panel { background: transparent; }
+.plugin-mode-bar { border-bottom: 1px solid var(--vibe-edge); }
+.plugin-mode-bar button { padding: 3px 8px; border-radius: 6px; font-size: 11px; }
+.plugin-mode-bar button:hover { background: var(--vibe-hover-tint); }
+.dashboard-mode-action { padding: 5px 8px; border-radius: var(--vibe-control-radius); font-size: 11px; }
+.dashboard-mode-action:hover { background: var(--vibe-hover-tint); }
+.dashboard-mode-action:focus-visible { outline: 2px solid var(--tokyo-blue); outline-offset: 2px; }
+:is(.app-shell, .glass-form) input.bg-transparent { background: transparent; border: 0; box-shadow: none; }
+.dashboard-header { min-height: 40px; }
+.dashboard-header > div:first-child > span:first-of-type { font-weight: 600; }
+.glass-stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(110px, 100%), 1fr));
+  gap: 1px;
+  border-block: 1px solid var(--vibe-edge);
+  background: var(--vibe-well-tint);
+}
+.glass-stat { position: relative; background: var(--vibe-section-tint); font-variant-numeric: tabular-nums; }
+.glass-stat + .glass-stat { border-inline-start: 1px solid var(--vibe-edge); }
+.glass-data-list { padding: 0 12px; }
+.glass-data-row { border-bottom: 1px solid var(--vibe-edge); }
+.glass-data-row:last-child { border-bottom: 0; }
+.glass-data-row:hover { background: var(--vibe-content-tint); }
+.glass-data-grid { width: 100%; min-width: 0; }
+.glass-data-grid table { border-collapse: separate; border-spacing: 0; }
+:is(.plugin-dashboard, .plugin-runner, .glass-data-grid, .sftp-panel-shell, .file-workspace) :where(thead) {
+  background: var(--vibe-chrome-tint);
+}
+:is(.plugin-dashboard, .plugin-runner, .glass-data-grid, .sftp-panel-shell, .file-workspace) :where(th) {
+  color: var(--tokyo-fg-dark);
+  border-bottom-color: var(--vibe-edge);
+  padding-block: 9px;
+}
+:is(.plugin-dashboard, .plugin-runner, .glass-data-grid, .sftp-panel-shell, .file-workspace) :where(td) {
+  border-bottom-color: var(--vibe-edge);
+}
+:is(.plugin-dashboard, .plugin-runner, .glass-data-grid, .sftp-panel-shell, .file-workspace) :where(tbody tr):hover {
+  background: var(--vibe-hover-tint);
+}
+:is(.plugin-dashboard, .plugin-runner, .glass-data-grid, .sftp-panel-shell, .file-workspace) :where(thead.sticky) {
+  background: var(--vibe-menu-tint);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  z-index: 2;
+}
+.glass-code-output, .plugin-dashboard pre, .plugin-runner pre {
+  background: var(--vibe-well-tint);
+  border: 1px solid var(--vibe-edge);
+  border-radius: var(--vibe-control-radius);
+  box-shadow: inset 0 1px 2px var(--vibe-well-tint);
+}
+.plugin-dashboard aside, .plugin-runner aside { background: var(--vibe-chrome-tint); border-color: var(--vibe-edge); }
+
+/* Secondary tools use the same material hierarchy, including the terminal's
+   portaled suggestions, markdown content, diff gutters and mobile overlays. */
+.glass-menu :where([role='option'][aria-selected='true']) { background: var(--vibe-selected-tint); }
+.glass-menu :where([role='menuitem']):hover { background: var(--vibe-hover-tint); }
+.glass-menu .kbd-chip, .kbd-chip { background: var(--vibe-control-tint); border-color: var(--vibe-edge); }
+.tooltip-button::after { background: var(--vibe-menu-tint); color: var(--tokyo-fg); border-color: var(--vibe-edge); box-shadow: var(--vibe-float-shadow); }
+.mobile-terminal-keys { background: var(--vibe-chrome-tint); border-color: var(--vibe-edge); }
+.mobile-terminal-key { background: var(--vibe-control-tint); border-color: var(--vibe-edge); box-shadow: inset 0 1px 0 var(--vibe-glint); }
+.mobile-terminal-key:active { background: var(--vibe-selected-tint); }
+.vibe-markdown :where(code, pre, blockquote, th) { background: var(--vibe-well-tint); }
+.vibe-markdown pre code { background: transparent; }
+.vibe-markdown :where(th, td, hr), .workspace-diff-line-number { border-color: var(--vibe-edge); }
+.workspace-diff-hunk { background: color-mix(in srgb, var(--tokyo-blue) 12%, transparent); }
+.workspace-diff-line-context { background: transparent; }
+.workspace-diff-line-add { background: color-mix(in srgb, var(--tokyo-green) 13%, transparent); }
+.workspace-diff-line-delete { background: color-mix(in srgb, var(--tokyo-red) 13%, transparent); }
+.app-shell ::-webkit-scrollbar-track { background: transparent; }
+.app-shell ::-webkit-scrollbar-thumb { background: var(--vibe-field-edge); }
+.app-shell .server-signal { background: var(--vibe-control-tint); border-color: var(--vibe-edge); }
+.app-shell .mosaic-split { background: var(--vibe-edge); }
+.app-shell .mosaic-split:hover, .app-shell .mosaic-split.mosaic-split--dragging { background: var(--tokyo-cyan); }
+.app-shell .terminal-card { background: transparent; border-color: var(--vibe-edge); box-shadow: none; }
+.app-shell .notification-toast { box-shadow: var(--vibe-float-shadow); }
+.glass-floating-toolbar { background: var(--vibe-menu-tint); border: 1px solid var(--vibe-edge); border-radius: var(--vibe-control-radius); }
+@media (max-width: 900px) {
+  .app-shell .workspace-changes-panel { background: var(--vibe-dialog-tint); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); }
+}
+@media (max-width: 767px) {
+  .app-shell .sftp-panel-shell, .app-shell .agent-activity-panel { background: var(--vibe-dialog-tint); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root, :root[data-appearance='dark'] {
+    --vibe-menu-tint: var(--tokyo-bg);
+    --vibe-dialog-tint: var(--tokyo-bg);
+    --vibe-glass-tint: var(--tokyo-bg);
+    --vibe-chrome-tint: var(--tokyo-bg-dark);
+    --vibe-field-tint: var(--tokyo-bg-dark);
+    --vibe-control-tint: var(--tokyo-bg-hl);
+    --vibe-terminal-surface: var(--tokyo-bg);
+  }
+  :root[data-native-glass='true'] .app-shell { background: var(--tokyo-bg); }
+  .app-shell :is(.workspace-changes-panel, .sftp-panel-shell, .agent-activity-panel, thead.sticky), .glass-menu, .glass-dialog {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-catalog-row { transition: none; }
+}
+
+/* Floating menus share one material and one row system. A higher neutral
+   backing than the workspace keeps labels readable over terminal output. */
+:root {
+  --vibe-menu-surface: color-mix(in srgb, var(--tokyo-bg) 88%, transparent);
+  --vibe-menu-hover: color-mix(in srgb, var(--tokyo-blue) 9%, transparent);
+  --vibe-menu-selected: color-mix(in srgb, var(--tokyo-blue) 14%, transparent);
+  --vibe-menu-shadow: 0 12px 34px rgb(0 0 0 / 16%), 0 2px 7px rgb(0 0 0 / 8%),
+    inset 0 1px 0 var(--vibe-glint);
+}
+:root[data-appearance='dark'] {
+  --vibe-menu-surface: color-mix(in srgb, var(--tokyo-bg) 91%, transparent);
+  --vibe-menu-shadow: 0 14px 38px rgb(0 0 0 / 44%), 0 2px 8px rgb(0 0 0 / 20%),
+    inset 0 1px 0 var(--vibe-glint);
+}
+.glass-menu.glass-menu-popover,
+.app-shell .glass-menu.glass-menu-popover,
+.completion-menu {
+  background: var(--vibe-menu-surface);
+  border: 1px solid var(--vibe-edge);
+  border-radius: 13px;
+  box-shadow: var(--vibe-menu-shadow);
+  -webkit-backdrop-filter: blur(28px) saturate(120%);
+  backdrop-filter: blur(28px) saturate(120%);
+}
+.glass-menu-popover {
+  padding: 5px;
+  max-width: calc(100vw - 16px);
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform-origin: top right;
+  animation: glass-menu-enter 110ms ease-out;
+}
+@keyframes glass-menu-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.glass-menu-heading {
+  margin: 0 4px 4px;
+  padding: 7px 6px 8px;
+  border-bottom: 1px solid var(--vibe-edge);
+  color: var(--tokyo-comment);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.glass-menu-separator {
+  margin: 4px 6px;
+  border-top: 1px solid var(--vibe-edge);
+}
+.glass-menu-popover .glass-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--tokyo-blue);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 100ms ease, border-color 100ms ease;
+}
+.glass-menu-dense .glass-menu-item { min-height: 30px; padding-block: 5px; font-size: 12px; }
+.glass-menu-popover .glass-menu-item:not(:disabled):hover,
+.glass-menu-popover .glass-menu-item:focus-visible {
+  background: var(--vibe-menu-hover);
+  border-color: var(--vibe-edge);
+  outline: none;
+}
+.glass-menu-popover .glass-menu-item[aria-pressed='true'],
+.glass-menu-popover .glass-menu-item[aria-checked='true'] {
+  background: var(--vibe-menu-selected);
+  border-color: var(--vibe-selected-edge);
+  color: var(--tokyo-blue);
+}
+.glass-menu-popover .glass-menu-item:disabled { opacity: .42; cursor: not-allowed; }
+.glass-menu-popover .glass-menu-item.glass-menu-danger { color: var(--tokyo-red); }
+.glass-menu-popover .glass-menu-item.glass-menu-danger:not(:disabled):hover,
+.glass-menu-popover .glass-menu-item.glass-menu-danger:focus-visible {
+  background: color-mix(in srgb, var(--tokyo-red) 10%, transparent);
+  border-color: color-mix(in srgb, var(--tokyo-red) 25%, transparent);
+}
+.glass-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: inherit;
+}
+.glass-menu-icon svg, .glass-menu-item > svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: inherit;
+  stroke-width: 1.65;
+}
+.glass-menu-label { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.glass-menu-check { width: 15px; height: 15px; margin-inline-start: auto; flex-shrink: 0; }
+.glass-menu-shortcut {
+  flex-shrink: 0;
+  margin-inline-start: auto;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--tokyo-comment);
+  font-family: inherit;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.tooltip-button[aria-expanded='true']::after { display: none; }
+.completion-menu-item[aria-selected='true'] {
+  box-shadow: inset 0 0 0 1px var(--vibe-selected-edge);
+}
+.completion-menu-item { min-height: 30px; }
+.completion-menu :where(kbd) { border: 1px solid var(--vibe-edge); }
+
+/* Keep platform-native select interaction and give its closed control the
+   same neutral, inset glass material. OS option popups follow color-scheme. */
+:is(.app-shell, .glass-form) select {
+  background-color: var(--vibe-field-tint);
+  color: var(--tokyo-blue);
+  border: 1px solid var(--vibe-field-edge);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 var(--vibe-glint);
+  cursor: pointer;
+}
+:is(.app-shell, .glass-form) select:hover:not(:disabled) {
+  border-color: var(--vibe-selected-edge);
+}
+:is(.app-shell, .glass-form) select:disabled { opacity: .55; cursor: not-allowed; }
+@media (pointer: coarse) {
+  .glass-menu-popover .glass-menu-item { min-height: 44px; }
+}
+.glass-menu-popover .mobile-glass-menu-item { min-height: 44px; }
+@media (prefers-reduced-transparency: reduce) {
+  :root, :root[data-appearance='dark'] { --vibe-menu-surface: var(--tokyo-bg); }
+  .glass-menu.glass-menu-popover, .app-shell .glass-menu.glass-menu-popover, .completion-menu {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glass-menu-popover, .glass-menu-popover .glass-menu-item { animation: none; transition: none; }
 }

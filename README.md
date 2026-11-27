@@ -163,7 +163,7 @@ The same **12 built-ins** are discoverable by agents through the CLI and MCP. Im
 
 **Take your configuration with you.** Optional encrypted GitHub Gist/WebDAV sync and portable-file import/export carry server metadata, groups, snippets and plugin records between setups. Login credentials stay on the device.
 
-**Set it up for the way you work.** Light, dark and system appearance; terminal fonts and cursors; separate controls for terminal background and window tint. macOS has native frosted translucency, and custom CSS can be previewed, imported and saved.
+**Set it up for the way you work.** Light, dark and system appearance; terminal fonts and cursors; separate controls for terminal background and window tint. macOS has native frosted translucency. Plugin lists, dashboards, settings and menus share a continuous glass material with monochrome interface accents, while terminal and code colors remain distinct. Custom CSS can be previewed, imported and saved.
 
 <details>
 <summary>See the latest appearance settings</summary>

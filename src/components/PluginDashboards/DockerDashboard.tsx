@@ -212,7 +212,7 @@ export function DockerDashboard({ plugin, sessionId }: { plugin: PluginRecord; s
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
-              <div className="mr-1 flex h-7 rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark p-0.5">
+              <div className="glass-segment mr-1 flex min-h-7 items-center gap-0.5 p-0.5">
                 {([
                   ['all', t('plugins.docker.filterAll', { count: containers.length })],
                   ['running', t('plugins.docker.filterRunning', { count: running })],
@@ -224,6 +224,7 @@ export function DockerDashboard({ plugin, sessionId }: { plugin: PluginRecord; s
                       'rounded px-2 text-xs transition-colors',
                       containerFilter === id ? 'bg-tokyo-bg-hl text-tokyo-fg' : 'text-tokyo-comment hover:text-tokyo-fg'
                     )}
+                    aria-pressed={containerFilter === id}
                     onClick={() => setContainerFilter(id)}
                   >
                     {label}
@@ -255,7 +256,7 @@ export function DockerDashboard({ plugin, sessionId }: { plugin: PluginRecord; s
           visibleContainers.length === 0 ? (
             <CenterNotice text={t('plugins.docker.noContainers')} />
           ) : (
-            <div className="m-2 overflow-x-auto rounded-lg border border-tokyo-bg-hl">
+            <div className="glass-data-grid overflow-x-auto">
             <table className="w-full border-separate border-spacing-0 text-left text-xs">
               <thead className="bg-tokyo-bg-dark text-tokyo-comment">
                 <tr>

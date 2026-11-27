@@ -1,4 +1,5 @@
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
+import { DashboardToolbarActionContext } from './ui';
 import type { PluginRecord } from '../../plugins/types';
 import { DockerDashboard } from './DockerDashboard';
 import { DatabaseConsole } from './DatabaseConsole';
@@ -40,8 +41,12 @@ export function hasPluginDashboard(pluginId: string): boolean {
   return pluginId in dashboards;
 }
 
-export function PluginDashboard({ plugin, sessionId }: DashboardProps) {
+export function PluginDashboard({ plugin, sessionId, toolbarAction }: DashboardProps & { toolbarAction?: ReactNode }) {
   const Dashboard = dashboards[plugin.manifest.id];
   if (!Dashboard) return null;
-  return <Dashboard plugin={plugin} sessionId={sessionId} />;
+  return (
+    <DashboardToolbarActionContext.Provider value={toolbarAction}>
+      <Dashboard plugin={plugin} sessionId={sessionId} />
+    </DashboardToolbarActionContext.Provider>
+  );
 }

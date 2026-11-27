@@ -149,7 +149,7 @@ export function CronDashboard({ plugin, sessionId }: { plugin: PluginRecord; ses
             ) : filtered.length === 0 ? (
               <CenterNotice text={t('plugins.cron.empty')} />
             ) : (
-              <div className="m-2 overflow-hidden rounded-lg border border-tokyo-bg-hl">
+              <div className="glass-data-grid overflow-x-auto">
                 <table className="w-full border-separate border-spacing-0 text-left text-xs">
                   <thead className="bg-tokyo-bg-dark text-tokyo-comment">
                     <tr>

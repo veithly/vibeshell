@@ -74,7 +74,7 @@ export function AgentApprovalDialog() {
       {autoApproveActive && autoApproveUntil && (
         <div
           role="status"
-          className="fixed right-4 top-12 z-[55] flex max-w-sm items-center gap-3 rounded-lg border border-tokyo-yellow/50 bg-tokyo-bg-dark px-3 py-2 shadow-xl"
+          className="glass-menu fixed right-4 top-12 z-[55] flex max-w-sm items-center gap-3 border border-tokyo-yellow/50 px-3 py-2"
         >
           <Clock className="h-4 w-4 flex-shrink-0 text-tokyo-yellow" aria-hidden="true" />
           <div className="min-w-0 flex-1">

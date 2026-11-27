@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { FolderOpen, MoreHorizontal } from 'lucide-react';
+import { Check, FolderOpen, MoreHorizontal } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { focusMenuItem, handleMenuNavigation } from '../../lib/menuNavigation';
 
 export interface MobileWorkspaceMenuItem {
   id: string;
@@ -32,6 +33,7 @@ export function MobileWorkspaceActions({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -40,7 +42,7 @@ export function MobileWorkspaceActions({
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') { setOpen(false); moreButtonRef.current?.focus(); }
     };
 
     document.addEventListener('pointerdown', handlePointerDown);
@@ -50,6 +52,8 @@ export function MobileWorkspaceActions({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [open]);
+
+  useEffect(() => { if (open) focusMenuItem(menuRef.current); }, [open]);
 
   const run = (action: () => void) => {
     moreButtonRef.current?.focus();
@@ -83,20 +87,24 @@ export function MobileWorkspaceActions({
 
       {open && (
         <div
+          ref={menuRef}
           role="menu"
-          className="glass-menu glass-form absolute right-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
+          aria-label={labels.more}
+          className="glass-menu glass-menu-popover absolute right-0 top-full z-50 mt-2 w-60"
+          onKeyDown={handleMenuNavigation}
         >
           {menuItems.map((item) => (
             <button
               key={item.id}
               role="menuitem"
-              className={cn('mobile-workspace-menu-item', item.pressed && 'bg-tokyo-selection')}
+              className={cn('glass-menu-item mobile-glass-menu-item', item.pressed && 'bg-tokyo-selection')}
               disabled={item.disabled}
               aria-pressed={item.pressed}
               onClick={() => run(item.onSelect)}
             >
-              {item.icon}
-              <span>{item.label}</span>
+              <span className="glass-menu-icon">{item.icon}</span>
+              <span className="glass-menu-label">{item.label}</span>
+              {item.pressed && <Check className="glass-menu-check" aria-hidden="true" />}
             </button>
           ))}
         </div>

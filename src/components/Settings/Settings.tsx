@@ -1508,7 +1508,7 @@ export function Settings() {
 
         {/* Integration Cards Grid */}
         {aiTools.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="settings-integrations divide-y divide-tokyo-bg-hl">
             {aiTools.map((tool) => (
               <IntegrationCard
                 key={tool.id}

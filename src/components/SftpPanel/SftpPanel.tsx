@@ -32,6 +32,7 @@ import {
   X,
 } from 'lucide-react';
 import { cn, formatFileSize } from '../../lib/utils';
+import { focusMenuItem, handleMenuNavigation } from '../../lib/menuNavigation';
 import { safeInvoke } from '../../lib/tauri';
 import { useNotificationStore } from '../../stores/notificationStore';
 import { useSettingsStore } from '../../stores/settingsStore';
@@ -274,6 +275,8 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({ visible: false, x: 0, y: 0 });
   const [isToolbarMenuOpen, setIsToolbarMenuOpen] = useState(false);
+  const toolbarMenuRef = useRef<HTMLDivElement>(null);
+  const toolbarMenuTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Resize drag state
   const [isDragging, setIsDragging] = useState(false);
@@ -390,6 +393,19 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (!isToolbarMenuOpen) return;
+    focusMenuItem(toolbarMenuRef.current);
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsToolbarMenuOpen(false);
+        toolbarMenuTriggerRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [isToolbarMenuOpen]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenu({ visible: false, x: 0, y: 0 });
@@ -1788,6 +1804,7 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
             {isCompactToolbar && (
               <div className="relative ml-auto">
                 <button
+                  ref={toolbarMenuTriggerRef}
                   className={cn(
                     'p-1.5 rounded transition-colors hover:bg-tokyo-bg-hl',
                     isToolbarMenuOpen && 'bg-tokyo-selection text-tokyo-fg'
@@ -1797,33 +1814,42 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                     setIsToolbarMenuOpen((open) => !open);
                   }}
                   aria-label="More SFTP actions"
+                  aria-haspopup="menu"
+                  aria-expanded={isToolbarMenuOpen}
                   title="More actions"
                 >
                   <MoreHorizontal className="h-4 w-4 text-tokyo-comment" />
                 </button>
                 {isToolbarMenuOpen && (
                   <div
-                    className="glass-menu absolute right-0 top-full z-50 mt-1 max-h-64 w-52 overflow-y-auto py-1"
+                    ref={toolbarMenuRef}
+                    role="menu"
+                    aria-label="More SFTP actions"
+                    className="glass-menu glass-menu-popover glass-menu-dense absolute right-0 top-full z-50 mt-2 w-56"
+                    onKeyDown={handleMenuNavigation}
                     onClick={(event) => event.stopPropagation()}
                   >
                     {pathTransferEnabled && (
                       <>
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      role="menuitem"
+                      className="glass-menu-item"
                       onClick={() => { setIsToolbarMenuOpen(false); void handleUploadDirectory('upload'); }}
                       disabled={isLoading}
                     >
                       <FolderOpen className="h-4 w-4 text-tokyo-comment" /> Upload folder
                     </button>
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      role="menuitem"
+                      className="glass-menu-item"
                       onClick={() => { setIsToolbarMenuOpen(false); void handleUploadDirectory('sync'); }}
                       disabled={isLoading}
                     >
                       <RefreshCw className="h-4 w-4 text-tokyo-comment" /> Sync current folder
                     </button>
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      role="menuitem"
+                      className="glass-menu-item"
                       onClick={() => { setIsToolbarMenuOpen(false); void handleDownload(); }}
                       disabled={isLoading || selectedFiles.length === 0}
                     >
@@ -1833,15 +1859,17 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                       </>
                     )}
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      role="menuitem"
+                      className="glass-menu-item"
                       onClick={() => { setIsToolbarMenuOpen(false); handleOpenFile(); }}
                       disabled={isLoading || !canOpenSelected}
                     >
                       <Eye className="h-4 w-4 text-tokyo-comment" /> Open in Tab
                     </button>
-                    <div className="my-1 border-t border-tokyo-bg-hl" />
+                    <div role="separator" className="glass-menu-separator" />
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      role="menuitem"
+                      className="glass-menu-item"
                       onClick={() => {
                         setIsToolbarMenuOpen(false);
                         if (selectedEntry) {
@@ -1854,29 +1882,33 @@ export const SftpPanel = forwardRef<SftpPanelHandle, SftpPanelProps>(function Sf
                       <Edit3 className="h-4 w-4 text-tokyo-comment" /> Rename
                     </button>
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-red hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      role="menuitem"
+                      className="glass-menu-item glass-menu-danger text-tokyo-red"
                       onClick={() => { setIsToolbarMenuOpen(false); void handleDelete(); }}
                       disabled={isLoading || selectedEntries.size === 0}
                     >
                       <Trash2 className="h-4 w-4" /> Delete
                     </button>
-                    <div className="my-1 border-t border-tokyo-bg-hl" />
+                    <div role="separator" className="glass-menu-separator" />
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      role="menuitem"
+                      className="glass-menu-item"
                       onClick={() => { setIsToolbarMenuOpen(false); handleOpenCompressDialog(); }}
                       disabled={isLoading || selectedEntries.size === 0}
                     >
                       <Archive className="h-4 w-4 text-tokyo-comment" /> Compress
                     </button>
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      role="menuitem"
+                      className="glass-menu-item"
                       onClick={() => { setIsToolbarMenuOpen(false); void handleExtract(); }}
                       disabled={isLoading || !hasSelectedArchives}
                     >
                       <FolderOpen className="h-4 w-4 text-tokyo-comment" /> Extract
                     </button>
                     <button
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-tokyo-fg hover:bg-tokyo-bg-hl disabled:opacity-40"
+                      role="menuitem"
+                      className="glass-menu-item"
                       onClick={() => { setIsToolbarMenuOpen(false); handleSelectAll(); }}
                       disabled={isLoading || entries.length === 0}
                     >

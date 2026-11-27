@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Loader2, RefreshCw, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -28,11 +28,11 @@ export function StatCard({
   tone?: 'default' | 'good' | 'warn' | 'bad';
 }) {
   return (
-    <div className="glass-well min-w-[110px] flex-1 rounded-lg border border-tokyo-bg-hl px-3 py-2">
-      <div className="truncate text-[10px] uppercase tracking-wide text-tokyo-comment">{label}</div>
+    <div className="glass-stat min-w-0 px-3 py-2">
+      <div className="truncate text-[11px] text-tokyo-comment">{label}</div>
       <div
         className={cn(
-          'mt-0.5 truncate text-sm font-semibold tabular-nums',
+          'mt-1 truncate text-xl font-medium tabular-nums',
           tone === 'good' && 'text-tokyo-green',
           tone === 'warn' && 'text-tokyo-yellow',
           tone === 'bad' && 'text-tokyo-red',
@@ -49,6 +49,8 @@ export interface DashboardTab {
   id: string;
   label: string;
 }
+
+export const DashboardToolbarActionContext = createContext<ReactNode>(null);
 
 export function DashboardHeader({
   icon,
@@ -71,8 +73,9 @@ export function DashboardHeader({
   refreshing?: boolean;
   extra?: ReactNode;
 }) {
+  const toolbarAction = useContext(DashboardToolbarActionContext);
   return (
-    <div className="glass-toolbar flex flex-wrap items-center gap-2 border-b border-tokyo-bg-hl px-3 py-2">
+    <div className="dashboard-header glass-toolbar flex flex-wrap items-center gap-3 border-b border-tokyo-bg-hl px-3 py-2">
       <div className="flex items-center gap-2">
         {icon}
         <span className="text-sm font-semibold text-tokyo-fg">{title}</span>
@@ -83,7 +86,7 @@ export function DashboardHeader({
         )}
       </div>
       {tabs && tabs.length > 0 && (
-        <div className="flex h-7 rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark p-0.5">
+        <div className="glass-segment flex min-h-7 flex-wrap items-center gap-0.5 p-0.5">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -93,6 +96,7 @@ export function DashboardHeader({
                   ? 'bg-tokyo-bg-hl text-tokyo-fg'
                   : 'text-tokyo-comment hover:text-tokyo-fg'
               )}
+              aria-pressed={activeTab === tab.id}
               onClick={() => onTabChange?.(tab.id)}
             >
               {tab.label}
@@ -100,7 +104,7 @@ export function DashboardHeader({
           ))}
         </div>
       )}
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1">
         {extra}
         {onRefresh && (
           <button
@@ -112,6 +116,7 @@ export function DashboardHeader({
             <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
           </button>
         )}
+        {toolbarAction}
       </div>
     </div>
   );
@@ -181,7 +186,7 @@ export function DataGrid({
     return <CenterNotice text={emptyText} />;
   }
   return (
-    <div className="m-2 overflow-hidden rounded-lg border border-tokyo-bg-hl">
+    <div className="glass-data-grid overflow-x-auto">
       <table className="w-full border-separate border-spacing-0 text-left text-xs">
         <thead className="bg-tokyo-bg-dark text-tokyo-comment">
           <tr>

@@ -310,7 +310,7 @@ export function ServerList({
 
   return (
     <>
-      <div className="h-full flex flex-col bg-tokyo-bg-dark">
+      <div className="glass-panel glass-form h-full flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-tokyo-bg-hl">
           <div className="min-w-0">

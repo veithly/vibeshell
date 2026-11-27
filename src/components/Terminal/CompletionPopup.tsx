@@ -13,7 +13,10 @@ type ThemeColors = ThemeDefinition['colors'];
 const getCategoryColor = (
   category: CommandCategory | undefined,
   themeColors: ThemeColors
-): string => (category ? themeColors[categoryThemeColor[category]] ?? themeColors.accent : themeColors.accent);
+): string => {
+  const key = category ? categoryThemeColor[category] : 'accent';
+  return key === 'accent' || key === 'cyan' ? 'var(--tokyo-blue)' : themeColors[key];
+};
 
 /**
  * Type of completion item for icon display
@@ -131,10 +134,10 @@ const CompletionIcon = memo(function CompletionIcon({
       if (!fileExtension) return themeColors.fgDark;
       const ext = fileExtension.toLowerCase();
       // Color by extension type
-      if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) return themeColors.accent;
+      if (['.ts', '.tsx', '.js', '.jsx'].includes(ext)) return 'var(--tokyo-blue)';
       if (['.py'].includes(ext)) return themeColors.green;
       if (['.rs'].includes(ext)) return themeColors.orange;
-      if (['.go'].includes(ext)) return themeColors.cyan;
+      if (['.go'].includes(ext)) return 'var(--tokyo-blue)';
       if (['.json', '.yaml', '.yml', '.toml'].includes(ext)) return themeColors.yellow;
       if (['.md', '.txt', '.doc'].includes(ext)) return themeColors.fg;
       if (['.css', '.scss', '.less'].includes(ext)) return themeColors.magenta;
@@ -190,7 +193,7 @@ const CompletionIcon = memo(function CompletionIcon({
         className="w-4 h-4 flex-shrink-0"
         viewBox="0 0 16 16"
         fill="none"
-        style={{ color: themeColors.accent }}
+        style={{ color: 'var(--tokyo-blue)' }}
       >
         <path
           d="M5 4l4 4-4 4"
@@ -243,12 +246,10 @@ const HighlightedText = memo(function HighlightedText({
   text,
   matchRanges,
   input,
-  themeColors,
 }: {
   text: string;
   matchRanges?: Array<{ start: number; end: number }>;
   input?: string;
-  themeColors: ThemeColors;
 }) {
   // If we have explicit match ranges, use them
   if (matchRanges && matchRanges.length > 0) {
@@ -266,7 +267,7 @@ const HighlightedText = memo(function HighlightedText({
       parts.push(
         <span
           key={`match-${i}`}
-          style={{ color: themeColors.accent, fontWeight: 600 }}
+          style={{ color: 'var(--tokyo-blue)', fontWeight: 600 }}
         >
           {text.slice(range.start, range.end)}
         </span>
@@ -292,7 +293,7 @@ const HighlightedText = memo(function HighlightedText({
       return (
         <>
           {text.slice(0, index)}
-          <span style={{ color: themeColors.accent, fontWeight: 600 }}>
+          <span style={{ color: 'var(--tokyo-blue)', fontWeight: 600 }}>
             {text.slice(index, index + inputLower.length)}
           </span>
           {text.slice(index + inputLower.length)}
@@ -392,8 +393,7 @@ export const CompletionPopup = memo(function CompletionPopup({
     <div
       ref={popupRef}
       className={cn(
-        'fixed overflow-hidden rounded-lg shadow-2xl',
-        'border border-opacity-40'
+        'glass-menu completion-menu fixed overflow-hidden'
       )}
       role="listbox"
       aria-label="Command suggestions"
@@ -405,17 +405,14 @@ export const CompletionPopup = memo(function CompletionPopup({
         maxWidth: `calc(100vw - ${viewportPadding * 2}px)`,
         maxHeight: `${popupMaxHeight}px`,
         zIndex: 99999,
-        backgroundColor: themeColors.bgDark,
-        borderColor: themeColors.bgHl,
-        boxShadow: `0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px ${themeColors.bgHl}`,
       }}
     >
       {/* Header */}
       <div
         className="px-3 py-1.5 text-xs font-medium border-b flex items-center justify-between"
         style={{
-          backgroundColor: themeColors.bg,
-          borderColor: themeColors.bgHl,
+          backgroundColor: 'var(--vibe-chrome-tint)',
+          borderColor: 'var(--vibe-edge)',
           color: themeColors.fgDark,
         }}
       >
@@ -449,14 +446,13 @@ export const CompletionPopup = memo(function CompletionPopup({
               key={`${item.text}-${index}`}
               ref={isSelected ? selectedRef : undefined}
               className={cn(
-                'flex items-center gap-2.5 px-3 py-1.5 cursor-pointer mx-1 rounded-md',
+                'completion-menu-item flex items-center gap-2.5 px-3 py-1.5 cursor-pointer mx-1 rounded-md',
                 'transition-all duration-75'
               )}
               role="option"
               aria-selected={isSelected}
               style={{
-                backgroundColor: isSelected ? themeColors.bgHl : 'transparent',
-                transform: isSelected ? 'scale(1)' : 'scale(1)',
+                backgroundColor: isSelected ? 'var(--vibe-selected-tint)' : 'transparent',
               }}
               onClick={() => onSelect(item)}
               onMouseEnter={() => onSelectionChange(index)}
@@ -481,7 +477,6 @@ export const CompletionPopup = memo(function CompletionPopup({
                       text={item.text}
                       matchRanges={item.matchRanges}
                       input={currentInput}
-                      themeColors={themeColors}
                     />
                   </span>
                   {item.isHistory && (
@@ -513,7 +508,7 @@ export const CompletionPopup = memo(function CompletionPopup({
                   <div
                     className="text-xs px-1.5 py-0.5 rounded flex-shrink-0"
                     style={{
-                      backgroundColor: `${badgeColor}15`,
+                      backgroundColor: `color-mix(in srgb, ${badgeColor} 9%, transparent)`,
                       color: badgeColor,
                     }}
                   >
@@ -530,15 +525,15 @@ export const CompletionPopup = memo(function CompletionPopup({
       <div
         className="px-3 py-1.5 text-xs border-t flex flex-wrap gap-x-4 gap-y-1 items-center"
         style={{
-          backgroundColor: themeColors.bg,
-          borderColor: themeColors.bgHl,
+          backgroundColor: 'var(--vibe-chrome-tint)',
+          borderColor: 'var(--vibe-edge)',
           color: themeColors.fgDark,
         }}
       >
         <span className="flex items-center gap-1">
           <kbd
             className="px-1.5 py-0.5 rounded text-xs font-mono"
-            style={{ backgroundColor: themeColors.bgHl }}
+            style={{ backgroundColor: 'var(--vibe-control-tint)' }}
           >
             Tab
           </kbd>
@@ -547,7 +542,7 @@ export const CompletionPopup = memo(function CompletionPopup({
         <span className="flex items-center gap-1">
           <kbd
             className="px-1 py-0.5 rounded text-xs font-mono"
-            style={{ backgroundColor: themeColors.bgHl }}
+            style={{ backgroundColor: 'var(--vibe-control-tint)' }}
           >
             {'\u2191\u2193'}
           </kbd>
@@ -556,7 +551,7 @@ export const CompletionPopup = memo(function CompletionPopup({
         <span className="flex items-center gap-1">
           <kbd
             className="px-1.5 py-0.5 rounded text-xs font-mono"
-            style={{ backgroundColor: themeColors.bgHl }}
+            style={{ backgroundColor: 'var(--vibe-control-tint)' }}
           >
             Esc
           </kbd>
