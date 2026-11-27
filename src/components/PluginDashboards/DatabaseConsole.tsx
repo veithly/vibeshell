@@ -46,7 +46,7 @@ function JsonGrid({ result, emptyText }: { result: DbQueryResult | null; emptyTe
     );
   }
   return (
-    <div className="m-2 overflow-auto rounded-lg border border-tokyo-bg-hl">
+    <div className="glass-data-grid overflow-auto">
       <table className="w-full border-separate border-spacing-0 text-left text-xs">
         <thead className="sticky top-0 bg-tokyo-bg-dark text-tokyo-comment">
           <tr>
@@ -431,7 +431,7 @@ export function DatabaseConsole() {
           ) : (
             <>
               <div className="flex h-9 flex-shrink-0 items-center gap-2 border-b border-tokyo-bg-hl px-3">
-                <div className="flex h-7 rounded-md border border-tokyo-bg-hl bg-tokyo-bg-dark p-0.5">
+                <div className="glass-segment flex min-h-7 items-center gap-0.5 p-0.5">
                   {([
                     ['data', t('plugins.dbConn.dataTab')],
                     ['structure', t('plugins.dbConn.structureTab')],
@@ -443,6 +443,7 @@ export function DatabaseConsole() {
                         'rounded px-2.5 text-xs transition-colors',
                         tab === id ? 'bg-tokyo-bg-hl text-tokyo-fg' : 'text-tokyo-comment hover:text-tokyo-fg'
                       )}
+                      aria-pressed={tab === id}
                       onClick={() => setTab(id)}
                     >
                       {label}
@@ -505,7 +506,7 @@ export function DatabaseConsole() {
                       {t('common.noData')}
                     </div>
                   ) : (
-                    <div className="m-2 overflow-hidden rounded-lg border border-tokyo-bg-hl">
+                    <div className="glass-data-grid overflow-x-auto">
                       <table className="w-full border-separate border-spacing-0 text-left text-xs">
                         <thead className="bg-tokyo-bg-dark text-tokyo-comment">
                           <tr>

@@ -102,9 +102,9 @@ export function DiskDashboard({ plugin, sessionId }: { plugin: PluginRecord; ses
           loading && filesystems === null ? (
             <CenterNotice text={t('plugins.disk.loading')} loading />
           ) : (
-            <div className="space-y-2 p-2">
+            <div className="glass-data-list">
               {(filesystems ?? []).map((row) => (
-                <div key={`${row.filesystem}-${row.mount}`} className="rounded-lg border border-tokyo-bg-hl bg-tokyo-bg px-3 py-2.5">
+                <div key={`${row.filesystem}-${row.mount}`} className="glass-data-row px-3 py-3">
                   <div className="flex items-baseline gap-2">
                     <span className="min-w-0 flex-1 truncate font-mono text-xs text-tokyo-fg" title={row.filesystem}>
                       {row.mount}

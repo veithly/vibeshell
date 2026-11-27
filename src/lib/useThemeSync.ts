@@ -72,16 +72,22 @@ export function useThemeSync(): void {
     root.style.setProperty('--tokyo-fg-dark', currentTheme.colors.fgDark);
     root.style.setProperty('--tokyo-comment', currentTheme.colors.fgDark);
     root.style.setProperty('--tokyo-selection', currentTheme.colors.bgHl);
-    root.style.setProperty('--tokyo-blue', currentTheme.colors.accent);
-    root.style.setProperty('--tokyo-on-accent', currentTheme.colors.onAccent);
+    const scheme = isLightTheme(currentTheme.name) ? 'light' : 'dark';
+    // The interface uses neutral ink; the terminal and syntax palette remain
+    // independent so command output and highlighted code retain meaning.
+    const ink = scheme === 'light' ? 'rgb(24, 24, 24)' : 'rgb(245, 245, 245)';
+    const onInk = scheme === 'light' ? 'rgb(245, 245, 245)' : 'rgb(24, 24, 24)';
+    root.style.setProperty('--tokyo-blue', ink);
+    root.style.setProperty('--tokyo-on-accent', onInk);
+    root.style.setProperty('--vibe-syntax-accent', currentTheme.colors.accent);
+    root.style.setProperty('--vibe-syntax-cyan', currentTheme.colors.cyan);
     root.style.setProperty('--tokyo-red', currentTheme.colors.red);
     root.style.setProperty('--tokyo-green', currentTheme.colors.green);
     root.style.setProperty('--tokyo-yellow', currentTheme.colors.yellow);
     root.style.setProperty('--tokyo-magenta', currentTheme.colors.magenta);
-    root.style.setProperty('--tokyo-cyan', currentTheme.colors.cyan);
+    root.style.setProperty('--tokyo-cyan', ink);
     root.style.setProperty('--tokyo-orange', currentTheme.colors.orange);
     root.dataset.theme = currentTheme.name;
-    const scheme = isLightTheme(currentTheme.name) ? 'light' : 'dark';
     root.dataset.appearance = scheme;
     root.style.colorScheme = scheme;
     // Match explicit themes, but release the native override in system mode;

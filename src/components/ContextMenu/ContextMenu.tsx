@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/utils';
+import { focusMenuItem, handleMenuNavigation } from '../../lib/menuNavigation';
 
 export interface ContextMenuItem {
   id: string;
@@ -49,6 +50,7 @@ export function ContextMenu({
   testId,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const [adjustedPosition, setAdjustedPosition] = useState(position);
 
   // Close on click outside
@@ -75,6 +77,7 @@ export function ContextMenu({
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         onClose();
+        previousFocusRef.current?.focus();
       }
     };
 
@@ -86,6 +89,12 @@ export function ContextMenu({
       document.removeEventListener('keydown', handleEscape);
     };
   }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    focusMenuItem(menuRef.current);
+  }, [isOpen]);
 
   // Adjust position to keep the menu within the viewport (measured after
   // layout so the real menu size is used; re-clamped on window resize).
@@ -125,22 +134,21 @@ export function ContextMenu({
     <div
       ref={menuRef}
       role="menu"
+      onKeyDown={handleMenuNavigation}
       data-testid={testId}
       className={cn(
-        'fixed z-[100] py-1',
-        'glass-menu rounded-xl',
-        'overflow-y-auto overscroll-contain',
-        'animate-fade-in'
+        'fixed z-[100] overflow-y-auto glass-menu glass-menu-popover',
+        dense && 'glass-menu-dense'
       )}
       style={{
         left: adjustedPosition.x,
         top: adjustedPosition.y,
-        minWidth,
+        minWidth: `min(${minWidth}px, calc(100vw - 16px))`,
         maxHeight: 'calc(100vh - 16px)',
       }}
     >
       {header && (
-        <div className="px-3 py-1.5 text-xs text-tokyo-comment border-b border-tokyo-bg-hl mb-1 font-medium">
+        <div className="glass-menu-heading">
           {header}
         </div>
       )}
@@ -149,7 +157,8 @@ export function ContextMenu({
           return (
             <div
               key={`divider-${index}`}
-              className="my-1 border-t border-tokyo-bg-hl"
+              role="separator"
+              className="glass-menu-separator"
             />
           );
         }
@@ -159,22 +168,20 @@ export function ContextMenu({
             key={item.id}
             role="menuitem"
             className={cn(
-              'w-full flex items-center gap-2 px-3 text-sm text-left',
-              dense ? 'py-1.5' : 'py-2',
-              'transition-colors duration-100',
+              'glass-menu-item',
               item.disabled
                 ? 'text-tokyo-comment cursor-not-allowed opacity-50'
                 : item.danger
-                  ? 'text-tokyo-red hover:bg-tokyo-red/20'
+                  ? 'glass-menu-danger text-tokyo-red'
                   : 'text-tokyo-fg hover:bg-tokyo-bg-hl hover:text-tokyo-fg'
             )}
             onClick={() => handleItemClick(item)}
             disabled={item.disabled}
           >
-            {item.icon && <span className="w-4 h-4 flex-shrink-0">{item.icon}</span>}
-            {item.label}
+            {item.icon && <span className="glass-menu-icon">{item.icon}</span>}
+            <span className="glass-menu-label">{item.label}</span>
             {item.shortcut && (
-              <span className="ml-auto text-xs text-tokyo-comment">{item.shortcut}</span>
+              <kbd className="glass-menu-shortcut">{item.shortcut}</kbd>
             )}
           </button>
         );

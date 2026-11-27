@@ -51,7 +51,34 @@ const local: LocalShellSessionInfo[] = [
 ];
 const manifestModules = import.meta.glob('../../plugins/builtin/*/plugin.json', { eager: true, import: 'default' });
 const plugins: PluginRecord[] = Object.values(manifestModules).map(value => {
-  const manifest = value as PluginManifest;
+  const raw = value as PluginManifest;
+  // Mirror the Rust manifest's serde defaults in browser-only fixtures.
+  const manifest: PluginManifest = raw.entry.type === 'commands' ? {
+    ...raw,
+    entry: {
+      type: 'commands',
+      actions: raw.entry.actions.map(action => ({
+        ...action,
+        args: action.args ?? [],
+        inputs: (action.inputs ?? []).map(input => ({
+          ...input,
+          description: input.description ?? '',
+          placeholder: input.placeholder ?? '',
+          required: input.required ?? false,
+          kind: input.kind ?? 'text',
+          options: input.options ?? [],
+        })),
+        requiresConfirmation: action.requiresConfirmation ?? false,
+        elevate: action.elevate ?? false,
+        allowSudo: action.allowSudo ?? false,
+        output: {
+          kind: action.output?.kind ?? 'text',
+          columns: action.output?.columns ?? [],
+          delimiter: action.output?.delimiter ?? '\t',
+        },
+      })),
+    },
+  } : raw;
   return { manifest, source: 'builtin', installed: true, enabled: true,
     grantedPermissions: manifest.permissions, settings: manifest.defaultSettings ?? {}, installedAt: seconds };
 });
@@ -241,4 +268,8 @@ Object.assign(window, { __VIBESHELL_DEMO__: {
   theme: async () => { await useSettingsStore.getState().updateAppearanceSettings({ theme: 'paper-white' }); useCustomThemeStore.getState().save(':root {\n  --tokyo-blue: #0d766e !important;\n}\n.session-tabbar [role="tab"] {\n  border-radius: 10px;\n}\n', false); },
   replay: async () => { for (const item of [...ssh, ...local]) await output(item.id, '\x1b[2J\x1b[H' + terminalText(item.id)); },
 } });
-if (nativeCapture && !detached) await import('./native-scenes');
+// The explicitly requested interactive preview runs in a visible native window
+// without the screenshot-only virtual-display driver.
+if (nativeCapture && !detached && new URLSearchParams(location.search).get('interactive') !== '1') {
+  await import('./native-scenes');
+}

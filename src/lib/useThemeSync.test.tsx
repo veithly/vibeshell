@@ -45,9 +45,16 @@ describe('glass theme synchronization', () => {
     renderHook(() => useThemeSync());
     const root = document.documentElement;
     expect(root.dataset.appearance).toBe('light');
+    expect(root.style.getPropertyValue('--tokyo-blue')).toBe('rgb(24, 24, 24)');
+    expect(root.style.getPropertyValue('--tokyo-cyan')).toBe('rgb(24, 24, 24)');
+    expect(root.style.getPropertyValue('--tokyo-on-accent')).toBe('rgb(245, 245, 245)');
     expect(root.style.getPropertyValue('--vibe-terminal-mask')).toBe('60%');
     await act(async () => { await useSettingsStore.getState().updateAppearanceSettings({ theme: 'ink-black' }); });
     expect(root.dataset.appearance).toBe('dark');
+    expect(root.style.getPropertyValue('--tokyo-blue')).toBe('rgb(245, 245, 245)');
+    expect(root.style.getPropertyValue('--tokyo-cyan')).toBe('rgb(245, 245, 245)');
+    expect(root.style.getPropertyValue('--tokyo-on-accent')).toBe('rgb(24, 24, 24)');
+    expect(root.style.getPropertyValue('--vibe-syntax-accent')).not.toBe(root.style.getPropertyValue('--tokyo-blue'));
     expect(root.style.colorScheme).toBe('dark');
     expect(root.style.getPropertyValue('--vibe-terminal-mask')).toBe('60%');
     expect(root.style.opacity).toBe('');

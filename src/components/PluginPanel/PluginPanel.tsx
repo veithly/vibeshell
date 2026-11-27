@@ -129,20 +129,19 @@ export function PluginPanel({
   if (dashboardAvailable && !showRawRunner) {
     return (
       <div className="plugin-dashboard glass-page glass-form flex h-full min-h-0 flex-col">
-        <div className="flex items-center justify-end border-b border-tokyo-bg-hl px-2 py-0.5">
-          <button
-            className="text-[10px] text-tokyo-comment transition-colors hover:text-tokyo-fg"
-            onClick={() => {
-              requestSequenceRef.current += 1;
-              clearError();
-              setShowRawRunner(true);
-            }}
-          >
-            {t('plugins.advancedMode')} ⌄
-          </button>
-        </div>
         <div className="min-h-0 flex-1">
-          <PluginDashboard plugin={plugin} sessionId={sessionId} />
+          <PluginDashboard plugin={plugin} sessionId={sessionId} toolbarAction={(
+            <button
+              className="dashboard-mode-action text-tokyo-comment transition-colors hover:text-tokyo-fg"
+              onClick={() => {
+                requestSequenceRef.current += 1;
+                clearError();
+                setShowRawRunner(true);
+              }}
+            >
+              {t('plugins.advancedMode')} ⌄
+            </button>
+          )} />
         </div>
       </div>
     );
@@ -253,7 +252,7 @@ export function PluginPanel({
   return (
     <div className={cn('plugin-runner glass-form flex min-h-0 flex-col', variant === 'dock' ? 'h-[300px]' : 'h-full')}>
       {dashboardAvailable && (
-        <div className="flex flex-shrink-0 items-center justify-end border-b border-tokyo-bg-hl px-2 py-0.5">
+        <div className="plugin-mode-bar flex flex-shrink-0 items-center justify-end px-3 py-1">
           <button
             className="text-[10px] text-tokyo-comment transition-colors hover:text-tokyo-fg"
             onClick={() => {
@@ -426,7 +425,7 @@ export function PluginPanel({
                     </tbody>
                   </table>
                 ) : (
-                  <pre className="min-h-full whitespace-pre-wrap break-words rounded-md border border-tokyo-bg-hl bg-tokyo-bg p-3 font-mono text-xs leading-5 text-tokyo-fg">
+                  <pre className="glass-code-output min-h-full whitespace-pre-wrap break-words p-3 font-mono text-xs leading-5 text-tokyo-fg">
                     {result.output || t('common.noData')}
                   </pre>
                 )}

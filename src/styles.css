@@ -14,10 +14,12 @@
     --tokyo-red: #b52f3e;
     --tokyo-green: #18714a;
     --tokyo-yellow: #805200;
-    --tokyo-blue: #355ac5;
-    --tokyo-on-accent: #ffffff;
+    --tokyo-blue: rgb(24, 24, 24);
+    --tokyo-on-accent: rgb(245, 245, 245);
     --tokyo-magenta: #743796;
-    --tokyo-cyan: #087477;
+    --tokyo-cyan: var(--tokyo-blue);
+    --vibe-syntax-accent: #355ac5;
+    --vibe-syntax-cyan: #087477;
     --tokyo-orange: #974117;
     --app-viewport-height: 100vh;
     --safe-area-top: env(safe-area-inset-top, 0px);
@@ -45,7 +47,7 @@
     --tokyo-green: #63d9a0;
     --tokyo-yellow: #e7b75f;
     --tokyo-magenta: #d8a1f0;
-    --tokyo-cyan: #55d6d8;
+    --vibe-syntax-cyan: #55d6d8;
     --tokyo-orange: #ff9c68;
   }
 
@@ -172,14 +174,14 @@
 .file-code-editor .hljs-function,
 .file-code-editor .hljs-selector-id,
 .file-code-editor .hljs-selector-class {
-  color: var(--tokyo-blue);
+  color: var(--vibe-syntax-accent);
 }
 
 .file-code-editor .hljs-built_in,
 .file-code-editor .hljs-meta,
 .file-code-editor .hljs-link,
 .file-code-editor .hljs-name {
-  color: var(--tokyo-cyan);
+  color: var(--vibe-syntax-cyan);
 }
 
 .file-code-editor .hljs-deletion {
@@ -971,18 +973,6 @@
   .plugin-category-button.is-active {
     @apply bg-tokyo-bg text-tokyo-fg;
     box-shadow: inset 2px 0 0 var(--tokyo-cyan);
-  }
-
-  .plugin-market-card {
-    border-radius: 8px;
-    box-shadow: 0 8px 20px color-mix(in srgb, var(--tokyo-fg) 5%, transparent);
-    transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
-  }
-
-  .plugin-market-card:hover {
-    border-color: var(--tokyo-comment);
-    transform: translateY(-1px);
-    box-shadow: 0 12px 26px color-mix(in srgb, var(--tokyo-fg) 8%, transparent);
   }
 
   .plugin-toggle-input {

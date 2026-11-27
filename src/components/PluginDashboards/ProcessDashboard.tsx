@@ -91,7 +91,7 @@ export function ProcessDashboard({ plugin, sessionId }: { plugin: PluginRecord; 
         ) : filtered.length === 0 ? (
           <CenterNotice text={t('common.noData')} />
         ) : (
-          <div className="m-2 overflow-x-auto rounded-lg border border-tokyo-bg-hl">
+          <div className="glass-data-grid overflow-x-auto">
             <table className="w-full border-separate border-spacing-0 text-left text-xs">
               <thead className="bg-tokyo-bg-dark text-tokyo-comment">
                 <tr>

@@ -55,7 +55,7 @@ export default function SnippetManager() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-tokyo-bg text-tokyo-fg">
+    <div className="glass-page glass-form flex flex-col h-full text-tokyo-fg">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-tokyo-bg-hl">
         <div className="flex items-center gap-2">
@@ -145,7 +145,7 @@ export default function SnippetManager() {
           filteredSnippets.map(snippet => (
             <div
               key={snippet.id}
-              className="bg-tokyo-bg-dark border border-tokyo-bg-hl rounded-lg p-3 hover:border-tokyo-selection transition-all duration-200 group"
+              className="glass-data-row p-3 transition-colors duration-200 group"
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">

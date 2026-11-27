@@ -85,7 +85,7 @@ export function IntegrationCard({
   };
 
   return (
-    <div className="integration-card glass-well p-4 rounded-lg border border-tokyo-bg-hl transition-colors">
+    <div className="integration-card py-4 transition-colors">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-lg font-semibold text-tokyo-fg">{name}</h3>
         <span

@@ -125,7 +125,7 @@ export function GitDashboard({ plugin, sessionId }: { plugin: PluginRecord; sess
               {(statusRows ?? []).length === 0 ? (
                 <CenterNotice text={t('plugins.git.clean')} />
               ) : (
-                <div className="overflow-hidden rounded-lg border border-tokyo-bg-hl">
+                <div className="glass-data-grid overflow-x-auto">
                   <table className="w-full border-separate border-spacing-0 text-left text-xs">
                     <tbody className="font-mono text-tokyo-fg">
                       {(statusRows ?? []).map((row, index) => (
@@ -152,7 +152,7 @@ export function GitDashboard({ plugin, sessionId }: { plugin: PluginRecord; sess
           ) : (branches ?? []).length === 0 ? (
             <CenterNotice text={t('common.noData')} />
           ) : (
-            <div className="m-2 overflow-hidden rounded-lg border border-tokyo-bg-hl">
+            <div className="m-2 glass-data-grid overflow-x-auto">
               <table className="w-full border-separate border-spacing-0 text-left text-xs">
                 <tbody className="font-mono text-tokyo-fg">
                   {(branches ?? []).map((branch) => (

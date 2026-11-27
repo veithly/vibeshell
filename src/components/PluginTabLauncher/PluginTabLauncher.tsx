@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Blocks, Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { focusMenuItem, handleMenuNavigation } from '../../lib/menuNavigation';
 import { isPluginCompatible, localizedPluginName } from '../../plugins/pluginUtils';
 import type { PluginRecord, PluginSessionType } from '../../plugins/types';
 import { usePluginStore } from '../../stores/pluginStore';
@@ -22,6 +23,8 @@ export function PluginTabLauncher({ sessionType, onOpenPluginTab }: PluginTabLau
   const loading = usePluginStore((state) => state.loading);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const compatiblePlugins = useMemo(
     () => (sessionType ? plugins.filter((plugin) => isPluginCompatible(plugin, sessionType)) : []),
@@ -36,7 +39,7 @@ export function PluginTabLauncher({ sessionType, onOpenPluginTab }: PluginTabLau
       }
     };
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); }
     };
     document.addEventListener('mousedown', handleClickOutside);
     document.addEventListener('keydown', handleEscape);
@@ -46,10 +49,13 @@ export function PluginTabLauncher({ sessionType, onOpenPluginTab }: PluginTabLau
     };
   }, [open]);
 
+  useEffect(() => { if (open) focusMenuItem(menuRef.current); }, [open, loading]);
+
   return (
     <div ref={rootRef} className="relative">
       <button
-        className="icon-button tooltip-button"
+        ref={triggerRef}
+        className={cn('icon-button tooltip-button', open && 'is-active')}
         data-tooltip={t('plugins.openTabLauncher')}
         aria-label={t('plugins.openTabLauncher')}
         aria-haspopup="menu"
@@ -61,10 +67,13 @@ export function PluginTabLauncher({ sessionType, onOpenPluginTab }: PluginTabLau
       </button>
       {open && (
         <div
+          ref={menuRef}
           role="menu"
-          className="glass-menu glass-form absolute right-0 top-9 z-50 min-w-[220px] rounded-lg border border-tokyo-bg-hl bg-tokyo-bg-dark py-1 shadow-xl"
+          aria-label={t('plugins.openTabLauncher')}
+          className="glass-menu glass-menu-popover absolute right-0 top-full z-50 mt-2 w-64"
+          onKeyDown={handleMenuNavigation}
         >
-          <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-tokyo-comment">
+          <div className="glass-menu-heading">
             {t('plugins.openTabLauncher')}
           </div>
           {loading && compatiblePlugins.length === 0 ? (
@@ -81,17 +90,15 @@ export function PluginTabLauncher({ sessionType, onOpenPluginTab }: PluginTabLau
               <button
                 key={plugin.manifest.id}
                 role="menuitem"
-                className={cn(
-                  'flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-tokyo-fg',
-                  'transition-colors hover:bg-tokyo-bg-hl cursor-pointer'
-                )}
+                className="glass-menu-item"
                 onClick={() => {
                   setOpen(false);
+                  triggerRef.current?.focus();
                   onOpenPluginTab(plugin.manifest.id);
                 }}
               >
-                <PluginIcon name={plugin.manifest.icon} className="h-4 w-4 flex-shrink-0" />
-                <span className="min-w-0 flex-1 truncate">{localizedPluginName(t, plugin)}</span>
+                <span className="glass-menu-icon"><PluginIcon name={plugin.manifest.icon} className="h-4 w-4" /></span>
+                <span className="glass-menu-label">{localizedPluginName(t, plugin)}</span>
               </button>
             ))
           )}

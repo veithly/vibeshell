@@ -42,6 +42,29 @@ describe('WorkspaceToolbar', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(onSelect).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('navigates enabled menu rows with arrows and Home/End', () => {
+    render(
+      <WorkspaceToolbar label="More actions" items={[
+        { id: 'first', label: 'First', icon: <span />, onSelect: vi.fn() },
+        { id: 'disabled', label: 'Disabled', icon: <span />, disabled: true, onSelect: vi.fn() },
+        { id: 'last', label: 'Last', icon: <span />, onSelect: vi.fn() },
+      ]} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    const first = screen.getByRole('menuitem', { name: 'First' });
+    const last = screen.getByRole('menuitem', { name: 'Last' });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    expect(last).toHaveFocus();
+    fireEvent.keyDown(last, { key: 'ArrowDown' });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: 'End' });
+    expect(last).toHaveFocus();
+    fireEvent.keyDown(last, { key: 'Home' });
+    expect(first).toHaveFocus();
   });
 
   it('closes when a pointerdown lands outside the menu', () => {
